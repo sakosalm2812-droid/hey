@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-native-capabilities"
+description = "Enables the frontend to invoke the native_capabilities command, which reports the native runtime capabilities available to the main window."
+commands = { allow = ["native_capabilities"] }

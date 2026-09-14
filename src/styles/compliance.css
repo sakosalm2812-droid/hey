@@ -1,0 +1,111 @@
+/* =========================================
+   DESIGN-SPEC COMPLIANCE PASS
+   §10 touch targets · §13 focus rings ·
+   §15 z-order (handled in variables.css) ·
+   §14 RTL affordances
+   ========================================= */
+
+/* --- §10 Minimum touch targets ------------------------------ */
+
+button,
+a,
+[role="button"],
+select,
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"],
+summary {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Compact inline controls may drop to 36px (still comfortable),
+   and icon-only elements must keep a 44x44 hit area. */
+.hey-btn-sm,
+.icon-only,
+button.icon-only,
+a.icon-only,
+[role="button"].icon-only {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-grid;
+  place-items: center;
+}
+
+:where(
+  .hey-menu-item,
+  .hey-context-item,
+  .hey-list-item,
+  .hey-toolbar-item,
+  .hey-snippet
+) {
+  min-height: 44px;
+}
+
+/* Small decorative links (inline anchors inside paragraphs) are excluded
+   to avoid distorting reading flow; fix the minimum hit area instead. */
+main a {
+  inline-size: auto;
+}
+
+@media (pointer: coarse) {
+  button,
+  a,
+  [role="button"],
+  select,
+  .hey-btn-sm,
+  .icon-only {
+    min-height: 48px;
+    min-width: 48px;
+  }
+}
+
+/* --- §13 Arctic/frost focus rings --------------------------- */
+
+:focus-visible {
+  outline: 2px solid var(--accent-frost, #d8f4ff);
+  outline-offset: 2px;
+}
+
+/* Inputs and interactive surfaces get a cyan ring while birds that
+   already paint their own border keep the frost complement. */
+input,
+textarea,
+select,
+.hey-input:focus-within,
+.hey-search:focus-within {
+  outline-color: var(--accent-cyan, #00bfff);
+}
+
+/* Mouse/touch users don't need the ring during taps. */
+@media (hover: none) and (pointer: coarse) {
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+/* --- §14 RTL affordances ------------------------------------ */
+
+[dir="rtl"] body,
+[dir="rtl"] .hey-app,
+[dir="rtl"] .hey-public {
+  letter-spacing: 0 !important;
+}
+
+[dir="rtl"] .hey-sidebar,
+[dir="rtl"] .hey-chat-sidebar {
+  border-inline-start: 1px solid var(--border, rgba(142, 216, 255, 0.12));
+}
+
+/* Serif display glyphs used as accents (the "sky." em) read as
+   forwards in LTR; in RTL flip decorative quotes only. */
+[dir="rtl"] .hey-hero-display,
+[dir="rtl"] .hey-quote-mark {
+  unicode-bidi: plaintext;
+}
+
+/* Logical spacing helpers digest with direction automatically, but a
+   few legacy right/left pairs need inversion. */
+[dir="rtl"] .hey-caret-right {
+  transform: scaleX(-1);
+}

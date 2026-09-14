@@ -1,0 +1,34 @@
+[functions.hey]
+verify_jwt = true
+
+[functions.hey-studio]
+verify_jwt = true
+
+# Hosted SMTP must also be configured in the Supabase Dashboard.
+[auth.email.smtp]
+enabled = false
+sender_name = "Hey"
+
+[auth.email.template.confirmation]
+subject = "Welcome to Hey"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Reset your Hey password"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.magic_link]
+subject = "Your Hey sign-in link"
+content_path = "./supabase/templates/magic_link.html"
+
+[auth.email.template.invite]
+subject = "You are invited to Hey"
+content_path = "./supabase/templates/invite.html"
+
+[auth.email.template.email_change]
+subject = "Confirm your Hey email change"
+content_path = "./supabase/templates/email_change.html"
+
+[auth.email.template.reauthentication]
+subject = "Your Hey verification code"
+content_path = "./supabase/templates/reauthentication.html"

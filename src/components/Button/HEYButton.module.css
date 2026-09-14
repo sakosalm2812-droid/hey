@@ -1,0 +1,161 @@
+.button {
+
+    display:flex;
+    
+    align-items:center;
+    
+    justify-content:center;
+    
+    gap:10px;
+    
+    position:relative;
+    
+    overflow:hidden;
+    
+    padding:14px 30px;
+    
+    border-radius:999px;
+    
+    font-family:var(--font-heading);
+    
+    font-size:15px;
+    
+    font-weight:600;
+    
+    letter-spacing:.01em;
+    
+    cursor:pointer;
+    
+    transition:
+    background .3s ease,
+    border .3s ease,
+    box-shadow .3s ease,
+    color .3s ease;
+    
+    }
+    
+    
+    /* subtle glass reflection */
+    
+    .button::before {
+    
+    content:"";
+    
+    position:absolute;
+    
+    inset:0;
+    
+    background:
+    linear-gradient(
+    120deg,
+    transparent,
+    rgba(255,255,255,.18),
+    transparent
+    );
+    
+    transform:translateX(-120%);
+    
+    transition:.6s;
+    
+    }
+    
+    
+    
+    .button:hover::before {
+    
+    transform:translateX(120%);
+    
+    }
+    
+    
+    
+    /* PRIMARY */
+    
+    .primary {
+    
+    background:var(--primary);
+    
+    color:var(--on-accent);
+    
+    border:1px solid rgba(255,255,255,.18);
+    
+    box-shadow:
+    0 0 0 rgba(125,160,202,0);
+    
+    }
+    
+    
+    
+    .primary:hover {
+    
+    background:var(--accent);
+    
+    box-shadow:
+    0 0 35px rgba(125,160,202,.45);
+    
+    }
+    
+    
+    
+    /* SECONDARY */
+    
+    .secondary {
+    
+    background:
+    rgba(255,255,255,.08);
+    
+    color:var(--text);
+    
+    border:1px solid var(--border);
+    
+    backdrop-filter:blur(20px);
+    
+    }
+    
+    
+    
+    .secondary:hover {
+    
+    background:
+    rgba(255,255,255,.14);
+    
+    box-shadow:
+    0 0 30px rgba(193,232,255,.25);
+    
+    }
+    
+    
+    
+    /* GHOST */
+    
+    .ghost {
+    
+    background:transparent;
+    
+    color:var(--text-secondary);
+    
+    border:1px solid transparent;
+    
+    }
+    
+    
+    
+    .ghost:hover {
+    
+    color:var(--text);
+    
+    background:rgba(255,255,255,.06);
+    
+    }
+    
+    
+    
+    /* ICON */
+    
+    .icon {
+    
+    display:flex;
+    
+    align-items:center;
+    
+    }

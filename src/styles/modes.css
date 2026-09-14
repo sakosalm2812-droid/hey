@@ -1,0 +1,56 @@
+.text-7xl { font-size: 72px; }
+.uppercase { text-transform: uppercase; }
+.tracking-widest { letter-spacing: 0.1em; }
+.shrink-0 { flex-shrink: 0; }
+.opacity-30 { opacity: 0.3; }
+.items-end { align-items: flex-end; }
+.text-right { text-align: right; }
+.self-center { align-self: center; }
+.place-items-center { place-items: center; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.min-w-0 { min-width: 0; }
+.min-w-40 { min-width: 160px; }
+.w-5 { width: 20px; }
+.w-6 { width: 24px; }
+.w-8 { width: 32px; }
+.h-5 { height: 20px; }
+.h-8 { height: 32px; }
+.mr-1 { margin-right: 4px; }
+.mr-2 { margin-right: 8px; }
+.mb-1 { margin-bottom: 4px; }
+.mt-0\.5 { margin-top: 2px; }
+.ml-2 { margin-left: 8px; }
+.py-1 { padding-top: 4px; padding-bottom: 4px; }
+.px-3 { padding-left: 12px; padding-right: 12px; }
+.gap-1 { gap: 4px; }
+.space-y-1 > * + * { margin-top: 4px; }
+.leading-5 { line-height: 1.25; }
+.leading-tight { line-height: 1.2; }
+.rounded-lg { border-radius: 12px; }
+.rounded-3xl { border-radius: 24px; }
+.border-dashed { border-style: dashed; }
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bg-\[rgba\(255\,255\,255\,\.03\)\] { background: rgba(255, 255, 255, 0.03); }
+.border-\[rgba\(124\,184\,124\,\.3\)\] { border-color: rgba(124, 184, 124, 0.3); }
+.border-\[rgba\(255\,255\,255\,\.06\)\] { border-color: rgba(255, 255, 255, 0.06); }
+.border-\[rgba\(255\,255\,255\,\.08\)\] { border-color: rgba(255, 255, 255, 0.08); }
+.border-\[rgba\(255\,255\,255\,\.14\)\] { border-color: rgba(255, 255, 255, 0.14); }
+.text-\[10px\] { font-size: 10px; }
+.text-\[11px\] { font-size: 11px; }
+.text-\[var\(--text-muted\)\] { color: var(--text-muted); }
+.text-\[var\(--green-accent\)\] { color: var(--green-accent); }
+
+@media (max-width: 900px) {
+  .xl\:grid-cols-\[380px_1fr\] { grid-template-columns: 1fr; }
+  .lg\:min-h-\[420px\] { min-height: auto; }
+}
+
+@media (min-width: 901px) {
+  .xl\:grid-cols-\[380px_1fr\] { grid-template-columns: 380px minmax(0, 1fr); }
+  .lg\:min-h-\[420px\] { min-height: 420px; }
+}

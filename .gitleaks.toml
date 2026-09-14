@@ -1,0 +1,44 @@
+# Gitleaks configuration for HEY
+# Run: npm run secret-scan
+# This does not prove the repository is clean — it lowers the chance of
+# shipping a secret. Treat failure as a release gate.
+
+title = "HEY secret scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hey-supabase-anon"
+description = "HEY Supabase anon key pasted into code"
+regex = '''(?i)(vite_supabase_anon_key["']?\s*[:=]\s*["'])(eyJ[a-zA-Z0-9_\-]{10,})'''
+secret-group = 2
+entropy = 3.5
+
+[[rules]]
+id = "hey-openrouter-key"
+description = "HEY OpenRouter provider key in code"
+regex = '''(?i)(openrouter_api_key["']?\s*[:=]\s*["'])(sk-or-[a-zA-Z0-9]{8,})'''
+secret-group = 2
+entropy = 3.5
+
+[[rules]]
+id = "hey-service-role"
+description = "Supabase service role key must never ship"
+regex = '''(?i)(service_role["']?\s*[:=]\s*["'])(eyJ[a-zA-Z0-9_\-]{10,})'''
+secret-group = 2
+entropy = 3.5
+
+[[rules]]
+id = "generic-api-key-assignment"
+description = "Generic API key literal assignments"
+regex = '''(?i)((?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["'])([a-zA-Z0-9_\-]{16,})'''
+secret-group = 2
+entropy = 3.0
+
+[[allowlists]]
+description = "Files that are not source and are exempt from leakage checks here"
+paths = [
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)package\.json$'''
+]

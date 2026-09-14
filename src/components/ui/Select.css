@@ -1,0 +1,267 @@
+/* =========================================
+   HEY SELECT
+   ========================================= */
+
+.hey-select {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+}
+
+.hey-select--disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.hey-select--error .hey-select__trigger {
+  border-color: var(--semantic-destructive-border);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 var(--border-subtle),
+    0 0 0 1px var(--semantic-destructive-border),
+    0 4px 16px rgba(255, 122, 138, 0.1);
+}
+
+.hey-select--error .hey-select__trigger:focus {
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 var(--border-subtle),
+    0 0 0 3px var(--semantic-destructive-bg);
+}
+
+/* LABEL */
+.hey-select__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.hey-select__required {
+  color: var(--semantic-destructive-text);
+  font-size: var(--text-micro);
+}
+
+/* CONTAINER */
+.hey-select__container {
+  position: relative;
+}
+
+/* TRIGGER */
+.hey-select__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: var(--glass-border);
+  border-radius: var(--radius-field);
+  background: var(--field-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--motion-fast) var(--ease),
+    background var(--motion-fast) var(--ease),
+    box-shadow var(--motion-fast) var(--ease);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 var(--border-subtle);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hey-select__trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.hey-select__trigger:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.hey-select__trigger:focus {
+  border-color: var(--accent);
+  background: var(--field-bg-focus);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 var(--border-subtle),
+    0 0 0 3px var(--accent-glow-soft);
+}
+
+.hey-select__value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hey-select__value--placeholder {
+  color: var(--text-tertiary);
+}
+
+.hey-select__chevron {
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+  color: var(--text-tertiary);
+  transition: transform var(--motion-fast) var(--ease);
+}
+
+.hey-select__chevron--open {
+  transform: rotate(180deg);
+}
+
+/* MENU */
+.hey-select__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: var(--z-popover);
+  max-height: 320px;
+  border: var(--glass-border);
+  border-radius: var(--radius-card);
+  background: var(--glass-1);
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+  box-shadow: var(--elevation-4);
+  overflow: hidden;
+}
+
+.hey-select__search {
+  padding: var(--space-2);
+  border-bottom: var(--border-subtle);
+}
+
+.hey-select__search-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: var(--glass-border);
+  border-radius: var(--radius-control);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  outline: none;
+  transition: border-color var(--motion-fast) var(--ease);
+}
+
+.hey-select__search-input:focus {
+  border-color: var(--accent);
+}
+
+.hey-select__search-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.hey-select__options {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.hey-select__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hey-select__option:hover:not(:disabled) {
+  background: var(--glass-bg);
+}
+
+.hey-select__option:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.hey-select__option--selected {
+  background: var(--accent-glow-soft);
+  color: var(--accent);
+}
+
+.hey-select__option--selected:hover:not(:disabled) {
+  background: var(--accent-glow);
+}
+
+.hey-select__option--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.hey-select__option-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hey-select__option-check {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.hey-select__empty {
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-tertiary);
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  text-align: center;
+}
+
+/* ERROR & HELPER */
+.hey-select__error {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-micro);
+  color: var(--semantic-destructive-text);
+  line-height: 1.4;
+}
+
+.hey-select__helper {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
+
+@media (max-width: 640px) {
+  .hey-select__trigger {
+    min-height: 48px;
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+
+  .hey-select__menu {
+    max-height: 50vh;
+  }
+}

@@ -1,0 +1,255 @@
+/* =========================================
+   HEY ERROR STATE
+   ========================================= */
+
+.hey-error-state {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: var(--semantic-destructive-border);
+  border-radius: var(--radius-card);
+  background: var(--semantic-destructive-bg);
+  color: var(--text-primary);
+}
+
+.hey-error-state__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-card);
+  background: rgba(255, 122, 138, 0.15);
+  color: var(--semantic-destructive-text);
+}
+
+.hey-error-state__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.hey-error-state__code {
+  font-family: var(--font-system);
+  font-size: var(--text-micro);
+  font-weight: 600;
+  color: var(--semantic-destructive-text);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.hey-error-state__title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--text-h3);
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.hey-error-state__message {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.hey-error-state__details {
+  border: var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-pressed);
+  overflow: hidden;
+}
+
+.hey-error-state__details summary {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.hey-error-state__details summary::-webkit-details-marker {
+  display: none;
+}
+
+.hey-error-state__details summary::after {
+  content: '▼';
+  float: right;
+  font-size: var(--text-micro);
+  transition: transform var(--motion-fast) var(--ease);
+}
+
+.hey-error-state__details[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.hey-error-state__details-text {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-3);
+  font-family: var(--font-system);
+  font-size: var(--text-micro);
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.hey-error-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* =========================================
+   ERROR STATE PAGE (FULL SCREEN)
+   ========================================= */
+
+.hey-error-state-page {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+}
+
+.hey-error-state-page__container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 480px;
+  gap: var(--space-5);
+}
+
+.hey-error-state-page__icon {
+  display: inline-flex;
+  width: 120px;
+  height: 120px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--semantic-destructive-bg);
+  color: var(--semantic-destructive-text);
+  box-shadow:
+    0 0 0 1px var(--semantic-destructive-border),
+    0 0 60px rgba(255, 122, 138, 0.15);
+}
+
+.hey-error-state-page__code {
+  font-family: var(--font-system);
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--semantic-destructive-text);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.hey-error-state-page__title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.hey-error-state-page__message {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-body-l);
+  color: var(--text-secondary);
+  line-height: 1.7;
+  max-width: 400px;
+}
+
+.hey-error-state-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.hey-error-state-page__actions .hey-button {
+  min-width: 160px;
+}
+
+/* =========================================
+   INLINE ERROR
+   ========================================= */
+
+.hey-inline-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: var(--semantic-destructive-border);
+  border-radius: var(--radius-card);
+  background: var(--semantic-destructive-bg);
+  color: var(--text-primary);
+}
+
+.hey-inline-error__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.hey-inline-error__message {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
+
+@media (max-width: 480px) {
+  .hey-error-state {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: var(--space-4);
+  }
+
+  .hey-error-state__icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .hey-error-state-page__icon {
+    width: 96px;
+    height: 96px;
+  }
+
+  .hey-error-state-page__icon svg {
+    width: 48px;
+    height: 48px;
+  }
+
+  .hey-error-state__actions,
+  .hey-error-state-page__actions,
+  .hey-inline-error {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .hey-error-state__actions .hey-button,
+  .hey-error-state-page__actions .hey-button {
+    width: 100%;
+  }
+}

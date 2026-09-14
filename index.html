@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="HEY is your second brain for thinking, creating, remembering, and moving forward." />
+    <script>
+      (function () {
+        try {
+          var root = document.documentElement;
+          var stored = localStorage.getItem("hey_theme_css");
+          if (!stored) return;
+          var vars;
+          try { vars = JSON.parse(stored); } catch (e) { return; }
+          for (var prop in vars) {
+            if (Object.prototype.hasOwnProperty.call(vars, prop)) {
+              root.style.setProperty(prop, vars[prop]);
+            }
+          }
+          var theme = localStorage.getItem("hey_theme") || "cosmic";
+          root.dataset.heyTheme = theme;
+          root.dataset.heyLight = localStorage.getItem("hey_theme_light") || "false";
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta && vars["--bg-primary"]) meta.setAttribute("content", vars["--bg-primary"]);
+        } catch (e) {}
+      })();
+    </script>
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="HEY — Your Second Brain" />
+    <meta property="og:description" content="HEY is your second brain for thinking, creating, remembering, and moving forward." />
+    <meta property="og:site_name" content="HEY" />
+    <link property="og:image" href="/favicon.svg" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="HEY — Your Second Brain" />
+    <meta name="twitter:description" content="HEY is your second brain for thinking, creating, remembering, and moving forward." />
+    <meta name="twitter:image" content="/favicon.svg" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "HEY",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Web",
+        "description": "Your second brain for thinking, creating, remembering, and moving forward."
+      }
+    </script>
+
+    <title>HEY — Your Second Brain</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

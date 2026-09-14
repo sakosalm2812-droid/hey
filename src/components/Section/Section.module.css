@@ -1,0 +1,28 @@
+.section {
+
+    width:100%;
+    
+    padding:
+    
+    var(--space-10)
+    
+    0;
+    
+    
+    position:relative;
+    
+    }
+    
+    
+    
+    .container {
+    
+    width:100%;
+    
+    max-width:var(--max-width);
+    
+    margin:0 auto;
+    
+    padding:0 var(--space-5);
+    
+    }

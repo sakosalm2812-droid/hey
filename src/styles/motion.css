@@ -1,0 +1,740 @@
+/**
+ * HEY V1 — Motion Utilities & Reduced Motion Implementation
+ * Implements sections 36, 37, 47, 48
+ */
+
+@layer motion {
+  /* =========================================
+     REDUCED MOTION MASTER RULES (Section 36)
+     ========================================= */
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Disable all animations and transitions by default */
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+
+    /* Specific component overrides for reduced motion */
+
+    /* Translation > 8px → fade */
+    .hey-reduce-translate {
+      transform: none !important;
+      animation: none !important;
+      transition: opacity var(--motion-micro) var(--ease-primary) !important;
+    }
+
+    /* Zoom → fade */
+    .hey-reduce-zoom {
+      transform: none !important;
+      animation: none !important;
+      transition: opacity var(--motion-micro) var(--ease-primary) !important;
+    }
+
+    /* Parallax → none */
+    .hey-parallax,
+    .hey-idle-stars,
+    .hey-idle-orbit,
+    .hey-idle-orbit-two,
+    .hey-idle-orbit-one {
+      animation: none !important;
+      transform: none !important;
+    }
+
+    /* Continuous breathing → static state */
+    .hey-breathing,
+    .hey-command-orb,
+    .hey-orb-node,
+    .voice-visualizer.idle {
+      animation: none !important;
+      transform: scale(1) !important;
+    }
+
+    /* Graph drift → static */
+    .cosmos-node,
+    .cosmos-edge {
+      animation: none !important;
+      transition: none !important;
+    }
+
+    /* Page shared-element motion → crossfade */
+    .hey-shared-element {
+      transition: opacity var(--motion-fast) var(--ease-primary) !important;
+      transform: none !important;
+    }
+
+    /* Liquid morph → simple size/fade */
+    .hey-liquid-morph {
+      transition: width var(--motion-standard) var(--ease-primary),
+        height var(--motion-standard) var(--ease-primary),
+        opacity var(--motion-fast) var(--ease-primary) !important;
+      border-radius: var(--glass-radius) !important;
+    }
+
+    /* Tutorial hand/path animations → step-by-step still frames */
+    .tutorial-pointer,
+    .tutorial-gesture,
+    .tutorial-path {
+      animation: none !important;
+      transition: none !important;
+    }
+
+    /* Keep essential motion even in reduced mode */
+    .hey-essential-progress,
+    .hey-focus-visible:focus-visible,
+    .hey-pressed:active,
+    .hey-state-color,
+    .hey-drag-response {
+      transition: none !important;
+      animation: none !important;
+    }
+
+    /* Focus states must remain visible */
+    :focus-visible {
+      outline: 2px solid var(--accent) !important;
+      outline-offset: 3px !important;
+      transition: none !important;
+    }
+
+    /* Pressed state must remain */
+    :active:not(:focus-visible) {
+      transform: scale(var(--scale-press-min)) !important;
+      transition: none !important;
+    }
+
+    /* State color changes */
+    .hey-status-online,
+    .hey-status-offline,
+    .hey-status-error,
+    .hey-status-success,
+    .hey-status-warning {
+      transition: color 0.01ms, background-color 0.01ms, border-color 0.01ms !important;
+    }
+
+    /* Direct drag response */
+    .hey-dragging {
+      transition: none !important;
+      will-change: transform;
+    }
+  }
+
+  /* =========================================
+     PERFORMANCE TIERS (Section 37)
+     ========================================= */
+
+  /* Full tier - high-end hardware */
+  .hey-tier-full .hey-liquid-reflection,
+  .hey-tier-full .hey-subtle-parallax,
+  .hey-tier-full .hey-rich-shadow,
+  .hey-tier-full .hey-bg-blur,
+  .hey-tier-full .hey-ambient-animation,
+  .hey-tier-full .hey-particle-system {
+    /* Enabled by default */
+  }
+
+  /* Balanced tier - default */
+  .hey-tier-balanced .hey-liquid-reflection {
+    display: none;
+  }
+  .hey-tier-balanced .hey-rich-shadow {
+    box-shadow: var(--elevation-2) !important;
+  }
+  .hey-tier-balanced .hey-particle-system {
+    display: none;
+  }
+
+  /* Lightweight tier - weak/battery/thermal */
+  .hey-tier-lightweight .hey-liquid-reflection,
+  .hey-tier-lightweight .hey-subtle-parallax,
+  .hey-tier-lightweight .hey-rich-shadow,
+  .hey-tier-lightweight .hey-bg-blur,
+  .hey-tier-lightweight .hey-ambient-animation,
+  .hey-tier-lightweight .hey-particle-system {
+    display: none !important;
+    animation: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: var(--elevation-1) !important;
+  }
+
+  .hey-tier-lightweight .glass-card,
+  .hey-tier-lightweight .hey-glass,
+  .hey-tier-lightweight .hey-app-nav,
+  .hey-tier-lightweight .hey-command-palette {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--bg-secondary) !important;
+  }
+
+  /* =========================================
+     UTILITY CLASSES FOR MOTION CONTROL
+     ========================================= */
+
+  /* Motion enable/disable */
+  .hey-motion-enabled {
+    /* Normal motion behavior */
+  }
+
+  .hey-motion-disabled {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* Interruptible animation helper */
+  .hey-interruptible {
+    transition: all var(--motion-standard) var(--ease-primary);
+  }
+
+  .hey-interruptible.interrupting {
+    transition-duration: 0.01ms !important;
+  }
+
+  /* Will-change optimization */
+  .hey-will-transform {
+    will-change: transform;
+  }
+
+  .hey-will-opacity {
+    will-change: opacity;
+  }
+
+  .hey-will-transform-opacity {
+    will-change: transform, opacity;
+  }
+
+  .hey-will-auto {
+    will-change: auto;
+  }
+
+  /* Force GPU acceleration */
+  .hey-gpu-accelerated {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    perspective: 1000px;
+  }
+
+  /* =========================================
+     COMMON ANIMATION KEYFRAMES
+     ========================================= */
+
+  /* Fade in/out */
+  @keyframes hey-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes hey-fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+
+  /* Scale in/out */
+  @keyframes hey-scale-in {
+    from { transform: scale(0.95); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes hey-scale-out {
+    from { transform: scale(1); opacity: 1; }
+    to { transform: scale(0.95); opacity: 0; }
+  }
+
+  /* Slide in from directions */
+  @keyframes hey-slide-in-up {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  @keyframes hey-slide-in-down {
+    from { transform: translateY(-10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  @keyframes hey-slide-in-left {
+    from { transform: translateX(-16px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  @keyframes hey-slide-in-right {
+    from { transform: translateX(16px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  /* Modal/panel enter */
+  @keyframes hey-panel-enter {
+    from { transform: scale(0.975) translateY(8px); opacity: 0; }
+    to { transform: scale(1) translateY(0); opacity: 1; }
+  }
+
+  @keyframes hey-panel-exit {
+    from { transform: scale(1) translateY(0); opacity: 1; }
+    to { transform: scale(0.975) translateY(8px); opacity: 0; }
+  }
+
+  /* Drawer */
+  @keyframes hey-drawer-enter {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  @keyframes hey-drawer-exit {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+  }
+
+  /* Toast */
+  @keyframes hey-toast-enter-desktop {
+    from { transform: translateX(16px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  @keyframes hey-toast-enter-mobile {
+    from { transform: translateY(-8px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  @keyframes hey-toast-exit {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(8px); opacity: 0; }
+  }
+
+  /* Button press */
+  @keyframes hey-button-press {
+    0% { transform: scale(1) translateY(0); }
+    50% { transform: scale(0.992) translateY(1px); }
+    100% { transform: scale(1) translateY(0); }
+  }
+
+  /* Toggle knob */
+  @keyframes hey-toggle-knob {
+    from { transform: translateX(0); }
+    to { transform: translateX(20px); }
+  }
+
+  /* Segmented control plate */
+  @keyframes hey-segment-plate {
+    from { transform: translateX(var(--plate-from, 0)); }
+    to { transform: translateX(var(--plate-to, 0)); }
+  }
+
+  /* Success icon pop */
+  @keyframes hey-success-pop {
+    0% { transform: scale(0); opacity: 0; }
+    50% { transform: scale(1.2); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  /* Error nudge */
+  @keyframes hey-error-nudge {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-2px); }
+    75% { transform: translateX(2px); }
+  }
+
+  /* Voice visualizer breathing */
+  @keyframes hey-voice-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.015); }
+  }
+
+  /* Voice visualizer listening */
+  @keyframes hey-voice-listen {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.12); }
+  }
+
+  /* Dynamic Island morph */
+  @keyframes hey-island-expand {
+    from { width: var(--island-collapsed-width); border-radius: 9999px; }
+    to { width: var(--island-expanded-width); border-radius: var(--glass-radius-large); }
+  }
+
+  @keyframes hey-island-collapse {
+    from { width: var(--island-expanded-width); border-radius: var(--glass-radius-large); }
+    to { width: var(--island-collapsed-width); border-radius: 9999px; }
+  }
+
+  /* Widget create */
+  @keyframes hey-widget-create {
+    from { transform: scale(0.96); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  /* Widget minimize */
+  @keyframes hey-widget-minimize {
+    from { transform: scale(1); opacity: 1; }
+    to { transform: scale(0.8) translateY(20px); opacity: 0; }
+  }
+
+  /* Widget maximize */
+  @keyframes hey-widget-maximize {
+    from { transform: scale(0.9) translateY(20px); opacity: 0; }
+    to { transform: scale(1) translateY(0); opacity: 1; }
+  }
+
+  /* Sidebar collapse/expand */
+  @keyframes hey-sidebar-collapse {
+    from { width: 244px; }
+    to { width: 68px; }
+  }
+
+  @keyframes hey-sidebar-expand {
+    from { width: 68px; }
+    to { width: 244px; }
+  }
+
+  /* Page transition */
+  @keyframes hey-page-enter {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes hey-page-exit {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0.96; transform: translateY(0); }
+  }
+
+  /* Skeleton loading */
+  @keyframes hey-skeleton {
+    from { opacity: 0.45; }
+    to { opacity: 0.85; }
+  }
+
+  /* Spotlight for tutorials */
+  @keyframes hey-spotlight-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(142, 216, 255, 0.4); }
+    50% { box-shadow: 0 0 0 20px rgba(142, 216, 255, 0); }
+  }
+
+  /* Tutorial pointer move */
+  @keyframes hey-tutorial-pointer {
+    from { transform: translate(var(--pointer-from-x, 0), var(--pointer-from-y, 0)); }
+    to { transform: translate(var(--pointer-to-x, 0), var(--pointer-to-y, 0)); }
+  }
+
+  /* =========================================
+     ANIMATION UTILITY CLASSES
+     ========================================= */
+
+  /* Standard transitions */
+  .hey-transition-standard {
+    transition: all var(--motion-standard) var(--ease-primary);
+  }
+
+  .hey-transition-fast {
+    transition: all var(--motion-fast) var(--ease-primary);
+  }
+
+  .hey-transition-micro {
+    transition: all var(--motion-micro) var(--ease-primary);
+  }
+
+  .hey-transition-panel {
+    transition: all var(--motion-panel) var(--ease-primary);
+  }
+
+  /* Specific property transitions */
+  .hey-transition-transform {
+    transition: transform var(--motion-standard) var(--ease-primary);
+  }
+
+  .hey-transition-opacity {
+    transition: opacity var(--motion-fast) var(--ease-primary);
+  }
+
+  .hey-transition-colors {
+    transition: color var(--motion-fast) var(--ease-primary),
+      background-color var(--motion-fast) var(--ease-primary),
+      border-color var(--motion-fast) var(--ease-primary);
+  }
+
+  .hey-transition-shadow {
+    transition: box-shadow var(--motion-standard) var(--ease-primary);
+  }
+
+  /* Enter animations */
+  .hey-enter-fade {
+    animation: hey-fade-in var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-scale {
+    animation: hey-scale-in var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-slide-up {
+    animation: hey-slide-in-up var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-slide-down {
+    animation: hey-slide-in-down var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-slide-left {
+    animation: hey-slide-in-left var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-slide-right {
+    animation: hey-slide-in-right var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-panel {
+    animation: hey-panel-enter var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-drawer {
+    animation: hey-drawer-enter var(--motion-panel) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-toast-desktop {
+    animation: hey-toast-enter-desktop var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-toast-mobile {
+    animation: hey-toast-enter-mobile var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-widget {
+    animation: hey-widget-create var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-enter-page {
+    animation: hey-page-enter var(--motion-medium) var(--ease-primary) forwards;
+  }
+
+  /* Exit animations */
+  .hey-exit-fade {
+    animation: hey-fade-out var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-exit-scale {
+    animation: hey-scale-out var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-exit-panel {
+    animation: hey-panel-exit var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-exit-drawer {
+    animation: hey-drawer-exit var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-exit-toast {
+    animation: hey-toast-exit var(--motion-fast) var(--ease-primary) forwards;
+  }
+
+  .hey-exit-widget {
+    animation: hey-widget-minimize var(--motion-standard) var(--ease-primary) forwards;
+  }
+
+  .hey-exit-page {
+    animation: hey-page-exit var(--motion-micro) var(--ease-primary) forwards;
+  }
+
+  /* Interaction states */
+  .hey-hover-lift {
+    transition: transform var(--motion-micro) var(--ease-primary),
+      box-shadow var(--motion-micro) var(--ease-primary);
+  }
+
+  .hey-hover-lift:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--elevation-3);
+  }
+
+  .hey-press-scale {
+    transition: transform var(--motion-instant) var(--ease-press);
+  }
+
+  .hey-press-scale:active:not(:focus-visible) {
+    transform: scale(0.992) translateY(1px);
+  }
+
+  .hey-focus-ring:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    transition: outline var(--motion-micro) var(--ease-primary);
+  }
+
+  /* Glass surface motion (Section 2) */
+  .hey-glass-surface {
+    transition: transform var(--motion-standard) var(--ease-primary),
+      box-shadow var(--motion-standard) var(--ease-primary),
+      border-color var(--motion-standard) var(--ease-primary);
+  }
+
+  .hey-glass-surface:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow: var(--elevation-4), 0 0 42px var(--accent-glow-soft);
+  }
+
+  /* Classic 3D tactile button (Section 3) */
+  .hey-tactile-button {
+    position: relative;
+    transition: transform var(--motion-micro) var(--ease-primary),
+      box-shadow var(--motion-micro) var(--ease-primary);
+  }
+
+  .hey-tactile-button::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(120deg, rgba(255,255,255,.07), transparent 30%, transparent 78%, rgba(255,255,255,.03));
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .hey-tactile-button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--elevation-2);
+  }
+
+  .hey-tactile-button:active:not(:focus-visible) {
+    transform: translateY(1px) scale(0.992);
+    transition-duration: var(--motion-instant);
+    transition-timing-function: var(--ease-press);
+  }
+
+  .hey-tactile-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  .hey-tactile-button:disabled {
+    transform: none !important;
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Toggle switch (Section 3) */
+  .hey-toggle {
+    position: relative;
+    width: 48px;
+    height: 28px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.15);
+    border: none;
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-primary);
+  }
+
+  .hey-toggle[data-on="true"] {
+    background: var(--green-primary);
+  }
+
+  .hey-toggle span {
+    display: block;
+    width: 22px;
+    height: 22px;
+    margin: 3px;
+    border-radius: 50%;
+    background: #fff;
+    transform: translateX(0);
+    transition: transform 180ms cubic-bezier(.22,1,.36,1);
+  }
+
+  .hey-toggle[data-on="true"] span {
+    transform: translateX(20px);
+  }
+
+  .hey-toggle:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
+
+  /* Segmented control (Section 3) */
+  .hey-segmented {
+    display: inline-flex;
+    position: relative;
+    background: var(--glass-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 4px;
+  }
+
+  .hey-segmented::before {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: var(--plate-left, 4px);
+    width: var(--plate-width, 80px);
+    height: calc(100% - 8px);
+    background: var(--accent);
+    border-radius: 8px;
+    transition: left 180ms cubic-bezier(.22,1,.36,1), width 180ms cubic-bezier(.22,1,.36,1);
+    z-index: 0;
+  }
+
+  .hey-segmented button {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+    transition: color 120ms var(--ease-primary);
+  }
+
+  .hey-segmented button[aria-selected="true"] {
+    color: var(--on-accent);
+  }
+
+  /* =========================================
+     ANIMATION QA HELPERS (Section 47)
+     ========================================= */
+
+  @media (prefers-reduced-motion: no-preference) {
+    .hey-qa-60hz { animation-duration: 16.67ms; }
+    .hey-qa-120hz { animation-duration: 8.33ms; }
+  }
+
+  /* Debug animation outlines */
+  .hey-debug-animations * {
+    animation-play-state: paused !important;
+  }
+
+  .hey-debug-animations *:hover {
+    animation-play-state: running !important;
+  }
+
+  /* =========================================
+     PERFORMANCE BUDGET MONITORS (Section 48)
+     ========================================= */
+
+  /* Pause ambient animations when tab hidden */
+  @media (prefers-reduced-motion: no-preference) {
+    html[hidden] .hey-ambient-animation,
+    html[hidden] .hey-particle-system {
+      animation-play-state: paused !important;
+    }
+  }
+
+  /* Battery saver detection */
+  .hey-battery-saver .hey-ambient-animation,
+  .hey-battery-saver .hey-particle-system,
+  .hey-battery-saver .hey-subtle-parallax,
+  .hey-battery-saver .hey-liquid-reflection {
+    animation: none !important;
+    display: none !important;
+  }
+
+  /* Thermal throttling */
+  .hey-thermal-throttled .hey-ambient-animation,
+  .hey-thermal-throttled .hey-particle-system {
+    animation: none !important;
+  }
+}
+
+/* =========================================
+   LAYER ORDER
+   ========================================= */
+
+@layer motion, base, components, utilities;

@@ -1,0 +1,196 @@
+/* =========================================
+   HEY SPLIT PANE
+   ========================================= */
+
+.hey-split-pane {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.hey-split-pane__pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  transition: width var(--motion-fast) var(--ease), height var(--motion-fast) var(--ease);
+}
+
+.hey-split-pane__divider {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 10;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.hey-split-pane__divider:hover,
+.hey-split-pane--dragging .hey-split-pane__divider {
+  background: var(--accent-glow-soft);
+}
+
+.hey-split-pane__divider:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.hey-split-pane--horizontal .hey-split-pane__divider {
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.hey-split-pane--vertical .hey-split-pane__divider {
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.hey-split-pane__divider-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.hey-split-pane__divider:hover .hey-split-pane__divider-handle,
+.hey-split-pane--dragging .hey-split-pane__divider-handle {
+  opacity: 1;
+}
+
+.hey-split-pane--horizontal .hey-split-pane__divider-handle::before {
+  content: '';
+  width: 4px;
+  height: 40px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.hey-split-pane--vertical .hey-split-pane__divider-handle::before {
+  content: '';
+  width: 40px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.hey-split-pane__divider:hover .hey-split-pane__divider-handle::before,
+.hey-split-pane--dragging .hey-split-pane__divider-handle::before {
+  background: var(--accent);
+}
+
+/* =========================================
+   HEY RESIZABLE PANE (FIXED PIXEL SIZES)
+   ========================================= */
+
+.hey-resizable-pane {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.hey-resizable-pane__pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hey-resizable-pane__divider {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 10;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.hey-resizable-pane__divider:hover,
+.hey-resizable-pane--dragging .hey-resizable-pane__divider {
+  background: var(--accent-glow-soft);
+}
+
+.hey-resizable-pane__divider:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.hey-resizable-pane--horizontal .hey-resizable-pane__divider {
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.hey-resizable-pane--vertical .hey-resizable-pane__divider {
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.hey-resizable-pane__divider-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.hey-resizable-pane__divider:hover .hey-resizable-pane__divider-handle,
+.hey-resizable-pane--dragging .hey-resizable-pane__divider-handle {
+  opacity: 1;
+}
+
+.hey-resizable-pane--horizontal .hey-resizable-pane__divider-handle::before {
+  content: '';
+  width: 4px;
+  height: 40px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.hey-resizable-pane--vertical .hey-resizable-pane__divider-handle::before {
+  content: '';
+  width: 40px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.hey-resizable-pane__divider:hover .hey-resizable-pane__divider-handle::before,
+.hey-resizable-pane--dragging .hey-resizable-pane__divider-handle::before {
+  background: var(--accent);
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
+
+@media (max-width: 640px) {
+  .hey-split-pane__divider,
+  .hey-resizable-pane__divider {
+    width: 12px;
+    height: 12px;
+  }
+
+  .hey-split-pane--horizontal .hey-split-pane__divider {
+    width: 12px;
+  }
+
+  .hey-split-pane--vertical .hey-split-pane__divider {
+    height: 12px;
+  }
+}

@@ -1,0 +1,34 @@
+.wrapper {
+
+    text-align:center;
+    
+    padding:120px 20px;
+    
+    }
+    
+    
+    
+    .wrapper h2 {
+    
+    font-size:
+    clamp(55px,8vw,110px);
+    
+    line-height:.95;
+    
+    letter-spacing:-.07em;
+    
+    font-weight:800;
+    
+    }
+    
+    
+    
+    .wrapper p {
+    
+    margin:35px auto;
+    
+    font-size:22px;
+    
+    color:var(--text-secondary);
+    
+    }

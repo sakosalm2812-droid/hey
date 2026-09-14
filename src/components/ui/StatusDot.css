@@ -1,0 +1,163 @@
+/* =========================================
+   HEY STATUS DOT
+   ========================================= */
+
+.hey-status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.hey-status-dot__indicator {
+  display: inline-block;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  box-shadow: 0 0 0 1px var(--bg-primary);
+}
+
+.hey-status-dot--online .hey-status-dot__indicator { background: var(--semantic-success-text); }
+.hey-status-dot--away .hey-status-dot__indicator { background: var(--semantic-warning-text); }
+.hey-status-dot--busy .hey-status-dot__indicator { background: var(--semantic-destructive-text); }
+.hey-status-dot--offline .hey-status-dot__indicator { background: var(--text-tertiary); }
+.hey-status-dot--active .hey-status-dot__indicator { background: var(--semantic-success-text); }
+.hey-status-dot--inactive .hey-status-dot__indicator { background: var(--text-tertiary); }
+.hey-status-dot--pending .hey-status-dot__indicator { background: var(--semantic-warning-text); }
+.hey-status-dot--running .hey-status-dot__indicator { background: var(--semantic-info-text); }
+.hey-status-dot--completed .hey-status-dot__indicator { background: var(--semantic-success-text); }
+.hey-status-dot--failed .hey-status-dot__indicator { background: var(--semantic-destructive-text); }
+.hey-status-dot--blocked .hey-status-dot__indicator { background: var(--semantic-warning-text); }
+.hey-status-dot--neutral .hey-status-dot__indicator { background: var(--text-tertiary); }
+
+/* SIZES */
+.hey-status-dot--xs .hey-status-dot__indicator { width: 6px; height: 6px; }
+.hey-status-dot--sm .hey-status-dot__indicator { width: 8px; height: 8px; }
+.hey-status-dot--md .hey-status-dot__indicator { width: 10px; height: 10px; }
+.hey-status-dot--lg .hey-status-dot__indicator { width: 12px; height: 12px; }
+.hey-status-dot--xl .hey-status-dot__indicator { width: 16px; height: 16px; }
+
+/* PULSE ANIMATION */
+.hey-status-dot--pulse .hey-status-dot__indicator {
+  animation: hey-status-pulse 2s var(--ease) infinite;
+}
+
+@keyframes hey-status-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hey-status-dot--pulse .hey-status-dot__indicator {
+    animation: none;
+  }
+}
+
+/* =========================================
+   STATUS BADGE
+   ========================================= */
+
+.hey-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-body);
+  font-weight: 500;
+  white-space: nowrap;
+  border: var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.hey-status-badge--default {
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+.hey-status-badge--primary {
+  background: var(--accent-glow-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.hey-status-badge--success {
+  background: var(--semantic-success-bg);
+  color: var(--semantic-success-text);
+  border-color: var(--semantic-success-border);
+}
+
+.hey-status-badge--warning {
+  background: var(--semantic-warning-bg);
+  color: var(--semantic-warning-text);
+  border-color: var(--semantic-warning-border);
+}
+
+.hey-status-badge--destructive {
+  background: var(--semantic-destructive-bg);
+  color: var(--semantic-destructive-text);
+  border-color: var(--semantic-destructive-border);
+}
+
+.hey-status-badge--info {
+  background: var(--semantic-info-bg);
+  color: var(--semantic-info-text);
+  border-color: var(--semantic-info-border);
+}
+
+/* SIZES */
+.hey-status-badge--xs {
+  height: 16px;
+  font-size: 9px;
+  padding: 0 var(--space-1);
+}
+
+.hey-status-badge--sm {
+  height: 20px;
+  font-size: 10px;
+  padding: 0 var(--space-2);
+}
+
+.hey-status-badge--md {
+  height: 24px;
+  font-size: 11px;
+  padding: 0 var(--space-2);
+}
+
+.hey-status-badge--lg {
+  height: 28px;
+  font-size: 12px;
+  padding: 0 var(--space-3);
+}
+
+.hey-status-badge__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
+
+@media (max-width: 480px) {
+  .hey-status-badge--md {
+    height: 22px;
+    font-size: 10px;
+  }
+}

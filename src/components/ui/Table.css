@@ -1,0 +1,292 @@
+/* =========================================
+   HEY TABLE
+   ========================================= */
+
+.hey-table {
+  width: 100%;
+  border: var(--glass-border);
+  border-radius: var(--radius-card);
+  background: var(--glass-1);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  overflow: hidden;
+}
+
+.hey-table__container {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.hey-table__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  color: var(--text-primary);
+}
+
+.hey-table__cell {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-subtle);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.hey-table__cell:last-child {
+  border-right: none;
+}
+
+.hey-table__cell--header {
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: var(--glass-bg);
+  border-bottom: var(--border);
+  user-select: none;
+}
+
+.hey-table__cell--sortable {
+  cursor: pointer;
+}
+
+.hey-table__cell--sortable:hover {
+  color: var(--text-primary);
+}
+
+.hey-table__cell--center { text-align: center; }
+.hey-table__cell--right { text-align: right; }
+.hey-table__cell--fixed { overflow: hidden; text-overflow: ellipsis; }
+
+.hey-table__header-content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hey-table__sort-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: color var(--motion-fast) var(--ease);
+}
+
+.hey-table__cell--sortable:hover .hey-table__sort-icon {
+  color: var(--accent);
+}
+
+.hey-table__resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+.hey-table__cell--header:hover .hey-table__resize-handle {
+  opacity: 1;
+}
+
+.hey-table__cell--checkbox {
+  width: 48px;
+  padding: var(--space-2);
+  text-align: center;
+}
+
+.hey-table__select-all,
+.hey-table__select-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.hey-table__select-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.hey-table__select-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: var(--glass-border);
+  border-radius: 4px;
+  background: var(--field-bg);
+  color: var(--bg-void);
+  transition:
+    background var(--motion-fast) var(--ease),
+    border-color var(--motion-fast) var(--ease);
+}
+
+.hey-table__select-input:checked + .hey-table__select-indicator {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.hey-table__select-input:indeterminate + .hey-table__select-indicator::before {
+  content: '';
+  width: 8px;
+  height: 2px;
+  background: var(--bg-void);
+  border-radius: 1px;
+}
+
+.hey-table__select-input:focus-visible + .hey-table__select-indicator {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.hey-table__row {
+  transition: background var(--motion-fast) var(--ease);
+}
+
+.hey-table--hoverable .hey-table__row:hover {
+  background: var(--glass-bg);
+}
+
+.hey-table__row--selected {
+  background: var(--accent-glow-soft);
+}
+
+.hey-table--striped .hey-table__row:nth-child(even):not(.hey-table__row--selected) {
+  background: var(--glass-bg-subtle);
+}
+
+.hey-table__cell-content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.hey-table__empty-row {
+  animation: hey-fade-in var(--motion-standard) var(--ease);
+}
+
+.hey-table__empty-cell {
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  border-bottom: none;
+}
+
+.hey-table__empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-tertiary);
+}
+
+.hey-table__empty-state svg {
+  opacity: 0.4;
+}
+
+.hey-table__empty-state p {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+}
+
+/* DENSE MODE */
+.hey-table--dense .hey-table__cell {
+  padding: var(--space-2) var(--space-3);
+}
+
+.hey-table--dense .hey-table__cell--header {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* PAGINATION */
+.hey-table__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-top: var(--border);
+  background: var(--glass-bg);
+}
+
+.hey-table__pagination-info {
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  color: var(--text-secondary);
+}
+
+.hey-table__pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.hey-table__page-indicator {
+  padding: 0 var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-small);
+  color: var(--text-secondary);
+}
+
+/* SKELETON */
+.hey-table__skeleton {
+  padding: var(--space-4);
+}
+
+.hey-table__header-skeleton {
+  display: grid;
+  grid-template-columns: repeat(var(--col-count, 5), 1fr);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border);
+  background: var(--glass-bg);
+}
+
+.hey-table__row-skeleton {
+  display: grid;
+  grid-template-columns: repeat(var(--col-count, 5), 1fr);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-subtle);
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
+
+@media (max-width: 640px) {
+  .hey-table__cell {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .hey-table__cell--header {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-micro);
+  }
+
+  .hey-table__pagination {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+
+  .hey-table__pagination-controls {
+    justify-content: center;
+  }
+
+  .hey-table__page-indicator {
+    order: -1;
+    text-align: center;
+  }
+}

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-native-execute"
+description = "Enables the frontend to invoke the native_execute command, which runs validated native actions (browser, filesystem, terminal) with strict safety guards."
+commands = { allow = ["native_execute"] }

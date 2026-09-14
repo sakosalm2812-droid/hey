@@ -1,0 +1,23 @@
+[package]
+name = "hey"
+version = "0.0.0"
+description = "HEY native desktop runtime"
+authors = ["S&A"]
+edition = "2021"
+
+[package.metadata.tauri-winres]
+FileDescription = "HEY native desktop runtime"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.30"
+tauri = { version = "2", features = [] }
+wait-timeout = "0.2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

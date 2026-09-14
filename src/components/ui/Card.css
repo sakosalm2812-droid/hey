@@ -1,0 +1,296 @@
+/* =========================================
+   HEY CARD — BASE
+   ========================================= */
+
+.hey-card {
+  position: relative;
+  border-radius: var(--radius-card);
+  isolation: isolate;
+  overflow: hidden;
+  transition:
+    background var(--motion-standard) var(--ease),
+    border-color var(--motion-standard) var(--ease),
+    box-shadow var(--motion-standard) var(--ease),
+    transform var(--motion-micro) var(--ease-press);
+}
+
+.hey-card:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* PADDING */
+.hey-card--padding-none { padding: 0; }
+.hey-card--padding-xs { padding: var(--space-2); }
+.hey-card--padding-sm { padding: var(--space-3); }
+.hey-card--padding-md { padding: var(--space-4); }
+.hey-card--padding-lg { padding: var(--space-5); }
+.hey-card--padding-xl { padding: var(--space-6); }
+
+/* VARIANT — DEFAULT */
+.hey-card--default {
+  background: var(--liquid-surface);
+  border: var(--glass-border);
+  box-shadow: var(--liquid-shadow);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* VARIANT — ELEVATED */
+.hey-card--elevated {
+  background: var(--liquid-surface);
+  border: var(--glass-border-strong);
+  box-shadow: var(--elevation-3);
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+}
+
+/* VARIANT — SUBTLE */
+.hey-card--subtle {
+  background: var(--glass-bg-subtle);
+  border: var(--glass-border-subtle);
+  box-shadow: var(--elevation-1);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* VARIANT — OUTLINE */
+.hey-card--outline {
+  background: transparent;
+  border: var(--border);
+  box-shadow: none;
+}
+
+/* VARIANT — FILLED */
+.hey-card--filled {
+  background: var(--surface);
+  border: var(--border-subtle);
+  box-shadow: var(--elevation-1);
+}
+
+/* INTERACTIVE STATES */
+.hey-card--interactive {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.hey-card--interactive:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.hey-card--hover:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--liquid-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.hey-card--pressed {
+  transform: translateY(1px) scale(0.995);
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.15),
+    inset 0 1px 0 var(--glass-highlight);
+  transition-duration: var(--motion-instant);
+}
+
+.hey-card--selected {
+  border-color: var(--accent);
+  box-shadow:
+    var(--liquid-shadow),
+    0 0 0 2px var(--accent-glow-soft),
+    inset 0 0 0 1px var(--accent);
+}
+
+/* =========================================
+   GLASS CARD
+   ========================================= */
+
+.hey-glass-card {
+  position: relative;
+  border-radius: var(--radius-card);
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.hey-glass-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.07),
+    transparent 30%,
+    transparent 78%,
+    rgba(255, 255, 255, 0.03)
+  );
+  opacity: 0.5;
+}
+
+/* PADDING */
+.hey-glass-card--padding-none { padding: 0; }
+.hey-glass-card--padding-xs { padding: var(--space-2); }
+.hey-glass-card--padding-sm { padding: var(--space-3); }
+.hey-glass-card--padding-md { padding: var(--space-4); }
+.hey-glass-card--padding-lg { padding: var(--space-5); }
+.hey-glass-card--padding-xl { padding: var(--space-6); }
+
+/* VARIANTS */
+.hey-glass-card--default {
+  background: var(--glass-1);
+  border: var(--glass-border);
+  box-shadow: var(--liquid-shadow);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.hey-glass-card--raised {
+  background: var(--glass-raised);
+  border: var(--glass-border-strong);
+  box-shadow: var(--elevation-3);
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+}
+
+.hey-glass-card--subtle {
+  background: var(--glass-0);
+  border: var(--glass-border-subtle);
+  box-shadow: var(--elevation-1);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.hey-glass-card--strong {
+  background: var(--glass-2);
+  border: var(--glass-border);
+  box-shadow: var(--elevation-2);
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+}
+
+/* BLUR LEVELS */
+.hey-glass-card--blur-none {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--surface);
+}
+
+.hey-glass-card--blur-light {
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+}
+
+.hey-glass-card--blur-standard {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.hey-glass-card--blur-strong {
+  backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong)) saturate(var(--glass-saturate-strong));
+}
+
+/* =========================================
+   RAISED CARD (CLASSIC 3D TACTILE)
+   ========================================= */
+
+.hey-raised-card {
+  position: relative;
+  border-radius: var(--radius-card);
+  isolation: isolate;
+  overflow: hidden;
+  transition:
+    box-shadow var(--motion-standard) var(--ease),
+    transform var(--motion-micro) var(--ease-press);
+}
+
+/* PADDING */
+.hey-raised-card--padding-none { padding: 0; }
+.hey-raised-card--padding-xs { padding: var(--space-2); }
+.hey-raised-card--padding-sm { padding: var(--space-3); }
+.hey-raised-card--padding-md { padding: var(--space-4); }
+.hey-raised-card--padding-lg { padding: var(--space-5); }
+.hey-raised-card--padding-xl { padding: var(--space-6); }
+
+/* ELEVATION LEVELS */
+.hey-raised-card--elevation-0 {
+  background: var(--surface);
+  box-shadow: var(--elevation-0);
+}
+
+.hey-raised-card--elevation-1 {
+  background: var(--surface);
+  box-shadow: var(--elevation-1);
+  border: var(--border-subtle);
+}
+
+.hey-raised-card--elevation-2 {
+  background: var(--surface);
+  box-shadow: var(--elevation-2);
+  border: var(--border);
+}
+
+.hey-raised-card--elevation-3 {
+  background: var(--surface);
+  box-shadow: var(--elevation-3);
+  border: var(--border);
+}
+
+.hey-raised-card--elevation-4 {
+  background: var(--surface);
+  box-shadow: var(--elevation-4);
+  border: var(--border-strong);
+}
+
+.hey-raised-card--elevation-5 {
+  background: var(--surface);
+  box-shadow: var(--elevation-5);
+  border: var(--border-strong);
+}
+
+/* HOVER/STATES */
+.hey-raised-card:hover {
+  transform: translateY(-2px);
+}
+
+.hey-raised-card--elevation-1:hover { box-shadow: var(--elevation-2); }
+.hey-raised-card--elevation-2:hover { box-shadow: var(--elevation-3); }
+.hey-raised-card--elevation-3:hover { box-shadow: var(--elevation-4); }
+.hey-raised-card--elevation-4:hover { box-shadow: var(--elevation-5); }
+
+.hey-raised-card:active {
+  transform: translateY(1px) scale(0.995);
+  transition-duration: var(--motion-instant);
+}
+
+/* =========================================
+   REDUCED TRANSPARENCY
+   ========================================= */
+
+@media (prefers-reduced-transparency: reduce) {
+  .hey-card--default,
+  .hey-card--elevated,
+  .hey-card--subtle,
+  .hey-glass-card--default,
+  .hey-glass-card--raised,
+  .hey-glass-card--subtle,
+  .hey-glass-card--strong {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--surface);
+    border: var(--border);
+  }
+}
+
+/* =========================================
+   RESPONSIVE
+   ========================================= */
+
+@media (max-width: 640px) {
+  .hey-card--padding-md { padding: var(--space-3); }
+  .hey-card--padding-lg { padding: var(--space-4); }
+  .hey-glass-card--padding-md { padding: var(--space-3); }
+  .hey-raised-card--padding-md { padding: var(--space-3); }
+}

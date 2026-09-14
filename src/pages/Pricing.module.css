@@ -1,0 +1,98 @@
+.page {
+  min-height: 100vh;
+  padding: var(--space-10) 24px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.hero {
+  text-align: center;
+}
+
+.hero h1 {
+  font-size: clamp(60px, 8vw, 120px);
+  line-height: .95;
+  letter-spacing: -.07em;
+  margin: 0;
+}
+
+.hero p {
+  margin-top: 35px;
+  font-size: 22px;
+  color: var(--text-secondary);
+}
+
+.plans {
+  margin-top: 100px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 30px;
+}
+
+.card {
+  padding: 45px;
+  border-radius: var(--radius-card);
+  background: linear-gradient(145deg, var(--glass-bg-strong), var(--glass-bg));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+  backdrop-filter: blur(30px);
+}
+
+.popular {
+  box-shadow: 0 0 70px var(--accent-glow-soft), inset 0 1px 0 rgba(255,255,255,.24);
+  border-color: rgba(129,140,248,.5);
+}
+
+.price {
+  font-size: 60px;
+  font-weight: 800;
+  margin-top: 25px;
+}
+
+.price span {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+
+.card p {
+  margin-top: 20px;
+  color: var(--text-secondary);
+}
+
+.card ul {
+  margin-top: 30px;
+  list-style: none;
+  padding: 0;
+  line-height: 2;
+}
+
+.card button {
+  margin-top: 35px;
+  width: 100%;
+  padding: 14px;
+  border-radius: 980px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .3s var(--ease);
+}
+.card button:hover { background: var(--accent-hover); }
+
+@media(max-width:900px){
+  .plans { grid-template-columns: 1fr; }
+}
+
+.unavailable {
+  margin-top: 35px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}

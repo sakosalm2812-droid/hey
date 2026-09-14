@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the HEY desktop main window. Grants core defaults plus the two native adapter commands. All other Tauri commands remain denied.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-native-execute",
+    "allow-native-capabilities"
+  ]
+}
