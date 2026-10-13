@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createAction, executeAction, undoAction, clearActions } from "../src/core/actionEngine.js";
-import { authorizeExecution, clearPermissions, seedPermissions } from "../src/core/permissionManager.js";
+import { authorizeExecution, clearPermissions, revokePermission, seedPermissions } from "../src/core/permissionManager.js";
 import { runVerifiedWorkflow } from "../src/core/executionLoop.js";
 
 test("hydrated permissions cannot cross account boundaries", () => {
@@ -123,4 +123,82 @@ test("undo is single-flight and handles thrown handlers without leaking rejectio
   assert.equal(undone.error, "undo uncertain");
   assert.equal(failed.status, "undo_failed");
   clearActions();
+});
+
+
+test("permission decisions require an authenticated identity and ignore client tier overrides", () => {
+  clearPermissions();
+  const anonymous = authorizeExecution({
+    capability: "web.search",
+    permission: "web.search",
+    riskLevel: "low",
+  });
+  assert.equal(anonymous.authorized, false);
+
+  const downgraded = authorizeExecution({
+    user: { id: "free-user", plan: "free", permissions: ["device.control"] },
+    capability: "device.control",
+    permission: "device.control",
+    riskLevel: "low",
+    confirmed: true,
+    clientPlan: "elite",
+    clientEntitlements: ["elite"],
+  });
+  assert.equal(downgraded.authorized, false);
+  assert.equal(downgraded.plan, "free");
+  assert.equal(downgraded.ignoredClientOverrides, true);
+  clearPermissions();
+});
+
+test("high-risk execution requires explicit confirmation even when permission is granted", () => {
+  clearPermissions();
+  const user = { id: "pro-user", plan: "pro", permissions: ["web.search"] };
+  const needsConfirmation = authorizeExecution({
+    user,
+    capability: "web.search",
+    permission: "web.search",
+    riskLevel: "high",
+  });
+  assert.equal(needsConfirmation.authorized, false);
+  assert.equal(needsConfirmation.requiresConfirmation, true);
+
+  const confirmed = authorizeExecution({
+    user,
+    capability: "web.search",
+    permission: "web.search",
+    riskLevel: "high",
+    confirmed: true,
+  });
+  assert.equal(confirmed.authorized, true);
+  clearPermissions();
+});
+
+test("critical computer-control primitives remain blocked after user confirmation", () => {
+  clearPermissions();
+  const decision = authorizeExecution({
+    user: { id: "elite-user", plan: "elite", permissions: ["terminal.execute"] },
+    capability: "terminal.execute",
+    permission: "terminal.execute",
+    riskLevel: "critical",
+    confirmed: true,
+  });
+  assert.equal(decision.authorized, false);
+  assert.match(decision.reason, /dedicated verified execution path/);
+  clearPermissions();
+});
+
+test("revoked permissions cannot be reused by the same account", () => {
+  clearPermissions();
+  seedPermissions([{ permission: "browser.open_url", status: "granted", scope: "account" }], "revoked-user");
+  const input = {
+    user: { id: "revoked-user", plan: "pro", permissions: [] },
+    capability: "browser.open_url",
+    permission: "browser.open_url",
+    riskLevel: "low",
+    confirmed: true,
+  };
+  assert.equal(authorizeExecution(input).authorized, true);
+  revokePermission("browser.open_url", "account");
+  assert.equal(authorizeExecution(input).authorized, false);
+  clearPermissions();
 });
