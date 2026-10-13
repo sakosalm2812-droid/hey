@@ -20,8 +20,8 @@ function localEnvironment() {
 
   const result = {
     url: values.get("API_URL"),
-    anonKey: values.get("ANON_KEY") || values.get("ANON_KEY"),
-    serviceKey: values.get("SERVICE_ROLE_KEY") || values.get("SERVICE_ROLE_KEY"),
+    anonKey: values.get("ANON_KEY") || values.get("anon_key"),
+    serviceKey: values.get("SERVICE_ROLE_KEY") || values.get("service_role_key"),
   };
   if (!result.url || !result.anonKey || !result.serviceKey) {
     throw new Error("Local Supabase API_URL, ANON_KEY, and SERVICE_ROLE_KEY are required.");
@@ -113,6 +113,26 @@ try {
     .order("created_at");
   assert.equal(visibleTranscript.error, null);
   assert.deepEqual(visibleTranscript.data.map(({ role }) => role), ["user", "assistant"]);
+
+  const trustedForgeRun = await admin
+    .from("hey_forge_runs")
+    .insert({ user_id: first.userId, brief: "policy test", artifact: {}, validation: {}, status: "verified" })
+    .select("id")
+    .single();
+  assert.equal(trustedForgeRun.error, null);
+
+  const forgedForgeInsert = await first.client
+    .from("hey_forge_runs")
+    .insert({ user_id: first.userId, brief: "forged", artifact: {}, validation: {}, status: "verified" });
+  assert.ok(forgedForgeInsert.error, "clients must not insert Forge history");
+
+  const forgedForgeUpdate = await first.client
+    .from("hey_forge_runs")
+    .update({ status: "verified", artifact: { forged: true } })
+    .eq("id", trustedForgeRun.data.id)
+    .select("id");
+  assert.equal(forgedForgeUpdate.error, null);
+  assert.equal(forgedForgeUpdate.data.length, 0, "clients must not alter Forge history");
 
   const rateCalls = await Promise.all(
     Array.from({ length: 36 }, () => first.client.rpc("consume_hey_rate_limit")),
