@@ -32,8 +32,17 @@ secrets**, never Vite variables. `SUPABASE_SERVICE_ROLE_KEY` is also server-only
 Supabase supplies it to the Edge runtime and it must never be exposed to Vite.
 `APP_URL` is used by the edge function for origins and wake routes.
 
-Do not commit `.env.local`. `.gitleaks.toml` + `npm run secret-scan` is the
-pre-commit leak check.
+Do not commit `.env.local`. The repository's `.gitleaks.toml` configures the
+secret scan. Install the pinned upstream Gitleaks CLI locally before running
+the pre-commit check:
+
+```bash
+go install github.com/zricethezav/gitleaks/v8@v8.30.1
+export PATH="$(go env GOPATH)/bin:$PATH"
+npm run secret-scan
+```
+
+GitHub Actions installs the same pinned scanner and scans the full Git history.
 
 ---
 
