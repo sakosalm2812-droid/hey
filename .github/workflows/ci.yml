@@ -64,6 +64,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
+      - name: Set up Node.js for database integration assertions
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+
+      - name: Install test client dependencies
+        run: npm ci
+
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
         with:
@@ -74,6 +83,9 @@ jobs:
 
       - name: Apply every migration from an empty database
         run: supabase db reset
+
+      - name: Exercise local database security and concurrency
+        run: node scripts/runtime-security.integration.mjs
 
       - name: Stop local Supabase services
         if: always()
