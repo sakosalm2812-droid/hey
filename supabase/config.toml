@@ -1,5 +1,7 @@
 [functions.hey]
-verify_jwt = true
+# The edge handler validates every POST token itself; platform JWT verification
+# is disabled so its minimal GET /health endpoint can be reached anonymously.
+verify_jwt = false
 
 [functions.hey-studio]
 verify_jwt = true
