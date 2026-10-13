@@ -179,7 +179,7 @@ async function readBoundedJson(request: Request): Promise<
   { ok: true; value: Record<string, unknown> } | { ok: false; tooLarge?: boolean }
 > {
   const declaredLength = request.headers.get("content-length");
-  if (declaredLength && /^\\d+$/.test(declaredLength) && Number(declaredLength) > MAX_REQUEST_BYTES) {
+  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > MAX_REQUEST_BYTES) {
     return { ok: false, tooLarge: true };
   }
 
