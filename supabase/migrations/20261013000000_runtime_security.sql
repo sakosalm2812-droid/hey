@@ -67,12 +67,12 @@ begin
    where user_id = v_user_id
    for update;
 
-  select coalesce(array_agg(t), '{}'::timestamptz[])
+  select coalesce(array_agg(x.request_at), '{}'::timestamptz[])
     into v_recent
     from public.hey_rate_limits r,
-         lateral unnest(r.request_times) as t
+         lateral unnest(r.request_times) as x(request_at)
    where r.user_id = v_user_id
-     and t > v_now - interval '60 seconds';
+     and x.request_at > v_now - interval '60 seconds';
 
   if coalesce(cardinality(v_recent), 0) >= 30 then
     update public.hey_rate_limits
