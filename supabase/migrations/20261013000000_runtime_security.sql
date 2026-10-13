@@ -62,14 +62,6 @@ begin
   values (v_user_id, '{}'::timestamptz[], v_now)
   on conflict (user_id) do nothing;
 
-  select coalesce(array_agg(t), '{}'::timestamptz[])
-    into v_recent
-    from public.hey_rate_limits r,
-         lateral unnest(r.request_times) as t
-   where r.user_id = v_user_id
-     and t > v_now - interval '60 seconds'
-   for update;
-
   -- Serialize on the user's row before deciding the request outcome.
   perform 1 from public.hey_rate_limits
    where user_id = v_user_id
