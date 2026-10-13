@@ -523,8 +523,22 @@ Deno.serve(async (request) => {
       .select("id")
       .single();
 
-    if (error) return jsonResponse({ error: "Could not create conversation" }, 500);
-    conversationId = conversation.id;
+    if (error) {
+      // The unique (user_id, request_id) index may reject a concurrent retry.
+      // Resolve the winner instead of turning an idempotent retry into a 500.
+      if (requestId) {
+        const { data: existingConversation } = await supabase
+          .from("hey_conversations")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("request_id", requestId)
+          .maybeSingle();
+        if (existingConversation) conversationId = existingConversation.id;
+      }
+      if (!conversationId) return jsonResponse({ error: "Could not create conversation" }, 500);
+    } else {
+      conversationId = conversation.id;
+    }
   }
 
   const { data: conversation, error: conversationError } = await supabase
