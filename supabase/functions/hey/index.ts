@@ -4,7 +4,7 @@ const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
   "Access-Control-Allow-Origin": allowedOrigin,
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 const defaultSystemPrompt = `You are HEY, a personal intelligence system.
@@ -22,13 +22,7 @@ Give the direct answer first, use plain language, and avoid filler or unnecessar
 When teaching, use an example that makes the idea usable. In creative work, preserve specific constraints and avoid generic output.
 Never describe prompting improvements as model training or claim a measured improvement without evaluation evidence.`;
 
-type RateLimitEntry = { timestamps: number[]; lastSeen: number };
-
-const requestLog = new Map<string, RateLimitEntry>();
-const REQUEST_WINDOW_MS = 60_000;
-const REQUEST_LIMIT = 30;
-const REQUEST_LOG_SWEEP_MS = 5 * 60_000;
-const REQUEST_LOG_SWEEP_THRESHOLD = 1_000;
+const MAX_REQUEST_BYTES = 12 * 1024 * 1024;
 
 const FORGE_MAX_FILES = 250;
 const FORGE_MAX_PATH_LENGTH = 180;
@@ -269,31 +263,50 @@ function validateForgeArtifact(artifact: Record<string, unknown>) {
   return { score: Math.round((passed / Object.keys(checks).length) * 100), checks, valid: passed === Object.keys(checks).length, fileCount: files.length };
 }
 
-function pruneRequestLog() {
-  if (requestLog.size < REQUEST_LOG_SWEEP_THRESHOLD) return;
-  const cutoff = Date.now() - REQUEST_LOG_SWEEP_MS;
-  for (const [userId, entry] of requestLog) {
-    if (entry.lastSeen < cutoff) requestLog.delete(userId);
-  }
-}
-
-function isRateLimited(userId: string) {
-  pruneRequestLog();
-  const now = Date.now();
-  const entry = requestLog.get(userId) || { timestamps: [], lastSeen: now };
-  entry.lastSeen = now;
-  const recentRequests = entry.timestamps.filter((timestamp) => now - timestamp < REQUEST_WINDOW_MS);
-
-  if (recentRequests.length >= REQUEST_LIMIT) {
-    entry.timestamps = recentRequests;
-    requestLog.set(userId, entry);
-    return true;
+async function readBoundedJson(request: Request): Promise<
+  { ok: true; value: Record<string, unknown> } | { ok: false; tooLarge?: boolean }
+> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength && /^\\d+$/.test(declaredLength) && Number(declaredLength) > MAX_REQUEST_BYTES) {
+    return { ok: false, tooLarge: true };
   }
 
-  recentRequests.push(now);
-  entry.timestamps = recentRequests;
-  requestLog.set(userId, entry);
-  return false;
+  const reader = request.body?.getReader();
+  if (!reader) return { ok: false };
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_REQUEST_BYTES) {
+        await reader.cancel();
+        return { ok: false, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false };
+    return { ok: true, value: parsed as Record<string, unknown> };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -350,13 +363,25 @@ Deno.serve(async (request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  const healthPath = new URL(request.url).pathname.endsWith("/health");
+  if (request.method === "GET" && healthPath) {
+    const ready = Boolean(
+      Deno.env.get("SUPABASE_URL")
+      && Deno.env.get("SUPABASE_ANON_KEY")
+      && Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+      && getProviderAttempts().length,
+    );
+    return jsonResponse({ status: ready ? "ready" : "not_ready" }, ready ? 200 : 503);
+  }
+
   if (request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
-  if (!supabaseUrl || !supabaseAnonKey || !getProviderAttempts().length) {
+  const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !getProviderAttempts().length) {
     return jsonResponse({ error: "HEY backend is not configured" }, 500);
   }
 
@@ -369,7 +394,13 @@ Deno.serve(async (request) => {
 
   const { data: { user }, error: userError } = await supabase.auth.getUser(token);
   if (userError || !user) return jsonResponse({ error: "Authentication required" }, 401);
-  if (isRateLimited(user.id)) return jsonResponse({ error: "Too many requests" }, 429);
+
+  const { data: withinRateLimit, error: rateLimitError } = await supabase.rpc("consume_hey_rate_limit");
+  if (rateLimitError) {
+    console.error("Shared rate limit check failed", rateLimitError);
+    return jsonResponse({ error: "Request protection is temporarily unavailable" }, 503);
+  }
+  if (!withinRateLimit) return jsonResponse({ error: "Too many requests" }, 429);
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
@@ -382,12 +413,13 @@ Deno.serve(async (request) => {
   }
   const accountPlan = resolveAccountPlan(profile);
 
-  let payload: Record<string, unknown>;
-  try {
-    payload = await request.json();
-  } catch {
-    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  const parsedBody = await readBoundedJson(request);
+  if (!parsedBody.ok) {
+    return parsedBody.tooLarge
+      ? jsonResponse({ error: "Request body is too large" }, 413)
+      : jsonResponse({ error: "Invalid JSON body" }, 400);
   }
+  const payload = parsedBody.value;
 
   const message = normaliseContent(payload.message);
   if (!message) return jsonResponse({ error: "Message is required" }, 400);
@@ -654,7 +686,9 @@ Deno.serve(async (request) => {
 
   const messages = [
     { role: "system", content: system },
-    ...(history || []).reverse().map((item) => ({ role: item.role, content: item.content })),
+    ...(history || []).reverse()
+      .filter((item) => item.role === "user" || item.role === "assistant")
+      .map((item) => ({ role: item.role, content: item.content })),
     { role: "user", content: message },
   ];
 
@@ -682,7 +716,10 @@ Deno.serve(async (request) => {
     agentTeam: payload.agentTeam || null,
   };
 
-  const { error: messageError } = await supabase.from("hey_messages").insert([
+  const serviceSupabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { error: messageError } = await serviceSupabase.from("hey_messages").insert([
     { conversation_id: conversationId, user_id: user.id, role: "user", content: message },
     { conversation_id: conversationId, user_id: user.id, role: "assistant", content: answer, metadata },
   ]);
