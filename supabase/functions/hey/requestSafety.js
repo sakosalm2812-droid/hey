@@ -17,7 +17,7 @@ export async function readBoundedJson(request, maxBytes = DEFAULT_MAX_REQUEST_BY
       if (done) break;
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
-        try { await reader.cancel(); } catch {}
+        try { await reader.cancel(); } catch (error) { void error; }
         return { ok: false, tooLarge: true };
       }
       chunks.push(value);
