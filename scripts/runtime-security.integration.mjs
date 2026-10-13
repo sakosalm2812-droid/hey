@@ -33,8 +33,8 @@ const { url, anonKey, serviceKey } = localEnvironment();
 const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 const makeSession = async () => {
   const suffix = randomUUID();
-  const email = \`hey-security-\${suffix}@example.test\`;
-  const password = \`Local-test-\${suffix}-A9!\`;
+  const email = `hey-security-${suffix}@example.test`;
+  const password = `Local-test-${suffix}-A9!`;
   const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   if (created.error || !created.data.user) throw created.error || new Error("Could not create test identity.");
   const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
