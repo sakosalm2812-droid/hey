@@ -12,18 +12,22 @@ must be true before public launch.
 
 ## Engineering quality
 
-- [ ] `npm run lint` clean (`eslint .`)
-- [ ] `npm test` green (unit + engine-level journeys in `tests/`)
-- [ ] `npm run build` green (dist/ + sitemap) — `VERIFIED`
-- [ ] Secret scan runs and is clean (`npm run secret-scan`)
-- [ ] No leaked `.env.local`, keys, or service-role secrets in git history
+- [x] `npm run lint` clean (`eslint .`) — 2026-10-13, [Actions run 38421160443](https://github.com/sakosalm2812-droid/hey/actions/runs/38421160443)
+- [x] `npm test` green — 51/51 tests passed, same Actions run
+- [x] `npm run build` green (dist/ + sitemap), same Actions run
+- [x] Full `npm audit --audit-level=high` reports zero vulnerabilities, same Actions run
+- [x] Full-history secret scan clean; Gitleaks reports no leaks, same Actions run
+- [x] No leaked `.env.local`, keys, or service-role secrets found in scanned git history, same Actions run
+- [x] Clean local Supabase reset applied every migration; local RLS, account-isolation, transcript-role, Forge-history, and 36-request rate-limit concurrency tests passed, same Actions run
 
 ## Release requirements (§32)
 
-- [ ] Rate limiting on the edge function (chat, memory, vision) — make it
-      verifiable in a live deploy
+- [ ] Database-backed per-user rate limiting is implemented and passed a
+      clean local 36-request concurrency test (30 allowed, 6 rejected). Verify
+      the same behavior across hosted Edge isolates after deployment.
 - [ ] Idempotency keys for writes (`20260909000000_idempotency.sql` applied)
-- [ ] Health endpoint reachable: `GET /functions/v1/hey/health`
+- [ ] Unauthenticated `GET /functions/v1/hey/health` is implemented and
+      configured; verify reachability/readiness on the hosted deployment.
 - [ ] Structured logging (boot logger + audit log) visible on Debug page
 - [ ] Error boundaries and `/error/401|403|429|500` pages exercised in PROD
 - [ ] Privacy policy, terms, support pages published with real operator data
