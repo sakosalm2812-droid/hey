@@ -95,3 +95,11 @@ grant execute on function public.consume_hey_rate_limit() to authenticated;
 -- Remove stale per-user limiter rows after the active window has elapsed.
 create index if not exists hey_rate_limits_updated_idx
   on public.hey_rate_limits(updated_at);
+
+-- Forge histories are written only by the authenticated edge boundary after
+-- it reserves an idempotency key and validates the generated artifact.
+drop policy if exists "Users manage forge runs" on public.hey_forge_runs;
+drop policy if exists "Users view their forge runs" on public.hey_forge_runs;
+create policy "Users view their forge runs"
+  on public.hey_forge_runs for select
+  using (auth.uid() = user_id);
