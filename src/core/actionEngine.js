@@ -27,7 +27,7 @@ export function getAction(actionId) {
 
 export function approveAction(actionId) {
   const action = getAction(actionId);
-  if (!action) return null;
+  if (!action || action.status !== "queued") return null;
   action.status = "approved";
   action.updatedAt = new Date();
   publish("action.updated", action);
@@ -37,6 +37,9 @@ export function approveAction(actionId) {
 export async function executeAction(actionId, handler, options = {}) {
   const action = getAction(actionId);
   if (!action) return { success: false, error: "Action not found." };
+  if (action.status !== "queued" && action.status !== "approved") {
+    return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
+  }
   const authorization = authorizeExecution({
     user: options.user,
     capability: action.tool || action.permission,
@@ -48,6 +51,8 @@ export async function executeAction(actionId, handler, options = {}) {
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
   if (typeof handler !== "function") return { success: false, error: "No action handler registered." };
   action.status = "running";
+  action.updatedAt = new Date();
+  publish("action.updated", action);
   try {
     action.result = await handler(action.input, action);
     if (!action.result || action.result.success !== true || action.result.verified !== true) {
@@ -79,13 +84,27 @@ export async function undoAction(actionId, handler, options = {}) {
     confirmed: options.confirmed === true,
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
-  const result = await handler(action.undo, action);
-  if (!result || result.success !== true || result.verified !== true) return { success: false, error: result?.error || "The undo operation could not be verified.", action };
-  action.status = "undone";
+  action.status = "undoing";
   action.updatedAt = new Date();
   publish("action.updated", action);
-  recordAudit({ action: "action.undone", tool: action.tool, status: "completed", metadata: { actionId } });
-  return { success: true, action };
+  try {
+    const result = await handler(action.undo, action);
+    if (!result || result.success !== true || result.verified !== true) {
+      throw new Error(result?.error || "The undo operation could not be verified.");
+    }
+    action.status = "undone";
+    action.updatedAt = new Date();
+    publish("action.updated", action);
+    recordAudit({ action: "action.undone", tool: action.tool, status: "completed", metadata: { actionId } });
+    return { success: true, action };
+  } catch (error) {
+    action.status = "undo_failed";
+    action.error = error instanceof Error ? error.message : String(error);
+    action.updatedAt = new Date();
+    publish("action.updated", action);
+    recordAudit({ action: "action.undone", tool: action.tool, status: "failed", metadata: { actionId, error: action.error } });
+    return { success: false, error: action.error, action };
+  }
 }
 
 export default { createAction, listActions, getAction, approveAction, executeAction, undoAction, clearActions };
