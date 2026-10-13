@@ -406,23 +406,42 @@ Deno.serve(async (request) => {
     if (accountPlan !== "elite") {
       return jsonResponse({ error: "HEY Forge is available on the Elite plan." }, 403);
     }
-    if (requestId) {
-      const { data: existingRun } = await supabase
-        .from("hey_forge_runs")
-        .select("artifact, validation")
-        .eq("user_id", user.id)
-        .eq("request_id", requestId)
-        .maybeSingle();
-      if (existingRun) {
-        return jsonResponse({
-          error: "This request was already processed.",
-          artifact: existingRun.artifact,
-          validation: existingRun.validation,
-        }, 409);
-      }
-    }
     const description = (normaliseContent(payload.description) || message).slice(0, 2000);
     const category = (normaliseContent(payload.category) || "Custom creation").slice(0, 120);
+    const { data: forgeRun, error: forgeClaimError } = await supabase
+      .from("hey_forge_runs")
+      .insert({
+        user_id: user.id,
+        brief: description,
+        artifact: {},
+        validation: {},
+        status: "processing",
+        request_id: requestId,
+      })
+      .select("id")
+      .single();
+
+    if (forgeClaimError || !forgeRun) {
+      if (requestId) {
+        const { data: existingRun } = await supabase
+          .from("hey_forge_runs")
+          .select("artifact, validation, status")
+          .eq("user_id", user.id)
+          .eq("request_id", requestId)
+          .maybeSingle();
+        if (existingRun) {
+          return jsonResponse({
+            error: existingRun.status === "processing" ? "This request is already being processed." : "This request was already processed.",
+            status: existingRun.status,
+            artifact: existingRun.status === "verified" ? existingRun.artifact : undefined,
+            validation: existingRun.status === "verified" ? existingRun.validation : undefined,
+          }, 409);
+        }
+      }
+      console.error("Forge idempotency reservation failed", forgeClaimError);
+      return jsonResponse({ error: "HEY Forge could not reserve this request" }, 503);
+    }
+    const forgeRunId = forgeRun.id;
     const forgePrompt = `Create a production-ready ${category} from this brief:\n${description}\n\nReturn only valid JSON with this exact shape: {"title":"string","summary":"string","instructions":"string","files":[{"path":"string","language":"string","content":"string"}]}. Generate complete, usable file contents. For websites and apps include an entry file and supporting styles/scripts. Never include secrets, API keys, or unsafe executable commands.`;
     let forgeData;
     let forgeProvider;
@@ -435,13 +454,17 @@ Deno.serve(async (request) => {
       forgeProvider = result;
     } catch (error) {
       console.error("Forge provider error", error);
+      await supabase.from("hey_forge_runs").update({ status: "failed" }).eq("id", forgeRunId).eq("user_id", user.id);
       return jsonResponse({ error: "HEY Forge could not reach an AI provider" }, 502);
     }
 
     const rawArtifact = extractProviderText(forgeData);
     const artifact = normaliseForgeArtifact(parseJsonResponse(rawArtifact), description);
     const validation = validateForgeArtifact(artifact);
-    if (!validation.valid) return jsonResponse({ error: "HEY Forge generated an artifact that did not pass safety checks", validation }, 422);
+    if (!validation.valid) {
+      await supabase.from("hey_forge_runs").update({ artifact, validation, status: "rejected" }).eq("id", forgeRunId).eq("user_id", user.id);
+      return jsonResponse({ error: "HEY Forge generated an artifact that did not pass safety checks", validation }, 422);
+    }
     const { data: project, error: projectError } = await supabase
       .from("hey_records")
       .insert({
@@ -456,18 +479,21 @@ Deno.serve(async (request) => {
 
     if (projectError) {
       console.error("Forge project persistence error", projectError);
+      await supabase.from("hey_forge_runs").update({ artifact, validation, status: "failed" }).eq("id", forgeRunId).eq("user_id", user.id);
       return jsonResponse({ error: "Artifact generated but could not be saved" }, 500);
     }
 
-    const { error: forgeRunError } = await supabase.from("hey_forge_runs").insert({
-      user_id: user.id,
-      brief: description,
-      artifact,
-      validation,
-      status: "verified",
-      request_id: requestId,
-    });
-    if (forgeRunError) console.error("Forge run history error", forgeRunError);
+    const { error: forgeRunError } = await supabase
+      .from("hey_forge_runs")
+      .update({ artifact, validation, status: "verified" })
+      .eq("id", forgeRunId)
+      .eq("user_id", user.id);
+
+    if (forgeRunError) {
+      console.error("Forge run finalization error", forgeRunError);
+      await supabase.from("hey_records").delete().eq("id", project.id).eq("user_id", user.id);
+      return jsonResponse({ error: "Artifact could not be finalized safely" }, 500);
+    }
 
     return jsonResponse({ artifact, validation, projectId: project.id, model: forgeProvider.model, provider: forgeProvider.providerId });
   }
