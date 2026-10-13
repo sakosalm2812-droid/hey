@@ -1,4 +1,4 @@
-name: One-time npm lockfile repair
+name: One-time dependency remediation
 
 on:
   push:
@@ -11,26 +11,26 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  remediate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
           ref: codex/production-readiness-2026-10-13
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
-      - name: Reconcile package lock without lifecycle scripts
-        run: npm install --package-lock-only --ignore-scripts
-      - name: Commit corrected lockfile
+      - name: Apply compatible dependency security fixes
+        run: npm audit fix --ignore-scripts
+      - name: Commit dependency lock updates
         run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "package-lock.json is already consistent"
+          if git diff --quiet -- package.json package-lock.json; then
+            echo "No compatible dependency updates are available"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "fix: synchronize npm lockfile"
+          git add package.json package-lock.json
+          git commit -m "fix: remediate compatible dependency advisories"
           git push origin HEAD:codex/production-readiness-2026-10-13
