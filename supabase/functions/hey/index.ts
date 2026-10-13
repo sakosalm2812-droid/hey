@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
+import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
@@ -22,8 +23,6 @@ When the user is overwhelmed, slow down and give one manageable next step. For u
 Give the direct answer first, use plain language, and avoid filler or unnecessary headings. Never announce response modes.
 When teaching, use an example that makes the idea usable. In creative work, preserve specific constraints and avoid generic output.
 Never describe prompting improvements as model training or claim a measured improvement without evaluation evidence.`;
-
-const MAX_REQUEST_BYTES = 12 * 1024 * 1024;
 
 
 
@@ -173,52 +172,6 @@ async function searchWeb(query: string): Promise<SearchResult[]> {
   }
 
   return [];
-}
-
-async function readBoundedJson(request: Request): Promise<
-  { ok: true; value: Record<string, unknown> } | { ok: false; tooLarge?: boolean }
-> {
-  const declaredLength = request.headers.get("content-length");
-  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > MAX_REQUEST_BYTES) {
-    return { ok: false, tooLarge: true };
-  }
-
-  const reader = request.body?.getReader();
-  if (!reader) return { ok: false };
-
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_REQUEST_BYTES) {
-        await reader.cancel();
-        return { ok: false, tooLarge: true };
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return { ok: false };
-  } finally {
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  try {
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false };
-    return { ok: true, value: parsed as Record<string, unknown> };
-  } catch {
-    return { ok: false };
-  }
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -598,9 +551,7 @@ Deno.serve(async (request) => {
 
   const messages = [
     { role: "system", content: system },
-    ...(history || []).reverse()
-      .filter((item) => item.role === "user" || item.role === "assistant")
-      .map((item) => ({ role: item.role, content: item.content })),
+    ...filterTrustedHistory((history || []).reverse()),
     { role: "user", content: message },
   ];
 
