@@ -260,6 +260,10 @@ Deno.serve(async (request) => {
   const { data: { user }, error: userError } = await supabase.auth.getUser(token);
   if (userError || !user) return jsonResponse({ error: "Authentication required" }, 401);
 
+  const serviceSupabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
   const { data: withinRateLimit, error: rateLimitError } = await supabase.rpc("consume_hey_rate_limit");
   if (rateLimitError) {
     console.error("Shared rate limit check failed", rateLimitError);
@@ -454,7 +458,7 @@ Deno.serve(async (request) => {
       forgeProvider = result;
     } catch (error) {
       console.error("Forge provider error", error);
-      await supabase.from("hey_forge_runs").update({ status: "failed" }).eq("id", forgeRunId).eq("user_id", user.id);
+      await serviceSupabase.from("hey_forge_runs").update({ status: "failed" }).eq("id", forgeRunId).eq("user_id", user.id);
       return jsonResponse({ error: "HEY Forge could not reach an AI provider" }, 502);
     }
 
@@ -462,7 +466,7 @@ Deno.serve(async (request) => {
     const artifact = normaliseForgeArtifact(parseJsonResponse(rawArtifact), description);
     const validation = validateForgeArtifact(artifact);
     if (!validation.valid) {
-      await supabase.from("hey_forge_runs").update({ artifact, validation, status: "rejected" }).eq("id", forgeRunId).eq("user_id", user.id);
+      await serviceSupabase.from("hey_forge_runs").update({ artifact, validation, status: "rejected" }).eq("id", forgeRunId).eq("user_id", user.id);
       return jsonResponse({ error: "HEY Forge generated an artifact that did not pass safety checks", validation }, 422);
     }
     const { data: project, error: projectError } = await supabase
@@ -479,7 +483,7 @@ Deno.serve(async (request) => {
 
     if (projectError) {
       console.error("Forge project persistence error", projectError);
-      await supabase.from("hey_forge_runs").update({ artifact, validation, status: "failed" }).eq("id", forgeRunId).eq("user_id", user.id);
+      await serviceSupabase.from("hey_forge_runs").update({ artifact, validation, status: "failed" }).eq("id", forgeRunId).eq("user_id", user.id);
       return jsonResponse({ error: "Artifact generated but could not be saved" }, 500);
     }
 
@@ -605,9 +609,6 @@ Deno.serve(async (request) => {
     agentTeam: payload.agentTeam || null,
   };
 
-  const serviceSupabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
   const { error: messageError } = await serviceSupabase.from("hey_messages").insert([
     { conversation_id: conversationId, user_id: user.id, role: "user", content: message },
     { conversation_id: conversationId, user_id: user.id, role: "assistant", content: answer, metadata },
