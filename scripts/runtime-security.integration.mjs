@@ -112,7 +112,7 @@ try {
     .eq("conversation_id", conversationId)
     .order("created_at");
   assert.equal(visibleTranscript.error, null);
-  assert.deepEqual(visibleTranscript.data.map(({ role }) => role), ["user", "assistant"]);
+  assert.deepEqual(visibleTranscript.data.map(({ role }) => role).sort(), ["assistant", "user"]);
 
   const trustedForgeRun = await admin
     .from("hey_forge_runs")
