@@ -28,8 +28,9 @@ Copy `.env.example` to `.env.local` and fill in **only** the Vite-exposed values
 | `VITE_HEY_API_URL` | `.env.local` | Edge function URL |
 
 Provider keys (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`) are **edge-function
-secrets**, never Vite variables. `APP_URL` is used by the edge function for
-origins and wake routes.
+secrets**, never Vite variables. `SUPABASE_SERVICE_ROLE_KEY` is also server-only;
+Supabase supplies it to the Edge runtime and it must never be exposed to Vite.
+`APP_URL` is used by the edge function for origins and wake routes.
 
 Do not commit `.env.local`. `.gitleaks.toml` + `npm run secret-scan` is the
 pre-commit leak check.
@@ -58,13 +59,22 @@ Required migrations (in order, already in `supabase/migrations/`):
 6. `20260909000000_idempotency.sql` — idempotency keys
 7. `20260909010000_brain_persistence.sql` — persistence relays
 8. `20260910000000_vision_logs.sql` — vision observations
+9. `20261013000000_runtime_security.sql` — role-safe transcript writes,
+   server-only Forge history, and atomic shared request rate limits
 
-Edge function: `supabase/functions/hey/index.ts` (chat, memory, vision, wake,
-rate limiting, CORS). Verify with:
+Edge function: `supabase/functions/hey/index.ts` (chat, memory, vision, Forge,
+CORS, bounded request parsing, and a database-backed 30-per-60-second user
+limit shared across Edge isolates). Verify the health route after deployment:
 
 ```bash
-curl -s "<YOUR_URL>/functions/v1/hey/health"
+curl -i "<YOUR_URL>/functions/v1/hey/health"
 ```
+
+The health route exposes only `ready` or `not_ready`. The rate limit fails
+closed if the migration is not applied or the database limiter is unavailable.
+The GitHub Actions migration job applies the entire migration chain to a clean
+local Supabase stack; the production deployment still needs an operator-run
+concurrency test across hosted Edge isolates.
 
 ---
 
