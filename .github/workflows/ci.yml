@@ -17,7 +17,7 @@ jobs:
   verify:
     name: Lint, tests, build, and secret scan
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 26
     steps:
       - name: Check out full history for secret scanning
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
@@ -27,14 +27,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22"
+          node-version: "22.23.3"
           cache: npm
 
       - name: Install locked dependencies
         run: npm ci
 
       - name: Audit production dependency vulnerabilities
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --audit-level=high
 
       - name: Lint
         run: npm run lint
