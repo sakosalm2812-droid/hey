@@ -412,7 +412,7 @@ Deno.serve(async (request) => {
     }
     const description = (normaliseContent(payload.description) || message).slice(0, 2000);
     const category = (normaliseContent(payload.category) || "Custom creation").slice(0, 120);
-    const { data: forgeRun, error: forgeClaimError } = await supabase
+    const { data: forgeRun, error: forgeClaimError } = await serviceSupabase
       .from("hey_forge_runs")
       .insert({
         user_id: user.id,
@@ -427,7 +427,7 @@ Deno.serve(async (request) => {
 
     if (forgeClaimError || !forgeRun) {
       if (requestId) {
-        const { data: existingRun } = await supabase
+        const { data: existingRun } = await serviceSupabase
           .from("hey_forge_runs")
           .select("artifact, validation, status")
           .eq("user_id", user.id)
@@ -469,7 +469,7 @@ Deno.serve(async (request) => {
       await serviceSupabase.from("hey_forge_runs").update({ artifact, validation, status: "rejected" }).eq("id", forgeRunId).eq("user_id", user.id);
       return jsonResponse({ error: "HEY Forge generated an artifact that did not pass safety checks", validation }, 422);
     }
-    const { data: project, error: projectError } = await supabase
+    const { data: project, error: projectError } = await serviceSupabase
       .from("hey_records")
       .insert({
         user_id: user.id,
@@ -487,7 +487,7 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: "Artifact generated but could not be saved" }, 500);
     }
 
-    const { error: forgeRunError } = await supabase
+    const { error: forgeRunError } = await serviceSupabase
       .from("hey_forge_runs")
       .update({ artifact, validation, status: "verified" })
       .eq("id", forgeRunId)
@@ -495,7 +495,7 @@ Deno.serve(async (request) => {
 
     if (forgeRunError) {
       console.error("Forge run finalization error", forgeRunError);
-      await supabase.from("hey_records").delete().eq("id", project.id).eq("user_id", user.id);
+      await serviceSupabase.from("hey_records").delete().eq("id", project.id).eq("user_id", user.id);
       return jsonResponse({ error: "Artifact could not be finalized safely" }, 500);
     }
 
