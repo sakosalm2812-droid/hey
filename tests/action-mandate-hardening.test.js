@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { InMemoryMandateStore, issueActionMandate, verifyAndConsumeMandate } from "../src/core/actionMandate.js";
+import { InMemoryMandateStore, MANDATE_STORE_CONTRACT_VERSION, issueActionMandate, verifyAndConsumeMandate } from "../src/core/actionMandate.js";
 
 globalThis.crypto ??= webcrypto;
 
@@ -68,11 +68,27 @@ test("mandate authority read failures fail closed instead of escaping verificati
     idempotencyKey: "storage-failure",
   }, {
     trustedKeys: { root: keys.publicKey },
-    store: { async isRevoked() { throw new Error("offline"); }, async consumeChain() { assert.fail("must not consume after a failed revocation read"); } },
+    store: { contractVersion: MANDATE_STORE_CONTRACT_VERSION, async isRevoked() { throw new Error("offline"); }, async consumeChain() { assert.fail("must not consume after a failed revocation read"); } },
     now,
   });
   assert.equal(result.authorized, false);
   assert.match(result.reason, /storage failed/i);
+
+  let legacyConsumes = 0;
+  const legacyStore = {
+    async isRevoked() { return false; },
+    async consumeChain() { legacyConsumes += 1; return { consumed: true }; },
+  };
+  const legacyResult = await verifyAndConsumeMandate(mandate, {
+    accountId: "acct-1",
+    action: "web.search",
+    resource: "web.search",
+    currentRevocationEpoch: 0,
+    idempotencyKey: "legacy-store-contract",
+  }, { trustedKeys: { root: keys.publicKey }, store: legacyStore, now });
+  assert.equal(legacyResult.authorized, false);
+  assert.match(legacyResult.reason, /v2 mandate store/i);
+  assert.equal(legacyConsumes, 0, "legacy stores must be rejected before they can ignore atomic epoch context");
 });
 
 test("mandate consumption atomically rejects a revocation epoch advanced after preflight", async () => {
@@ -90,6 +106,7 @@ test("mandate consumption atomically rejects a revocation epoch advanced after p
   backingStore.setCurrentRevocationEpoch("acct-epoch-race", 0);
   let advanced = false;
   const racingStore = {
+    contractVersion: MANDATE_STORE_CONTRACT_VERSION,
     async isRevoked(id) {
       const revoked = await backingStore.isRevoked(id);
       if (!advanced) {

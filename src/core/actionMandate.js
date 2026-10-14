@@ -1,4 +1,5 @@
 const FORMAT = "hey.action-mandate.v1";
+export const MANDATE_STORE_CONTRACT_VERSION = "hey.mandate-store.v2";
 const encoder = new TextEncoder();
 
 function canonical(value, ancestors = new WeakSet()) {
@@ -133,6 +134,7 @@ function hasControlCharacters(value) {
 
 export class InMemoryMandateStore {
   constructor() {
+    this.contractVersion = MANDATE_STORE_CONTRACT_VERSION;
     this.usage = new Map();
     this.revoked = new Set();
     this.idempotency = new Set();
@@ -177,6 +179,7 @@ export class InMemoryMandateStore {
 }
 
 export class MandateStoreContract {
+  constructor() { this.contractVersion = MANDATE_STORE_CONTRACT_VERSION; }
   async isRevoked() { throw new Error("Implement isRevoked(mandateId) against durable authority storage."); }
   async revoke() { throw new Error("Implement revoke(mandateId) against durable authority storage."); }
   async consumeChain() { throw new Error("Implement atomic consumeChain(mandates, idempotencyKey, { accountId, revocationEpoch }) in one durable transaction. Recheck current account epoch, revocation, idempotency, and every delegation-chain use counter before committing any increment."); }
@@ -248,7 +251,7 @@ async function verifySignature(mandate, trustedKeys) {
 
 export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = {}, store, now = Date.now(), online = true } = {}) {
   const deny = (reason) => ({ authorized: false, reason });
-  if (!store || typeof store.consumeChain !== "function" || typeof store.isRevoked !== "function") return deny("A durable mandate store with atomic delegation-chain consumption is required.");
+  if (!store || store.contractVersion !== MANDATE_STORE_CONTRACT_VERSION || typeof store.consumeChain !== "function" || typeof store.isRevoked !== "function") return deny("A durable v2 mandate store with atomic revocation-epoch and delegation-chain consumption is required.");
   if (!await verifySignature(mandate, trustedKeys)) return deny("Mandate signature is invalid or untrusted.");
   const payload = mandate.payload;
   const expiry = Date.parse(payload.expiresAt);
