@@ -53,8 +53,11 @@ import {
 import {
   subscribe,
   publish,
+  publishOnce,
+  replayPending,
   clearEventListeners,
 } from "./eventBus.js";
+import { EventOutboxStoreContract, InMemoryEventOutboxStore } from "./eventOutbox.js";
 
 import {
   recordAudit,
@@ -513,6 +516,10 @@ import {
     events: {
       subscribe,
       publish,
+      publishOnce,
+      replayPending,
+      EventOutboxStoreContract,
+      InMemoryEventOutboxStore,
       clear: clearEventListeners,
     },
 
