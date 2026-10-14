@@ -107,3 +107,9 @@ Worker task IDs are available only as current collaboration references `/root/re
 Reviewed and integrated worker commit `7e45e1dfadf6264eafc67dc508366bece2dba739` from `codex/par-steps-12-14` at coordinator merge `90bfd7a1405a2ef7fd40403d4114df288d760e6e`. Changes separate stable domain memory keys from Supabase row UUIDs, verify graph edge endpoints per account, constrain graph/context data by account, privacy, project and expiry, and add research cancellation/sensitive-query checks and explicit unverified citation/retraction handling. Added focused persistence and research contract tests.
 
 After integration, coordinator verification passed: `npm test` 101/101, `npm run lint`, `npm run build`, and `git diff --check`. Build skips sitemap generation without `SITE_URL` and retains the existing mixed static/dynamic import warning. PR #3 remains draft/open/unmerged; no production database or external research provider verification is claimed. Next: review PR #1 feature diff, then resume the Step 01 persistent authority/evidence contracts.
+
+### Steps 15–18 integration — 2026-10-14
+
+Reviewed PR #1 feature work from `codex/par-steps-15-18` (merge commit `1a95a149f10ed45fd7d2d3ef32b0effdd4e71154`) and integrated locally at coordinator merge `4d17e6451d677c7933e98f93e7f22430b6b8a970`. Added an explicit attention policy with IANA quiet hours, expiry, confidence, interruption, sponsored-content and focus handling; shared-surface notification redaction; account-scoped/idempotent proactive signals and honest unsupported-channel states; cancellable voice turns and an interrupt action in the UI.
+
+Coordinator verification after integration: `npm test` 107/107, lint, build, and `git diff --check` passed. PR #1 remains draft/open; no merge or production-release state was changed. No real push notification adapter or production voice provider was verified.
