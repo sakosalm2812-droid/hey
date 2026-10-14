@@ -171,6 +171,10 @@ test("citation evaluation rejects expired, malformed, or jurisdiction-mismatched
     ...citation,
     capturedAt: Symbol("hostile timestamp"),
   }, { now }), { status: "stale", reason: "evidence_timestamp_missing_or_invalid" });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    capturedAt: "",
+  }, { now }), { status: "stale", reason: "evidence_timestamp_missing_or_invalid" });
   assert.deepEqual(evaluateCitationCoverage(claim, citation, { now, maxAgeDays: -1 }), {
     status: "invalid",
     reason: "invalid_freshness_policy",

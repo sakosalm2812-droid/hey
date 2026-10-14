@@ -95,21 +95,38 @@ function redactDiagnosticText(value, limit = 2000) {
     .slice(0, limit);
 }
 
-function sanitizeDiagnosticContext(value, seen = new WeakSet(), depth = 0) {
-  if (typeof value === "string") return redactDiagnosticText(value, 500);
-  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+function sanitizeDiagnosticContext(value, seen = new WeakSet(), depth = 0, contextKey = null) {
+  if (typeof value === "string") {
+    const safeToken = /^[A-Za-z0-9_.:/-]{1,128}$/.test(value);
+    return contextKey && SAFE_CONTEXT_KEYS.has(contextKey.toLowerCase()) && safeToken ? value : "[REDACTED]";
+  }
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : "[invalid number]";
   if (typeof value !== "object") return `[${typeof value}]`;
   if (depth >= 4) return "[maximum depth]";
   if (seen.has(value)) return "[circular]";
   seen.add(value);
 
   if (safeIsArray(value)) {
-    const result = value.slice(0, 20).map((item) => sanitizeDiagnosticContext(item, seen, depth + 1));
-    if (value.length > 20) result.push("[truncated]");
-    return result;
+    try {
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const length = descriptors.length?.value;
+      if (!Number.isSafeInteger(length) || length < 0) return "[unavailable]";
+      const result = [];
+      for (let index = 0; index < Math.min(length, 20); index += 1) {
+        const descriptor = descriptors[String(index)];
+        result.push(descriptor && Object.hasOwn(descriptor, "value")
+          ? sanitizeDiagnosticContext(descriptor.value, seen, depth + 1)
+          : "[unavailable]");
+      }
+      if (length > 20) result.push("[truncated]");
+      return result;
+    } catch {
+      return "[unavailable]";
+    }
   }
 
-  const result = {};
+  const result = Object.create(null);
   let descriptors;
   try {
     descriptors = Object.getOwnPropertyDescriptors(value);
@@ -121,7 +138,7 @@ function sanitizeDiagnosticContext(value, seen = new WeakSet(), depth = 0) {
     const safeKey = redactDiagnosticText(key, 80);
     result[safeKey] = SENSITIVE_CONTEXT_KEY.test(key) || !SAFE_CONTEXT_KEYS.has(key.toLowerCase())
       ? "[REDACTED]"
-      : sanitizeDiagnosticContext(descriptor.value, seen, depth + 1);
+      : sanitizeDiagnosticContext(descriptor.value, seen, depth + 1, key);
   }
   return result;
 }

@@ -41,11 +41,18 @@ test("diagnostic error capture redacts secrets and private context before storin
   const engine = new DiagnosticsEngine({ storage: memoryStorage() });
   const secret = "Bearer super-secret-credential-value";
   const privateEmail = "person@example.com";
+  const arrayProxy = new Proxy(["untrusted array text"], {
+    get(target, key, receiver) {
+      if (key === "slice") throw new Error("array accessors must not execute");
+      return Reflect.get(target, key, receiver);
+    },
+  });
   const context = {
     requestId: "req-safe-1",
     prompt: "keep this private user request",
     access_token: "raw-access-token-value",
-    nested: { route: "/api/work", email: privateEmail },
+    nested: { route: "/api/work", email: privateEmail, nested: arrayProxy },
+    provider: "customer's private research question",
     customNote: "private free-form diagnostic content",
   };
   context.cycle = context;
@@ -66,6 +73,8 @@ test("diagnostic error capture redacts secrets and private context before storin
   assert.equal(record.context.access_token, "[REDACTED]");
   assert.equal(record.context.nested.email, "[REDACTED]");
   assert.equal(record.context.nested.route, "[REDACTED]");
+  assert.equal(record.context.provider, "[REDACTED]");
+  assert.deepEqual(record.context.nested.nested, ["[REDACTED]"]);
   assert.equal(record.context.customNote, "[REDACTED]");
   assert.equal(record.context.cycle, "[REDACTED]");
   assert.equal(Object.hasOwn(record.context, "explosive"), false);

@@ -108,7 +108,7 @@ export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), ma
   if (!Number.isFinite(now) || !(maxAgeDays === Infinity || Number.isFinite(maxAgeDays) && maxAgeDays >= 0)) {
     return { status: "invalid", reason: "invalid_freshness_policy" };
   }
-  const capturedAt = parseTimestamp(evidence.capturedAt || evidence.source.retrievedAt);
+  const capturedAt = parseTimestamp(evidence.capturedAt ?? evidence.source.retrievedAt);
   if (!Number.isFinite(capturedAt)) return { status: "stale", reason: "evidence_timestamp_missing_or_invalid" };
   if (capturedAt > now + 60_000) return { status: "stale", reason: "evidence_timestamp_in_future" };
   if (now - capturedAt > maxAgeDays * 86_400_000) return { status: "stale", reason: "evidence_age_exceeded" };
