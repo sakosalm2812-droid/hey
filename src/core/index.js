@@ -58,6 +58,7 @@ import {
   clearEventListeners,
 } from "./eventBus.js";
 import { EventOutboxStoreContract, InMemoryEventOutboxStore } from "./eventOutbox.js";
+import { SupabaseEventOutboxStore } from "./supabaseEventOutboxStore.js";
 
 import {
   recordAudit,
@@ -523,6 +524,7 @@ import {
       replayPending,
       EventOutboxStoreContract,
       InMemoryEventOutboxStore,
+      SupabaseEventOutboxStore,
       clear: clearEventListeners,
     },
 
