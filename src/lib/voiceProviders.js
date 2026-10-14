@@ -58,6 +58,9 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
   const state = createVoiceState();
   let recognition = null;
   let destroyed = false;
+  let generation = 0;
+  let starting = null;
+  let activeTurn = null;
 
   function transition(nextState, error = null) {
     const result = state.transition(nextState);
@@ -66,11 +69,22 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
   }
 
   async function start() {
+    if (destroyed) return { success: false, status: state.state, error: "Voice session has ended." };
+    if (state.state === VOICE_STATES.listening) return { success: true, status: state.state, reused: true };
+    if ([VOICE_STATES.processing, VOICE_STATES.speaking].includes(state.state)) {
+      return { success: false, status: state.state, error: "Interrupt the active voice turn before starting another." };
+    }
+    if (starting) return starting;
+    starting = startListening();
+    try { return await starting; } finally { starting = null; }
+  }
+
+  async function startListening() {
     if (!speechProvider) {
       transition(VOICE_STATES.error, "Speech recognition is unavailable in this runtime.");
       return { success: false, status: VOICE_STATES.error, error: "Speech recognition is unavailable in this runtime." };
     }
-    if (!environment.navigator?.onLine) {
+    if (environment.navigator?.onLine === false) {
       transition(VOICE_STATES.offline, "The browser is offline.");
       return { success: false, status: VOICE_STATES.offline, error: "The browser is offline." };
     }
@@ -79,15 +93,22 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
       transition(VOICE_STATES.permissionRequired, permission.error);
       return { success: false, status: VOICE_STATES.permissionRequired, error: permission.error };
     }
+    if (state.state === VOICE_STATES.error || state.state === VOICE_STATES.offline || state.state === VOICE_STATES.permissionRequired) {
+      state.transition(VOICE_STATES.idle);
+    }
     transition(VOICE_STATES.listening);
-    recognition = speechProvider.start({
+    const currentGeneration = ++generation;
+    try {
+      recognition = speechProvider.start({
       onTranscript: async (transcript) => {
         const command = stripWakeWord(transcript);
-        if (!command || destroyed) return;
+        if (!command || destroyed || currentGeneration !== generation || activeTurn) return;
+        activeTurn = new AbortController();
+        const turnController = activeTurn;
         transition(VOICE_STATES.processing);
         try {
-          const answer = await ask(command);
-          if (destroyed) return;
+          const answer = await ask(command, { signal: turnController.signal });
+          if (destroyed || currentGeneration !== generation || turnController.signal.aborted) return;
           if (!synthesisProvider) {
             transition(VOICE_STATES.idle);
             onStateChange?.({ state: VOICE_STATES.idle, transcript: command, answer, ttsUnavailable: true });
@@ -95,29 +116,43 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
           }
           transition(VOICE_STATES.speaking);
           const spoken = await synthesisProvider.speak(answer, { onError: (error) => transition(VOICE_STATES.error, error) });
+          if (destroyed || currentGeneration !== generation || turnController.signal.aborted) return;
           if (!spoken.success) transition(VOICE_STATES.error, spoken.error);
           else transition(VOICE_STATES.idle);
           onStateChange?.({ state: state.state, transcript: command, answer, tts: spoken });
         } catch (error) {
-          transition(VOICE_STATES.error, error?.message || "Voice request failed.");
+          if (!turnController.signal.aborted && currentGeneration === generation) {
+            transition(VOICE_STATES.error, error?.message || "Voice request failed.");
+          }
+        } finally {
+          if (activeTurn === turnController) activeTurn = null;
         }
       },
-      onError: (error) => transition(VOICE_STATES.error, error),
-      onEnd: () => { recognition = null; if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.idle); },
-    });
+      onError: (error) => { if (currentGeneration === generation && !destroyed) transition(VOICE_STATES.error, error); },
+      onEnd: () => { if (currentGeneration === generation) { recognition = null; if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.idle); } },
+      });
+    } catch (error) {
+      transition(VOICE_STATES.error, error?.message || "Speech recognition could not start.");
+      return { success: false, status: VOICE_STATES.error, error: error?.message || "Speech recognition could not start." };
+    }
     return { success: true, status: VOICE_STATES.listening };
   }
 
   function stop() {
-    speechProvider?.stop(recognition);
+    generation += 1;
+    activeTurn?.abort();
+    activeTurn = null;
+    try { speechProvider?.stop(recognition); } catch { /* A stopped provider cannot keep the session alive. */ }
     recognition = null;
-    if ([VOICE_STATES.listening, VOICE_STATES.processing, VOICE_STATES.speaking].includes(state.state)) transition(VOICE_STATES.interrupted);
-    transition(VOICE_STATES.idle);
-    synthesisProvider?.cancel?.();
+    if ([VOICE_STATES.listening, VOICE_STATES.processing, VOICE_STATES.speaking].includes(state.state)) {
+      transition(VOICE_STATES.interrupted);
+      transition(VOICE_STATES.idle);
+    }
+    try { synthesisProvider?.cancel?.(); } catch { /* Stop remains locally complete. */ }
   }
 
   function destroy() { destroyed = true; stop(); }
-  return { start, stop, destroy, snapshot: () => state.snapshot() };
+  return { start, stop, interrupt: stop, destroy, snapshot: () => state.snapshot() };
 }
 
 export default { createBrowserSpeechProvider, createBrowserSpeechSynthesisProvider, requestMicrophonePermission, stripWakeWord, createVoiceSession };

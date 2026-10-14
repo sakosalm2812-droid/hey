@@ -45,23 +45,29 @@ async function getHEYSession() {
   return session;
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(new DOMException("The request timed out.", "TimeoutError")), timeoutMs);
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
-async function fetchWithRetry(url, options = {}, { timeoutMs = 75_000, retries = 1 } = {}) {
+async function fetchWithRetry(url, options = {}, { timeoutMs = 75_000, retries = 1, signal } = {}) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     try {
-      return await fetchWithTimeout(url, options, timeoutMs);
+      return await fetchWithTimeout(url, options, timeoutMs, signal);
     } catch (error) {
       lastError = error;
+      if (signal?.aborted || error?.name === "AbortError") throw error;
       if (attempt === retries) break;
     }
   }
@@ -98,8 +104,9 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false, signal } = {}) {
   try {
+    if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
     const session = await getHEYSession();
     const executionIdentity = await getExecutionIdentity(session);
@@ -107,6 +114,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
       { input: message, command: brainResult.command, tools: brainResult.tools, primaryTools: brainResult.primaryTools },
       { confirmed, user: executionIdentity },
     );
+    if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     onExecutionResult?.(execution, message);
     if (execution.handled) {
       const answer = execution.result?.message || "HEY could not complete that action.";
@@ -139,7 +147,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         responseStyle: brainResult.responseStyle,
         conversationId,
       })
-    })
+    }, { signal })
 
     if (!response.ok) {
       const details = await response.json().catch(() => ({}));
@@ -168,7 +176,9 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
   } catch (error) {
     console.error('HEY AI Error:', error)
 
-    throw new Error(error.name === 'AbortError' ? 'The reply took too long. Please try again.' : error.message || 'HEY is temporarily unavailable. Try again.', { cause: error });
+    if (error.name === 'AbortError') throw error;
+    if (error.name === 'TimeoutError') throw new Error('The reply took too long. Please try again.', { cause: error });
+    throw new Error(error.message || 'HEY is temporarily unavailable. Try again.', { cause: error });
   }
 }
 
