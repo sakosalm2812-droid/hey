@@ -19,6 +19,10 @@ test("outbox keys prevent duplicate event delivery and reject payload conflicts"
   await assert.rejects(() => publishEventOnce("run:42:step:1", "mission.step", { step: 2 }, { store, dispatch, scope: "account-a" }), /different event payload/);
   const accountScoped = await publishEventOnce("run:42:step:1", "mission.step", { step: 1 }, { store, dispatch, scope: "account-b" });
   assert.equal(accountScoped.created, true);
+  const snapshot = await store.appendOnce("immutable", "mission.step", { step: 3 }, "account-a");
+  snapshot.event.payload.step = 99;
+  const unchanged = await store.appendOnce("immutable", "mission.step", { step: 3 }, "account-a");
+  assert.equal(unchanged.event.payload.step, 3);
 });
 
 test("outbox retains failed deliveries, replays them, and fences concurrent claims", async () => {
@@ -39,7 +43,7 @@ test("outbox retains failed deliveries, replays them, and fences concurrent clai
   const failed = await store.appendOnce("retry", "event", { value: 2 }, "account-a");
   const failure = await publishEventOnce("retry", "event", { value: 2 }, { store, dispatch: async () => { throw new Error("temporary"); }, scope: "account-a" });
   assert.equal(failure.state, "pending");
-  assert.match(failed.event.lastError ?? "", /temporary/);
+  assert.match((await store.listPending()).find((event) => event.id === failed.event.id).lastError, /temporary/);
   const replay = await replayPendingEvents({ store, dispatch: async () => {} });
   assert.equal(replay.length, 1);
   assert.equal(replay[0].delivered, true);

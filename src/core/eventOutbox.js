@@ -17,6 +17,10 @@ function canonical(value, ancestors = new WeakSet()) {
   } finally { ancestors.delete(value); }
 }
 
+function eventSnapshot(event) {
+  return { ...event, payload: JSON.parse(event.fingerprint) };
+}
+
 export class EventOutboxStoreContract {
   async appendOnce() { throw new Error("Implement appendOnce with a durable unique key and transactional persistence."); }
   async claim() { throw new Error("Implement atomic lease claim with expiry and fencing token."); }
@@ -43,12 +47,12 @@ export class InMemoryEventOutboxStore extends EventOutboxStoreContract {
     if (existingId) {
       const existing = this.events.get(existingId);
       if (existing.fingerprint !== fingerprint) throw new Error("Idempotency key was reused with a different event payload.");
-      return { created: false, event: existing };
+      return { created: false, event: eventSnapshot(existing) };
     }
-    const event = { id: globalThis.crypto?.randomUUID?.() ?? `${this.now()}-${Math.random().toString(36).slice(2)}`, idempotencyKey, scope, eventName, payload, fingerprint, state: "pending", attempts: 0, createdAt: this.now() };
+    const event = { id: globalThis.crypto?.randomUUID?.() ?? `${this.now()}-${Math.random().toString(36).slice(2)}`, idempotencyKey, scope, eventName, payload: JSON.parse(fingerprint), fingerprint, state: "pending", attempts: 0, createdAt: this.now() };
     this.events.set(event.id, event);
     this.keys.set(key, event.id);
-    return { created: true, event };
+    return { created: true, event: eventSnapshot(event) };
   }
 
   async claim(eventId, leaseMs = 30_000) {
@@ -61,10 +65,10 @@ export class InMemoryEventOutboxStore extends EventOutboxStoreContract {
     const next = { token, until: this.now() + leaseMs };
     this.leases.set(eventId, next);
     event.attempts += 1;
-    return { event, leaseToken: token };
+    return { event: eventSnapshot(event), leaseToken: token };
   }
 
-  async listPending() { return [...this.events.values()].filter((event) => event.state === "pending").sort((a, b) => a.createdAt - b.createdAt); }
+  async listPending() { return [...this.events.values()].filter((event) => event.state === "pending").sort((a, b) => a.createdAt - b.createdAt).map(eventSnapshot); }
 
   async acknowledge(eventId, leaseToken) {
     if (this.leases.get(eventId)?.token !== leaseToken) return false;
