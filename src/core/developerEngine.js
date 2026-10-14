@@ -3,6 +3,7 @@
 import {
   dependencyEntries,
   packageSigningPayload,
+  stableJson,
   validateAgainstSchema,
   validateJsonSchemaDefinition,
   validateSpdxLicenses,
@@ -138,6 +139,7 @@ class DeveloperEngine {
     const extId = `ext_${Date.now()}`;
     const extension = {
       id: extId,
+      packageId: input.packageId || null,
       name: input.name,
       version: input.version,
       manifest: input.manifest,
@@ -151,25 +153,49 @@ class DeveloperEngine {
     };
     this.extensions.set(extId, extension);
     this.save();
-    return extension;
+    return structuredClone(extension);
   }
 
   getExtension(id) {
-    return this.extensions.get(id) || null;
+    const extension = this.extensions.get(id);
+    return extension ? structuredClone(extension) : null;
   }
 
   getAllExtensions() {
-    return Array.from(this.extensions.values());
+    return Array.from(this.extensions.values(), (extension) => structuredClone(extension));
   }
 
-  installExtension(extId) {
+  async installExtension(extId) {
     const extension = this.extensions.get(extId);
     if (!extension) return { error: "Extension not found" };
+
+    const pkg = extension.packageId ? this.packages.get(extension.packageId) : null;
+    if (!pkg || pkg.state !== PACKAGE_STATES.INSTALLED) {
+      return { error: "Extension must be linked to an installed signed package." };
+    }
+
+    const signatureValid = await verifyPackageSignature(pkg, this.trustedKeys);
+    const extensionMatchesPackage = (() => {
+      try {
+        return extension.name === pkg.name
+        && extension.version === pkg.version
+        && stableJson(extension.manifest) === stableJson(pkg.manifest)
+        && stableJson(extension.capabilities || []) === stableJson(pkg.manifest?.capabilities || [])
+        && stableJson(extension.dependencies || []) === stableJson(pkg.dependencies || [])
+        && stableJson(extension.licenses || []) === stableJson(pkg.licenses || []);
+      } catch {
+        return false;
+      }
+    })();
+    if (!signatureValid || !extensionMatchesPackage) {
+      return { error: "Extension package signature or declared capabilities are invalid." };
+    }
+
     extension.state = "installed";
     extension.installedAt = new Date().toISOString();
     this.extensions.set(extId, extension);
     this.save();
-    return extension;
+    return structuredClone(extension);
   }
 
   uninstallExtension(extId) {
@@ -178,7 +204,7 @@ class DeveloperEngine {
     extension.state = "uninstalled";
     this.extensions.set(extId, extension);
     this.save();
-    return extension;
+    return structuredClone(extension);
   }
 
   createPackage(input) {
