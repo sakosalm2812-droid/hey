@@ -5,6 +5,7 @@ import {
   executeCapability,
   getCapabilityAvailability,
   getCapability,
+  listCapabilities,
   registerCapability,
 } from "../src/core/capabilityRegistry.js";
 import { parseNaturalCommand } from "../src/core/commandParser.js";
@@ -39,6 +40,31 @@ test("registered capabilities expose honest platform availability", () => {
   });
   assert.equal(getCapabilityAvailability(capabilityId, "ios").status, CAPABILITY_STATUS.restricted);
   assert.equal(getCapabilityAvailability(capabilityId, "windows").status, CAPABILITY_STATUS.unsupported);
+});
+
+test("capability policy cannot be mutated through registration inputs or returned objects", () => {
+  const capabilityId = "test.capability.snapshot";
+  const platformSupport = { web: CAPABILITY_STATUS.restricted };
+  const input = {
+    id: capabilityId,
+    name: "Snapshot protected capability",
+    platforms: ["web"],
+    platformSupport,
+  };
+  const registered = registerCapability(input);
+
+  platformSupport.web = CAPABILITY_STATUS.supported;
+  registered.platformSupport.web = CAPABILITY_STATUS.supported;
+  registered.platforms.push("android");
+  const fetched = getCapability(capabilityId);
+  fetched.platformSupport.web = CAPABILITY_STATUS.supported;
+  const listed = listCapabilities().find((capability) => capability.id === capabilityId);
+  listed.platformSupport.web = CAPABILITY_STATUS.supported;
+
+  assert.equal(getCapabilityAvailability(capabilityId, "web").status, CAPABILITY_STATUS.restricted);
+  assert.equal(getCapabilityAvailability(capabilityId, "android").status, CAPABILITY_STATUS.unsupported);
+  assert.throws(() => registerCapability({ id: capabilityId, name: "Replacement", platformSupport: { web: CAPABILITY_STATUS.supported } }), /already registered/i);
+  assert.equal(getCapabilityAvailability(capabilityId, "web").status, CAPABILITY_STATUS.restricted);
 });
 
 test("an adapter can make only its declared capability executable", () => {
