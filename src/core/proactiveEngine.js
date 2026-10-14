@@ -1,5 +1,9 @@
 import { getSetting, setSetting } from "./settingsRegistry.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { evaluateAttentionCandidate } from "./attentionPolicy.js";
+import { loadStoredProactiveSettings } from "../lib/proactiveStore.js";
+import { deliverInAppNotification, isSharedSurface } from "./notificationCenter.js";
+import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 
 const PROACTIVE_LEVELS = Object.freeze({
   OFF: "off",
@@ -47,31 +51,61 @@ function generateNotificationId() {
   return `notif_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-class ProactiveEngine {
-  constructor() {
-    this.level = getSetting("proactive.enabled") || PROACTIVE_LEVELS.BALANCED;
+function generateSignalId() {
+  const random = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 12);
+  return `signal_${Date.now()}_${random}`;
+}
+
+export class ProactiveEngine {
+  constructor({ storage = safeStorage } = {}) {
+    this.storage = storage;
+    const configuredLevel = getSetting("proactive.enabled");
+    this.level = Object.values(PROACTIVE_LEVELS).includes(configuredLevel) ? configuredLevel : PROACTIVE_LEVELS.BALANCED;
     this.signals = new Map();
     this.suggestions = new Map();
     this.suppressionRules = new Map();
     this.notifications = new Map();
     this.routines = new Map();
     this.feedback = new Map();
+    this.signalIdempotency = new Map();
     this.dailyCount = 0;
     this.lastResetDate = new Date().toDateString();
     this.listeners = new Set();
+    this.scope = getAccountScope();
     this.load();
+    this.unsubscribeScope = subscribeAccountScope(() => this.switchAccountScope());
     this.startDailyReset();
+  }
+
+  switchAccountScope() {
+    this.scope = getAccountScope();
+    this.level = PROACTIVE_LEVELS.BALANCED;
+    this.signals.clear();
+    this.suggestions.clear();
+    this.suppressionRules.clear();
+    this.notifications.clear();
+    this.routines.clear();
+    this.feedback.clear();
+    this.signalIdempotency.clear();
+    this.dailyCount = 0;
+    this.lastResetDate = new Date().toDateString();
+    this.load();
+    this.notify("account_scope_changed", { scope: this.scope });
   }
 
   load() {
     try {
-      const stored = safeStorage.getItem("hey_proactive");
+      const stored = this.storage.getItem(getAccountStorageKey("hey_proactive", this.scope));
       if (stored) {
         const parsed = JSON.parse(stored);
-        this.level = parsed.level || this.level;
+        this.level = Object.values(PROACTIVE_LEVELS).includes(parsed.level) ? parsed.level : this.level;
+        if (parsed.signals) Object.entries(parsed.signals).forEach(([k, v]) => this.signals.set(k, v));
         if (parsed.suppressionRules) Object.entries(parsed.suppressionRules).forEach(([k, v]) => this.suppressionRules.set(k, v));
         if (parsed.routines) Object.entries(parsed.routines).forEach(([k, v]) => this.routines.set(k, v));
-        this.dailyCount = parsed.dailyCount || 0;
+        if (parsed.suggestions) Object.entries(parsed.suggestions).forEach(([k, v]) => this.suggestions.set(k, v));
+        if (parsed.notifications) Object.entries(parsed.notifications).forEach(([k, v]) => this.notifications.set(k, v));
+        if (parsed.signalIdempotency) Object.entries(parsed.signalIdempotency).forEach(([k, v]) => this.signalIdempotency.set(k, v));
+        this.dailyCount = Number.isSafeInteger(parsed.dailyCount) && parsed.dailyCount >= 0 ? Math.min(parsed.dailyCount, 10000) : 0;
         this.lastResetDate = parsed.lastResetDate || new Date().toDateString();
       }
     } catch (err) {
@@ -81,10 +115,14 @@ class ProactiveEngine {
 
   save() {
     try {
-      safeStorage.setItem("hey_proactive", JSON.stringify({
+      this.storage.setItem(getAccountStorageKey("hey_proactive", this.scope), JSON.stringify({
         level: this.level,
+        signals: Object.fromEntries(this.signals),
         suppressionRules: Object.fromEntries(this.suppressionRules),
         routines: Object.fromEntries(this.routines),
+        suggestions: Object.fromEntries(this.suggestions),
+        notifications: Object.fromEntries(this.notifications),
+        signalIdempotency: Object.fromEntries(this.signalIdempotency),
         dailyCount: this.dailyCount,
         lastResetDate: this.lastResetDate,
       }));
@@ -121,7 +159,24 @@ class ProactiveEngine {
   }
 
   createSignal(input) {
-    const signalId = `signal_${Date.now()}`;
+    if (!input || typeof input !== "object" || typeof input.type !== "string" || !input.type.trim()) {
+      return { error: "A signal type is required." };
+    }
+    if (input.type.length > 80 || String(input.source || "").length > 120 || (input.idempotencyKey && String(input.idempotencyKey).length > 256)) {
+      return { error: "Signal metadata exceeds its supported size." };
+    }
+    if (input.expiresAt && !Number.isFinite(Date.parse(input.expiresAt))) return { error: "Signal expiry is invalid." };
+    try {
+      if (JSON.stringify(input.payload ?? null).length > 32_768) return { error: "Signal payload exceeds the 32 KB limit." };
+    } catch {
+      return { error: "Signal payload must be serializable." };
+    }
+    this.pruneExpired();
+    if (input.idempotencyKey) {
+      const existingId = this.signalIdempotency.get(String(input.idempotencyKey));
+      if (existingId && this.signals.has(existingId)) return this.signals.get(existingId);
+    }
+    const signalId = generateSignalId();
     const signal = {
       id: signalId,
       type: input.type,
@@ -129,20 +184,42 @@ class ProactiveEngine {
       payload: input.payload,
       priority: input.priority || "normal",
       timestamp: new Date().toISOString(),
+      expiresAt: input.expiresAt || new Date(Date.now() + 30 * 86400000).toISOString(),
       processed: false,
     };
     this.signals.set(signalId, signal);
+    if (input.idempotencyKey) {
+      this.signalIdempotency.set(String(input.idempotencyKey), signalId);
+      while (this.signalIdempotency.size > 1000) this.signalIdempotency.delete(this.signalIdempotency.keys().next().value);
+    }
+    this.save();
     this.processSignal(signal);
     return signal;
   }
 
   processSignal(signal) {
-    if (this.level === PROACTIVE_LEVELS.OFF) return;
-    if (this.dailyCount >= getSetting("proactivity.daily_cap")) return;
+    if (this.level === PROACTIVE_LEVELS.OFF) {
+      signal.processed = true;
+      signal.suppressionReason = "proactivity_disabled";
+      this.save();
+      return;
+    }
+    if (this.dailyCount >= getSetting("proactivity.daily_cap")) {
+      signal.processed = true;
+      signal.suppressionReason = "attention_budget_exhausted";
+      this.save();
+      return;
+    }
 
     const suggestions = this.generateSuggestions(signal);
-    suggestions.forEach(s => this.createSuggestion(s));
+    suggestions.forEach((suggestion) => this.createSuggestion({
+      ...suggestion,
+      sourceSignal: signal.id,
+      dedupeKey: `${signal.id}:${suggestion.type}`,
+      confidence: 1,
+    }));
     signal.processed = true;
+    this.save();
   }
 
   generateSuggestions(signal) {
@@ -195,8 +272,27 @@ class ProactiveEngine {
   }
 
   createSuggestion(input) {
+    if (!input || typeof input !== "object" || typeof input.title !== "string" || !input.title.trim() || input.title.length > 500 || String(input.message || "").length > 2000) return null;
+    this.pruneExpired();
+    if (input.expiresAt && !Number.isFinite(Date.parse(input.expiresAt))) return null;
+    const dedupeKey = input.dedupeKey || (input.sourceSignal ? `${input.sourceSignal}:${input.type || "suggestion"}` : null);
+    if (dedupeKey) {
+      const existing = Array.from(this.suggestions.values()).find((item) => item.dedupeKey === dedupeKey && !item.dismissed && !isSuggestionExpired(item));
+      if (existing) return existing;
+    }
     const suggestionId = generateSuggestionId();
     const now = new Date().toISOString();
+    const attention = evaluateAttentionCandidate({ ...input, expiresAt: input.expiresAt || new Date(Date.now() + 86400000).toISOString() }, {
+      now: new Date(),
+      mode: this.level === PROACTIVE_LEVELS.OFF ? "off" : input.activity,
+      activity: input.activity,
+      dailyCap: Number(getSetting("proactivity.daily_cap")),
+      suggestionsToday: this.dailyCount,
+      quietHours: loadStoredProactiveSettings().quietHours,
+      timeZone: loadStoredProactiveSettings().timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+      sharedSurface: input.sharedSurface === true,
+    });
+    if (attention.decision === "suppress") return null;
     
     const suggestion = {
       id: suggestionId,
@@ -207,6 +303,9 @@ class ProactiveEngine {
       priority: input.priority || "medium",
       domain: input.domain || AUTONOMY_DOMAINS.SUGGESTIONS,
       sourceSignal: input.sourceSignal,
+      dedupeKey,
+      attention,
+      privacy: ["public", "private", "sensitive", "secret"].includes(input.privacy) ? input.privacy : "private",
       createdAt: now,
       expiresAt: input.expiresAt || new Date(Date.now() + 86400000).toISOString(),
       dismissed: false,
@@ -237,8 +336,9 @@ class ProactiveEngine {
   }
 
   getSuggestions(options = {}) {
+    this.pruneExpired();
     let suggestions = Array.from(this.suggestions.values())
-      .filter(s => !s.dismissed && (!s.snoozedUntil || new Date(s.snoozedUntil) < new Date()))
+      .filter(s => !s.dismissed && !isSuggestionExpired(s) && (!s.snoozedUntil || new Date(s.snoozedUntil) < new Date()))
       .filter(s => !options.domain || s.domain === options.domain)
       .filter(s => !options.priority || s.priority === options.priority)
       .sort((a, b) => {
@@ -247,6 +347,12 @@ class ProactiveEngine {
       });
     
     if (options.limit) suggestions = suggestions.slice(0, options.limit);
+    if (options.sharedSurface ?? isSharedSurface()) {
+      suggestions = suggestions.map((suggestion) => {
+        if (suggestion.privacy === "public") return suggestion;
+        return { ...suggestion, title: "Private suggestion", message: "Open HEY to view this suggestion.", action: null, redacted: true };
+      });
+    }
     return suggestions;
   }
 
@@ -296,6 +402,14 @@ class ProactiveEngine {
   }
 
   createNotification(input) {
+    if (!input || typeof input !== "object" || typeof input.title !== "string" || !input.title.trim() || input.title.length > 500 || String(input.message || "").length > 2000) {
+      return { error: "A notification title is required.", verified: false };
+    }
+    this.pruneExpired();
+    if (input.expiresAt && !Number.isFinite(Date.parse(input.expiresAt))) return { error: "Notification expiry is invalid.", verified: false };
+    if (input.channels !== undefined && (!Array.isArray(input.channels) || input.channels.some((channel) => typeof channel !== "string" || channel.length > 32))) {
+      return { error: "Notification channels must be a list of channel identifiers.", verified: false };
+    }
     const notificationId = generateNotificationId();
     const now = new Date().toISOString();
     
@@ -307,13 +421,13 @@ class ProactiveEngine {
       priority: input.priority || "normal",
       action: input.action,
       source: input.source,
-      deliveryState: "created",
-      channels: input.channels || ["in_app"],
+      deliveryState: "queued",
+      channels: [...new Set(input.channels || ["in_app"])],
       createdAt: now,
       deliveredAt: null,
       readAt: null,
       dismissedAt: null,
-      expiresAt: input.expiresAt || null,
+      expiresAt: input.expiresAt || new Date(Date.now() + 7 * 86400000).toISOString(),
     };
 
     this.notifications.set(notificationId, notification);
@@ -323,23 +437,56 @@ class ProactiveEngine {
     return notification;
   }
 
-  async deliverNotification(notificationId) {
+  deliverNotification(notificationId) {
     const notification = this.notifications.get(notificationId);
     if (!notification) return;
 
-    notification.deliveryState = "submitted";
-    this.notifications.set(notificationId, notification);
-    this.save();
-
     try {
-      notification.deliveryState = "delivered";
-      notification.deliveredAt = new Date().toISOString();
+      const unsupportedChannels = notification.channels.filter((channel) => channel !== "in_app");
+      if (!notification.channels.includes("in_app")) {
+        notification.deliveryState = "blocked_no_channel_adapter";
+        notification.error = "No adapter is configured for the requested delivery channel.";
+        notification.verified = false;
+      } else {
+        const stored = deliverInAppNotification({
+          id: notification.id,
+          category: notification.priority === "critical" || notification.priority === "high" ? "action-required" : "info",
+          priority: notification.priority === "critical" ? 3 : notification.priority === "high" ? 2 : 1,
+          title: notification.title,
+          body: notification.message,
+          privacy: notification.privacy || "private",
+          path: notification.action?.path || null,
+        });
+        if (!stored) throw new Error("In-app notification could not be independently read back.");
+        notification.deliveryState = unsupportedChannels.length ? "partial_delivery" : "delivered_in_app";
+        notification.unsupportedChannels = unsupportedChannels;
+        notification.deliveredAt = new Date().toISOString();
+        notification.verified = unsupportedChannels.length === 0;
+      }
     } catch (error) {
       notification.deliveryState = "failed";
       notification.error = error.message;
+      notification.verified = false;
     }
 
     this.notifications.set(notificationId, notification);
+    this.save();
+  }
+
+  pruneExpired(now = Date.now()) {
+    const isExpired = (item) => item.expiresAt && Date.parse(item.expiresAt) <= now;
+    for (const [id, signal] of this.signals) {
+      if (isExpired(signal)) this.signals.delete(id);
+    }
+    for (const [id, suggestion] of this.suggestions) {
+      if (isExpired(suggestion)) this.suggestions.delete(id);
+    }
+    for (const [id, notification] of this.notifications) {
+      if (isExpired(notification)) this.notifications.delete(id);
+    }
+    for (const [key, id] of this.signalIdempotency) {
+      if (!this.signals.has(id)) this.signalIdempotency.delete(key);
+    }
     this.save();
   }
 
@@ -544,6 +691,7 @@ export function dismissProactiveSuggestion(suggestionId, feedback) {
 
 export function clearSuggestionHistory() {
   proactiveEngine.suggestions.clear();
+  proactiveEngine.save();
 }
 
 export function snoozeProactiveSuggestion(suggestionId, minutes) {
