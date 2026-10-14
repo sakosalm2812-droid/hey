@@ -247,7 +247,7 @@ function ChatWorkspace() {
   }
 
   async function toggleVoiceCall() {
-    if (voiceState === "listening") {
+    if (["listening", "processing", "speaking"].includes(voiceState)) {
       voiceSessionRef.current?.stop();
       return;
     }
@@ -406,9 +406,9 @@ function ChatWorkspace() {
               <button
                 type="button"
                 onClick={toggleVoiceCall}
-                aria-label={voiceState === "listening" ? "Stop listening" : "Start voice conversation"}
+                aria-label={["listening", "processing", "speaking"].includes(voiceState) ? "Stop voice conversation" : "Start voice conversation"}
               >
-                {voiceState === "listening" ? <MicOff size={64} /> : <Mic size={64} />}
+                {["listening", "processing", "speaking"].includes(voiceState) ? <MicOff size={64} /> : <Mic size={64} />}
               </button>
             </motion.div>
 
@@ -417,8 +417,8 @@ function ChatWorkspace() {
                 <span className={`hey-voice-dot ${voiceState}`} />
                 {voiceStatus}
               </span>
-              <h2>{voiceState === "listening" ? "Listening..." : "Call HEY by voice"}</h2>
-              <p>Talk to your intelligence the same way you talk to a person. Your transcript is sent to HEY to generate a reply. Speech processing depends on your browser.</p>
+              <h2>{voiceState === "listening" ? "Listening..." : voiceState === "processing" ? "Thinking..." : voiceState === "speaking" ? "Speaking... Tap to interrupt." : "Call HEY by voice"}</h2>
+              <p>Speech recognition is provided by your browser, whose audio processing and retention rules may vary. The resulting transcript is sent to HEY to generate a reply. Tap the microphone button while active to stop or interrupt.</p>
             </div>
 
             {(voiceTranscript || voiceResponse) && (

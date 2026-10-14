@@ -1,6 +1,8 @@
 import { loadStoredProactiveSettings } from "../lib/proactiveStore.js";
 import { publish } from "./eventBus.js";
 import { getAccountStorageKey } from "./accountScope.js";
+import { isWithinQuietHours } from "./attentionPolicy.js";
+import { getSetting } from "./settingsRegistry.js";
 
 const STORAGE_KEY = "hey_notifications";
 const MAX_VISIBLE = 8;
@@ -25,8 +27,32 @@ function writeStored(notifications) {
   }
 }
 
-export function getNotifications() {
-  return readStored();
+export function getNotifications({ sharedSurface = isSharedSurface() } = {}) {
+  const now = Date.now();
+  return readStored()
+    .filter((item) => !item.expiresAt || Date.parse(item.expiresAt) > now)
+    .map((item) => presentNotification(item, { sharedSurface }));
+}
+
+export function isSharedSurface() {
+  if (getSetting("mode.current") === "presentation") return true;
+  if (typeof document === "undefined") return false;
+  return document.documentElement?.dataset?.heyPublicMode === "true" ||
+    Boolean(document.querySelector?.('[data-hey-public-surface="true"]'));
+}
+
+export function presentNotification(item, { sharedSurface = false } = {}) {
+  if (!item || typeof item !== "object") return null;
+  const privateItem = ["private", "sensitive", "secret"].includes(String(item.privacy || "private").toLowerCase());
+  if (!sharedSurface || !privateItem) return { ...item, actions: Array.isArray(item.actions) ? item.actions : [] };
+  return {
+    ...item,
+    title: "Private notification",
+    body: "Open HEY to view this notification.",
+    path: null,
+    actions: [],
+    redacted: true,
+  };
 }
 
 export function subscribeNotifications(listener) {
@@ -48,10 +74,6 @@ function emit() {
   publish("notification.updated", { count: snapshot.length });
 }
 
-function minutesOf(date) {
-  return date.getHours() * 60 + date.getMinutes();
-}
-
 /**
  * Quiet behavior uses the shared quiet-hours setting.
  * Low/medium notifications are held back during the window;
@@ -60,13 +82,7 @@ function minutesOf(date) {
 export function isQuietMoment(now = new Date()) {
   const settings = loadStoredProactiveSettings();
   if (!settings.enabled) return false;
-  const start = Number(String(settings.quietHours?.start || "22:00").split(":")[0]) * 60 +
-    Number(String(settings.quietHours?.start || "22:00").split(":")[1]);
-  const end = Number(String(settings.quietHours?.end || "08:00").split(":")[0]) * 60 +
-    Number(String(settings.quietHours?.end || "08:00").split(":")[1]);
-  const nowMin = minutesOf(now);
-  if (start === end) return false;
-  return start > end ? nowMin >= start || nowMin < end : nowMin >= start && nowMin < end;
+  return isWithinQuietHours(now, settings.quietHours || { start: "22:00", end: "08:00" }, settings.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
 }
 
 const CATEGORIES = ["success", "error", "warning", "info", "loading", "action-required"];
@@ -106,9 +122,11 @@ export function notify(entry = {}) {
     priority,
     title: String(entry.title || "HEY"),
     body: String(entry.body || ""),
+    privacy: ["public", "private", "sensitive", "secret"].includes(entry.privacy) ? entry.privacy : "private",
     path: entry.path || null,
     actions,
     createdAt: now.toISOString(),
+    expiresAt: entry.expiresAt && Number.isFinite(Date.parse(entry.expiresAt)) ? new Date(entry.expiresAt).toISOString() : null,
     read: existingIndex >= 0 ? current[existingIndex].read : false,
     quieted: quiet && !passesQuiet,
     hidden: quiet && !passesQuiet,
@@ -123,6 +141,13 @@ export function notify(entry = {}) {
   writeStored(next.slice(0, MAX_VISIBLE));
   emit();
   return item;
+}
+
+/** Deliver only through the canonical in-app surface and independently read it back. */
+export function deliverInAppNotification(entry) {
+  const item = notify({ ...entry, category: entry.category || "info" });
+  const persisted = readStored().find((notification) => notification.id === item.id);
+  return persisted?.id === item.id ? persisted : null;
 }
 
 function uuid() {
