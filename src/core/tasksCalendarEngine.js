@@ -65,6 +65,46 @@ function generateActionItemId() {
   return `ai_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function snapshotTask(task) {
+  return {
+    ...task,
+    dependencies: Array.isArray(task.dependencies) ? [...task.dependencies] : task.dependencies,
+    tags: Array.isArray(task.tags) ? [...task.tags] : task.tags,
+    metadata: task.metadata && typeof task.metadata === "object" ? { ...task.metadata } : task.metadata,
+  };
+}
+
+function validateTaskDependencies(tasks, taskId, dependencies) {
+  if (!Array.isArray(dependencies)) return { error: "Dependencies must be a list", code: "INVALID_DEPENDENCIES" };
+  if (new Set(dependencies).size !== dependencies.length) {
+    return { error: "Dependency already exists", code: "DEPENDENCY_EXISTS" };
+  }
+
+  for (const dependencyId of dependencies) {
+    if (typeof dependencyId !== "string" || !tasks.has(dependencyId)) {
+      return { error: "Dependency task not found", code: "DEPENDENCY_NOT_FOUND" };
+    }
+    if (taskId === dependencyId) return { error: "Cannot depend on self", code: "DEPENDENCY_CYCLE" };
+
+    const pending = [dependencyId];
+    const visited = new Set();
+    while (pending.length > 0) {
+      const currentId = pending.pop();
+      if (currentId === taskId) {
+        return { error: "Dependency would create a cycle", code: "DEPENDENCY_CYCLE" };
+      }
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+      const currentTask = tasks.get(currentId);
+      if (!currentTask || !Array.isArray(currentTask.dependencies)) {
+        return { error: "Dependency graph contains invalid task state", code: "INVALID_DEPENDENCY_STATE" };
+      }
+      pending.push(...currentTask.dependencies);
+    }
+  }
+  return null;
+}
+
 class TasksCalendarEngine {
   constructor() {
     this.tasks = new Map();
@@ -122,7 +162,7 @@ class TasksCalendarEngine {
       priority: input.priority || PRIORITIES.MEDIUM,
       projectId: input.projectId || null,
       parentTaskId: input.parentTaskId || null,
-      dependencies: input.dependencies || [],
+      dependencies: Array.isArray(input.dependencies) ? [...input.dependencies] : (input.dependencies ?? []),
       successCriteria: input.successCriteria || "",
       estimatedDuration: input.estimatedDuration || null,
       actualDuration: null,
@@ -137,37 +177,51 @@ class TasksCalendarEngine {
       updatedAt: new Date().toISOString(),
     };
 
+    const dependencyError = validateTaskDependencies(this.tasks, taskId, task.dependencies);
+    if (dependencyError) return dependencyError;
+
     this.tasks.set(taskId, task);
     this.save();
-    this.notify("task_created", task);
-    return task;
+    this.notify("task_created", snapshotTask(task));
+    return snapshotTask(task);
   }
 
   getTask(id) {
-    return this.tasks.get(id) || null;
+    const task = this.tasks.get(id);
+    return task ? snapshotTask(task) : null;
   }
 
   getAllTasks() {
-    return Array.from(this.tasks.values());
+    return Array.from(this.tasks.values(), snapshotTask);
   }
 
   getTasksByProject(projectId) {
-    return Array.from(this.tasks.values()).filter(t => t.projectId === projectId);
+    return Array.from(this.tasks.values()).filter(t => t.projectId === projectId).map(snapshotTask);
   }
 
   getTasksByState(state) {
-    return Array.from(this.tasks.values()).filter(t => t.state === state);
+    return Array.from(this.tasks.values()).filter(t => t.state === state).map(snapshotTask);
   }
 
   updateTask(id, updates) {
     const task = this.tasks.get(id);
     if (!task) return null;
 
-    const updated = { ...task, ...updates, updatedAt: new Date().toISOString() };
+    if (updates.dependencies !== undefined) {
+      const dependencyError = validateTaskDependencies(this.tasks, id, updates.dependencies);
+      if (dependencyError) return dependencyError;
+    }
+
+    const updated = {
+      ...task,
+      ...updates,
+      ...(updates.dependencies !== undefined ? { dependencies: [...updates.dependencies] } : {}),
+      updatedAt: new Date().toISOString(),
+    };
     this.tasks.set(id, updated);
     this.save();
-    this.notify("task_updated", updated);
-    return updated;
+    this.notify("task_updated", snapshotTask(updated));
+    return snapshotTask(updated);
   }
 
   setTaskState(id, state) {
@@ -191,33 +245,36 @@ class TasksCalendarEngine {
     this.tasks.set(id, task);
     this.save();
     this.notify("task_state_changed", { id, oldState, newState: state });
-    return task;
+    return snapshotTask(task);
   }
 
   addDependency(taskId, dependencyId) {
     const task = this.tasks.get(taskId);
-    if (!task) return { error: "Task not found" };
-    if (task.dependencies.includes(dependencyId)) return { error: "Dependency already exists" };
-    if (taskId === dependencyId) return { error: "Cannot depend on self" };
+    if (!task) return { error: "Task not found", code: "TASK_NOT_FOUND" };
+    if (!Array.isArray(task.dependencies)) return { error: "Task dependency state is invalid", code: "INVALID_DEPENDENCY_STATE" };
+    const dependencies = [...task.dependencies, dependencyId];
+    const dependencyError = validateTaskDependencies(this.tasks, taskId, dependencies);
+    if (dependencyError) return dependencyError;
 
-    task.dependencies.push(dependencyId);
-    this.tasks.set(taskId, task);
+    const updated = { ...task, dependencies, updatedAt: new Date().toISOString() };
+    this.tasks.set(taskId, updated);
     this.save();
-    return task;
+    return snapshotTask(updated);
   }
 
   removeDependency(taskId, dependencyId) {
     const task = this.tasks.get(taskId);
     if (!task) return { error: "Task not found" };
 
-    task.dependencies = task.dependencies.filter(d => d !== dependencyId);
-    this.tasks.set(taskId, task);
+    if (!Array.isArray(task.dependencies)) return { error: "Task dependency state is invalid", code: "INVALID_DEPENDENCY_STATE" };
+    const updated = { ...task, dependencies: task.dependencies.filter(d => d !== dependencyId), updatedAt: new Date().toISOString() };
+    this.tasks.set(taskId, updated);
     this.save();
-    return task;
+    return snapshotTask(updated);
   }
 
   getBlockedTasks(taskId) {
-    return Array.from(this.tasks.values()).filter(t => t.dependencies.includes(taskId));
+    return Array.from(this.tasks.values()).filter(t => t.dependencies.includes(taskId)).map(snapshotTask);
   }
 
   createReminder(input) {
