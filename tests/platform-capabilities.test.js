@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CAPABILITY_STATUS,
+  executeCapability,
   getCapabilityAvailability,
   getCapability,
   registerCapability,
@@ -52,6 +53,62 @@ test("an adapter can make only its declared capability executable", () => {
   assert.equal(availability.status, CAPABILITY_STATUS.supported);
   assert.equal(availability.available, true);
   assert.equal(getCapability(capabilityId).platforms.includes("android"), true);
+});
+
+test("an adapter cannot override explicit restriction or permission policy at availability or execution", async () => {
+  const restrictedId = "test.camera.restricted";
+  const permissionId = "test.camera.permission";
+  let executions = 0;
+  registerCapability({
+    id: restrictedId,
+    name: "Restricted camera",
+    platforms: ["ios"],
+    platformSupport: { ios: CAPABILITY_STATUS.restricted },
+  });
+  registerCapability({
+    id: permissionId,
+    name: "Permission gated camera",
+    platforms: ["ios"],
+    platformSupport: { ios: CAPABILITY_STATUS.permissionRequired },
+  });
+  const adapter = createNativeAdapter("ios", {
+    capabilities: [restrictedId, permissionId],
+    [restrictedId]: () => { executions += 1; return { success: true, verified: true }; },
+    [permissionId]: () => { executions += 1; return { success: true, verified: true }; },
+  });
+
+  assert.equal(getCapabilityAvailability(restrictedId, "ios", adapter).status, CAPABILITY_STATUS.restricted);
+  assert.equal(getCapabilityAvailability(permissionId, "ios", adapter).status, CAPABILITY_STATUS.permissionRequired);
+  const restrictedResult = await executeCapability(restrictedId, {}, adapter);
+  const permissionResult = await executeCapability(permissionId, {}, adapter);
+  assert.equal(restrictedResult.success, false);
+  assert.equal(restrictedResult.status, CAPABILITY_STATUS.restricted);
+  assert.equal(permissionResult.success, false);
+  assert.equal(permissionResult.status, CAPABILITY_STATUS.permissionRequired);
+  assert.equal(executions, 0);
+});
+
+test("capability execution rejects an adapter platform or capability mismatch", async () => {
+  const capabilityId = "test.android.camera";
+  let executions = 0;
+  registerCapability({
+    id: capabilityId,
+    name: "Android camera",
+    platforms: ["android"],
+    platformSupport: { android: CAPABILITY_STATUS.supported },
+  });
+  const wrongPlatform = createNativeAdapter("ios", {
+    capabilities: [capabilityId],
+    [capabilityId]: () => { executions += 1; return { success: true, verified: true }; },
+  });
+  const wrongCapability = createNativeAdapter("android", {
+    capabilities: [],
+    [capabilityId]: () => { executions += 1; return { success: true, verified: true }; },
+  });
+
+  assert.equal((await executeCapability(capabilityId, {}, wrongPlatform)).success, false);
+  assert.equal((await executeCapability(capabilityId, {}, wrongCapability)).success, false);
+  assert.equal(executions, 0);
 });
 
 test("unknown capabilities remain unsupported", () => {
