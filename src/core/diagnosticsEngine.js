@@ -57,6 +57,75 @@ function generateRecoveryId() {
   return `rec_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+const SENSITIVE_CONTEXT_KEY = /(?:prompt|transcript|content|message|body|query|email|phone|address|location|health|medical|finance|ssn|biometric|secret|password|token|credential|api.?key|authorization|cookie|private|sensitive)/i;
+const SAFE_CONTEXT_KEYS = new Set([
+  "requestid", "traceid", "spanid", "component", "operation", "provider", "providerid",
+  "status", "statuscode", "errorcode", "retrycount", "attempt", "attemptid", "workflowid",
+  "missionid", "tool", "capability", "capabilityid", "durationms", "nested",
+]);
+
+function ownDataValue(value, key) {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) return undefined;
+  try {
+    return Object.getOwnPropertyDescriptor(value, key)?.value;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeIsArray(value) {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return true;
+  }
+}
+
+function redactDiagnosticText(value, limit = 2000) {
+  if (typeof value !== "string") return "[unavailable]";
+  return value
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]")
+    .replace(/\b(Bearer|Basic)\s+[^\s"'<>]+/gi, "$1 [REDACTED]")
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}\b/gi, "[REDACTED API KEY]")
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED TOKEN]")
+    .replace(/\b(password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED]")
+    .replace(/([?&](?:token|key|secret|password|code|auth)=)[^&#\s]+/gi, "$1[REDACTED]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED EMAIL]")
+    .replace(/\b\d{7,}\b/g, "[REDACTED NUMBER]")
+    .slice(0, limit);
+}
+
+function sanitizeDiagnosticContext(value, seen = new WeakSet(), depth = 0) {
+  if (typeof value === "string") return redactDiagnosticText(value, 500);
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value !== "object") return `[${typeof value}]`;
+  if (depth >= 4) return "[maximum depth]";
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+
+  if (safeIsArray(value)) {
+    const result = value.slice(0, 20).map((item) => sanitizeDiagnosticContext(item, seen, depth + 1));
+    if (value.length > 20) result.push("[truncated]");
+    return result;
+  }
+
+  const result = {};
+  let descriptors;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return "[unavailable]";
+  }
+  for (const [key, descriptor] of Object.entries(descriptors).slice(0, 32)) {
+    if (!("value" in descriptor)) continue;
+    const safeKey = redactDiagnosticText(key, 80);
+    result[safeKey] = SENSITIVE_CONTEXT_KEY.test(key) || !SAFE_CONTEXT_KEYS.has(key.toLowerCase())
+      ? "[REDACTED]"
+      : sanitizeDiagnosticContext(descriptor.value, seen, depth + 1);
+  }
+  return result;
+}
+
 class DiagnosticsEngine {
   constructor({ storage = globalThis.localStorage } = {}) {
     this.storage = storage;
@@ -250,16 +319,43 @@ class DiagnosticsEngine {
     return this.traces.get(id) || null;
   }
 
-  recordError(input) {
+  recordError(input = {}) {
     const errorId = generateErrorId();
-    const fingerprint = this.generateFingerprint(input.error);
+    const sourceError = ownDataValue(input, "error");
+    const rawMessage = typeof sourceError === "string"
+      ? sourceError
+      : ownDataValue(sourceError, "message");
+    const rawCode = ownDataValue(sourceError, "code");
+    const safeCode = (typeof rawCode === "string" || typeof rawCode === "number") && /^[A-Za-z0-9_.-]{1,64}$/.test(String(rawCode))
+      ? String(rawCode)
+      : null;
+    const rawStack = ownDataValue(sourceError, "stack");
+    const stackLines = typeof rawStack === "string" ? rawStack.split("\n") : [];
+    if (stackLines[0] && typeof rawMessage === "string" && stackLines[0].includes(rawMessage)) stackLines.shift();
+    const safeError = {
+      name: redactDiagnosticText(ownDataValue(sourceError, "name") || "Error", 100),
+      code: safeCode,
+      // Exception messages are untrusted free-form text and can contain user
+      // content. Keep machine diagnostics while omitting that text entirely.
+      message: safeCode ? `${redactDiagnosticText(ownDataValue(sourceError, "name") || "Error", 100)} (${safeCode})` : "Error details redacted",
+      stack: stackLines.slice(0, 30).map((line) => redactDiagnosticText(line, 300)).join("\n").slice(0, 4000),
+    };
+    const fingerprint = this.generateFingerprint(safeError);
+    const sourceContext = ownDataValue(input, "context");
+    const safeContext = sourceContext == null
+      ? {}
+      : sourceContext && typeof sourceContext === "object" && !safeIsArray(sourceContext)
+        ? sanitizeDiagnosticContext(sourceContext)
+        : "[REDACTED]";
     
     const error = {
       id: errorId,
       fingerprint,
-      message: input.error.message,
-      stack: input.error.stack,
-      context: input.context,
+      name: safeError.name,
+      code: safeError.code,
+      message: safeError.message,
+      stack: safeError.stack,
+      context: safeContext,
       timestamp: new Date().toISOString(),
       count: 1,
       lastSeen: new Date().toISOString(),
@@ -279,8 +375,8 @@ class DiagnosticsEngine {
   }
 
   generateFingerprint(error) {
-    const msg = error.message || String(error);
-    const stack = error.stack || "";
+    const msg = redactDiagnosticText(ownDataValue(error, "message") || "Diagnostic error details unavailable.", 500);
+    const stack = redactDiagnosticText(ownDataValue(error, "stack") || "", 500);
     return `${msg}:${stack.split("\n")[0]}`.slice(0, 200);
   }
 
