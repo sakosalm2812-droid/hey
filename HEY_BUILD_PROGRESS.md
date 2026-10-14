@@ -38,3 +38,31 @@ Local repair commit SHA: `714f3461eb28c0c0cae84937afbab62fe78b8352`.
 GitHub development-branch sync commit SHA: `9890ce4f5228c065ab8d6c9bf77cb7919cfb3532` (`sakosalm2812-droid/hey`, branch verified at this SHA). Its tree contains the same repair source/tests as the local repair commit; the SHA differs because the local checkout's parent commit did not match the branch's GitHub commit object. GitHub combined status returned no status checks yet.
 
 Next: continue Step 01 in this branch; no separate identity, permission, or mission authority is to be introduced. The 47-step program remains incomplete.
+
+## Parallel execution checkpoint — 2026-10-14
+
+Coordinator branch: `codex/production-readiness-2026-10-13`.
+
+Verified common source tree: `dd81624c0ba54a1d99f998998f89a3364cee4867`, matching GitHub development checkpoint `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
+
+Execution deadline: 2026-10-15 morning, Asia/Baghdad. Local Git push is unavailable because no GitHub CLI credential is present; publish reviewed work using the connected GitHub integration. Never force-push.
+
+| Worker | Steps | Branch | Worktree | State | Commit / test evidence |
+|---|---:|---|---|---|---|
+| Coordinator | Step 01 completion + integration | `codex/production-readiness-2026-10-13` | `/tmp/hey-production-work` | Active | Prior emergency fixes and mandate checkpoint recorded above. |
+| GPT-6 Luna agent | 02–04 | `codex/par-steps-02-04` | `/tmp/hey-parallel/steps-02-04` | Active | Awaiting implementation. |
+| GPT-6 Luna agent | 05–08 | `codex/par-steps-05-08` | `/tmp/hey-parallel/steps-05-08` | Active | Awaiting implementation. |
+| GPT-6 Luna agent | 09–11 | `codex/par-steps-09-11` | `/tmp/hey-parallel/steps-09-11` | Active | Awaiting implementation. |
+| GPT-6 Luna agent | 12–14 | `codex/par-steps-12-14` | `/tmp/hey-parallel/steps-12-14` | Active | Awaiting implementation. |
+| GPT-6 Luna agent | 15–18 | `codex/par-steps-15-18` | `/tmp/hey-parallel/steps-15-18` | Active | Awaiting implementation. |
+| GPT-6 Luna agent | 19–21 | `codex/par-steps-19-21` | `/tmp/hey-parallel/steps-19-21` | Active | Awaiting implementation. |
+| Next worker slot | 22–27 | `codex/par-steps-22-27` | `/tmp/hey-parallel/steps-22-27` | Prepared | Based on common checkpoint; no worker assigned yet. |
+| Next worker slot | 28–30 | `codex/par-steps-28-30` | `/tmp/hey-parallel/steps-28-30` | Prepared | Based on common checkpoint; no worker assigned yet. |
+| Next worker slot | 31–35 | `codex/par-steps-31-35` | `/tmp/hey-parallel/steps-31-35` | Prepared | Based on common checkpoint; no worker assigned yet. |
+| Next worker slot | 36–38 | `codex/par-steps-36-38` | `/tmp/hey-parallel/steps-36-38` | Prepared | Based on common checkpoint; no worker assigned yet. |
+| Next worker slot | 39–42 | `codex/par-steps-39-42` | `/tmp/hey-parallel/steps-39-42` | Prepared | Based on common checkpoint; no worker assigned yet. |
+| Next worker slot | 43–45 | `codex/par-steps-43-45` | `/tmp/hey-parallel/steps-43-45` | Prepared | Based on common checkpoint; no worker assigned yet. |
+
+Branch conflict control: each worker has a dedicated worktree and is instructed not to push or merge; shared-file changes will be inspected and merged by the coordinator only after tests and contract review. The current canonical seams are `src/core/permissionManager.js`, `src/core/actionMandate.js`, `src/core/missionCenter.js`, `src/core/executionEngine.js`, `src/core/eventBus.js`, and `src/core/capabilityRegistry.js`. Step 01 is not complete; downstream workers must report assumptions that depend on unfinished contracts.
+
+Codex Cloud task-creation/model-picker MCP is not exposed in this session. The available parallel agent API accepted the explicit `gpt-6-luna` model and `high` reasoning selection for all six active engineering workers. No UI model picker was opened or claimed to be changed. No PRs are open yet; branch sync/PR creation follows review of actual commits.
