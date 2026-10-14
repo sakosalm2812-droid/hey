@@ -60,9 +60,15 @@ export function evaluateApprovalPolicy(input, policy = {}, { verifySmartApproval
   if (policy.revoked === true || policy.enabled === false || !allowed || !resources) return { decision: DECISIONS.DENY, reason: "policy_scope_denied" };
   if (risk === "critical" || (risk === "high" && input.authStrength !== "strong")) return { decision: DECISIONS.STEP_UP, reason: "authentication_strength_required" };
   if (mode === APPROVAL_MODES.ASK) return { decision: DECISIONS.APPROVAL, reason: "explicit_approval_required" };
-  if (mode === APPROVAL_MODES.SMART && (typeof verifySmartApproval !== "function" || verifySmartApproval(input, policy) !== true)) return { decision: DECISIONS.APPROVAL, reason: "trusted_smart_approval_evaluator_required" };
+  if (mode === APPROVAL_MODES.SMART) {
+    const approved = (() => {
+      try { return typeof verifySmartApproval === "function" && verifySmartApproval(input, policy) === true; }
+      catch { return false; }
+    })();
+    if (!approved) return { decision: DECISIONS.APPROVAL, reason: "trusted_smart_approval_evaluator_required" };
+  }
   if (mode === APPROVAL_MODES.CUSTOM && policy.rules?.[input.action] !== "allow") return { decision: DECISIONS.APPROVAL, reason: "custom_rule_did_not_allow" };
-  if (mode === APPROVAL_MODES.BOUNDED && (!Number.isFinite(policy.maxUses) || policy.maxUses < 1 || policy.maxUses > 100 || !Number.isFinite(policy.expiresAt) || policy.expiresAt <= (input.now ?? Date.now()))) return { decision: DECISIONS.DENY, reason: "bounded_authority_invalid" };
+  if (mode === APPROVAL_MODES.BOUNDED && (!Number.isSafeInteger(policy.maxUses) || policy.maxUses < 1 || policy.maxUses > 100 || !Number.isFinite(policy.expiresAt) || policy.expiresAt <= (input.now ?? Date.now()))) return { decision: DECISIONS.DENY, reason: "bounded_authority_invalid" };
   return { decision: DECISIONS.ALLOW, reason: "policy_allowed", policyVersion: policy.version || null };
 }
 

@@ -54,11 +54,54 @@ test("mission cancellation propagates to the executor and cannot be deleted mid-
   assert.equal(center.deleteMission(mission.id), true);
 });
 
+test("mission execution bridges an already-aborted or later caller signal to the executor", async () => {
+  const center = new MissionCenter({ storage: new MemoryStore() });
+  const mission = center.createMission("Honor caller cancellation.");
+  center.setMissionState(mission.id, MISSION_STATES.PLANNING);
+  center.setMissionState(mission.id, MISSION_STATES.READY);
+  const caller = new AbortController();
+  let executorObservedAbort = false;
+  const running = center.startMission(mission.id, (context) => new Promise((resolve) => {
+    context.signal.addEventListener("abort", () => {
+      executorObservedAbort = true;
+      resolve({ success: true, verified: false });
+    }, { once: true });
+  }), { signal: caller.signal });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  caller.abort("caller stopped");
+  const result = await running;
+  assert.equal(executorObservedAbort, true);
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.verified, false);
+  assert.equal(center.getMission(mission.id).state, MISSION_STATES.CANCELLED);
+});
+
 test("checkpoint creation and restore fail closed without canonical signed evidence", async () => {
   const center = new MissionCenter({ storage: new MemoryStore() });
   const mission = center.createMission("Create a checkpoint test.");
   await assert.rejects(() => center.createCheckpoint(mission.id, { accountId: "acct", privateKey: {}, keyId: "root" }), /canonical signed evidence service/i);
   assert.deepEqual(await center.restoreCheckpoint(mission.id), { restored: false, reason: "checkpoint_missing" });
+});
+
+test("checkpoint restore rejects malformed signed state before asking evidence verifier", async () => {
+  let verifierCalled = false;
+  const center = new MissionCenter({ storage: new MemoryStore(), evidenceService: {
+    async verifyEnvelope() { verifierCalled = true; return { valid: true }; },
+  } });
+  const mission = center.createMission("Reject malformed checkpoint state.");
+  center.updateMission(mission.id, { checkpoint: {
+    schemaVersion: 1,
+    missionId: mission.id,
+    state: MISSION_STATES.COMPLETED,
+    steps: [{ state: "completed", attempts: 0, dependencies: [] }],
+    currentStepIndex: undefined,
+    completedSteps: 1,
+    progress: 100,
+    evidenceEnvelope: { payload: "signed-looking" },
+  } });
+  assert.deepEqual(await center.restoreCheckpoint(mission.id, { accountId: "acct" }), { restored: false, reason: "checkpoint_schema_invalid" });
+  assert.equal(verifierCalled, false);
+  assert.equal(center.getMission(mission.id).state, MISSION_STATES.DRAFT);
 });
 
 test("queued and paused missions cancel without claiming cancellation while work is active", () => {

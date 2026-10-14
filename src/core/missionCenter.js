@@ -34,6 +34,20 @@ export const STEP_STATES = Object.freeze({
 });
 const STATE_UPDATE_TOKEN = Symbol("mission-state-transition");
 
+function isValidMissionCheckpoint(checkpoint, missionId) {
+  if (!checkpoint || checkpoint.schemaVersion !== 1 || checkpoint.missionId !== missionId) return false;
+  if (!Object.values(MISSION_STATES).includes(checkpoint.state) || !Array.isArray(checkpoint.steps)) return false;
+  if (!Number.isSafeInteger(checkpoint.currentStepIndex) || checkpoint.currentStepIndex < -1 || checkpoint.currentStepIndex > checkpoint.steps.length) return false;
+  if (!Number.isSafeInteger(checkpoint.completedSteps) || checkpoint.completedSteps < 0) return false;
+  const completed = checkpoint.steps.filter((step) => step && step.state === STEP_STATES.COMPLETED).length;
+  if (completed !== checkpoint.completedSteps) return false;
+  if (checkpoint.currentStepIndex === -1 && completed !== checkpoint.steps.length) return false;
+  const expectedProgress = checkpoint.steps.length ? Math.round((completed / checkpoint.steps.length) * 100) : 0;
+  if (!Number.isSafeInteger(checkpoint.progress) || checkpoint.progress !== expectedProgress) return false;
+  return checkpoint.steps.every((step) => step && typeof step === "object" && Object.values(STEP_STATES).includes(step.state)
+    && Number.isSafeInteger(step.attempts) && step.attempts >= 0 && Array.isArray(step.dependencies));
+}
+
 function generateMissionId() {
   return `mission_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -252,6 +266,10 @@ export class MissionCenter {
     }
 
     const controller = new AbortController();
+    const externalSignal = options.signal;
+    const abortFromExternal = () => controller.abort(externalSignal?.reason);
+    if (externalSignal?.aborted) abortFromExternal();
+    else externalSignal?.addEventListener?.("abort", abortFromExternal, { once: true });
     this.activeRuns.set(id, controller);
     this.updateMission(id, { runStartedAt: new Date().toISOString(), outcome: "running" });
     if (this.missions.get(id)?.state === MISSION_STATES.READY) this.setMissionState(id, MISSION_STATES.QUEUED);
@@ -265,6 +283,10 @@ export class MissionCenter {
       });
 
       if (controller.signal.aborted || this.missions.get(id)?.state === MISSION_STATES.CANCELLING) {
+        const currentState = this.missions.get(id)?.state;
+        if (currentState !== MISSION_STATES.CANCELLING && this.getValidTransitions(currentState).includes(MISSION_STATES.CANCELLING)) {
+          this.setMissionState(id, MISSION_STATES.CANCELLING, "Caller cancelled execution.");
+        }
         if (this.missions.get(id)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancellation raced with task completion; outcome retained as unverified.");
         this.updateMission(id, { outcome: "unknown_after_cancellation", verification: { status: "unverified", at: new Date().toISOString() } });
         return { ...result, status: "cancelled", verified: false, cancellationOutcome: "unknown" };
@@ -286,10 +308,12 @@ export class MissionCenter {
       return result;
     } catch (error) {
       const current = this.missions.get(id);
-      if (current?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, current.cancellationReason || "Cancelled during execution");
+      if (controller.signal.aborted && current?.state === MISSION_STATES.RUNNING) this.setMissionState(id, MISSION_STATES.CANCELLING, "Caller cancelled execution.");
+      if (this.missions.get(id)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, current?.cancellationReason || "Cancelled during execution");
       else this.setMissionState(id, MISSION_STATES.FAILED, error.message);
       throw error;
     } finally {
+      externalSignal?.removeEventListener?.("abort", abortFromExternal);
       this.activeRuns.delete(id);
       const current = this.missions.get(id);
       if (current) this.updateMission(id, { runFinishedAt: new Date().toISOString() });
@@ -423,6 +447,7 @@ export class MissionCenter {
     if (this.activeRuns.has(id)) return { restored: false, reason: "mission_execution_active" };
 
     const { checkpoint } = mission;
+    if (!isValidMissionCheckpoint(checkpoint, id)) return { restored: false, reason: "checkpoint_schema_invalid" };
     const verifyEnvelope = this.evidenceService?.verifyEnvelope || this.evidenceService?.verifyEvidenceEnvelope;
     if (typeof verifyEnvelope !== "function" || !checkpoint.evidenceEnvelope) return { restored: false, reason: "signed_checkpoint_verifier_unavailable" };
     const evidence = await verifyEnvelope(checkpoint.evidenceEnvelope, {
@@ -438,9 +463,6 @@ export class MissionCenter {
       timestamp: checkpoint.timestamp,
     }, { accountId, currentRevocationEpoch }, { trustedKeys, store, now, online, maxAgeMs });
     if (evidence?.valid !== true) return { restored: false, reason: evidence?.reason || "checkpoint_evidence_invalid" };
-    if (checkpoint.missionId !== id || !Array.isArray(checkpoint.steps) || checkpoint.currentStepIndex < 0 || checkpoint.currentStepIndex > checkpoint.steps.length || checkpoint.steps.some((step) => !Object.values(STEP_STATES).includes(step.state))) {
-      return { restored: false, reason: "checkpoint_schema_invalid" };
-    }
     if (checkpoint.state === MISSION_STATES.COMPLETED && checkpoint.verification?.status !== "verified") return { restored: false, reason: "completed_checkpoint_unverified" };
     const restoredState = [MISSION_STATES.RUNNING, MISSION_STATES.VERIFYING, MISSION_STATES.CANCELLING].includes(checkpoint.state)
       ? MISSION_STATES.RECOVERING

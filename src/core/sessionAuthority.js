@@ -165,8 +165,12 @@ export async function generateRecoveryCodes({ count = 10 } = {}) {
 export async function consumeRecoveryCode({ accountId, code, store, now = Date.now() }) {
   if (typeof accountId !== "string" || !accountId.trim() || !store || typeof store.consumeRecoveryCode !== "function") return { verified: false, reason: "recovery_store_unavailable" };
   const fingerprint = await hashRecoveryCode(code);
-  const consumed = await store.consumeRecoveryCode(accountId, fingerprint, now);
-  return consumed === true ? { verified: true, method: "recovery_code" } : { verified: false, reason: "invalid_or_used_recovery_code" };
+  try {
+    const consumed = await store.consumeRecoveryCode(accountId.trim(), fingerprint, now);
+    return consumed === true ? { verified: true, method: "recovery_code" } : { verified: false, reason: "invalid_or_used_recovery_code" };
+  } catch {
+    return { verified: false, reason: "recovery_store_unavailable" };
+  }
 }
 
 function encodeUrlSafe(bytes) {
@@ -203,13 +207,15 @@ export async function completeDeviceEnrollment({ challengeId, challenge, signatu
     keyBytes = decode(publicKey);
   } catch { return { enrolled: false, reason: "malformed_key_or_signature" }; }
   if (signatureBytes.length !== 64 || keyBytes.length !== 32) return { enrolled: false, reason: "malformed_key_or_signature" };
-  let consumed;
-  try { consumed = await store.consumeChallenge(challengeId, accountId.trim(), await digest(challenge), now); } catch { return { enrolled: false, reason: "challenge_store_unavailable" }; }
-  if (consumed !== true) return { enrolled: false, reason: "challenge_expired_used_or_wrong_account" };
+  // Verify possession before consuming the one-time challenge. Otherwise anyone
+  // who learns the challenge can burn it with an invalid key/signature pair.
   try {
     const key = await globalThis.crypto.subtle.importKey("raw", keyBytes, { name: "Ed25519" }, false, ["verify"]);
     if (!await globalThis.crypto.subtle.verify({ name: "Ed25519" }, key, signatureBytes, encoder.encode(challenge))) return { enrolled: false, reason: "device_proof_invalid" };
   } catch { return { enrolled: false, reason: "device_proof_invalid" }; }
+  let consumed;
+  try { consumed = await store.consumeChallenge(challengeId, accountId.trim(), await digest(challenge), now); } catch { return { enrolled: false, reason: "challenge_store_unavailable" }; }
+  if (consumed !== true) return { enrolled: false, reason: "challenge_expired_used_or_wrong_account" };
   const device = {
     id: globalThis.crypto.randomUUID(), accountId: accountId.trim(), publicKey,
     label: String(label).trim().slice(0, 80), status: "registered", trustState: "provisional",

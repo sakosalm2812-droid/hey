@@ -76,10 +76,12 @@ test("policy modes fail closed for offline high risk, weak step-up, and unbounde
   assert.equal(evaluateApprovalPolicy({ ...base, offline: true, risk: "high" }, policy).decision, "deny");
   assert.equal(evaluateApprovalPolicy({ ...base, risk: "high", authStrength: "standard" }, policy).decision, "require_step_up");
   assert.equal(evaluateApprovalPolicy(base, { ...policy, maxUses: Infinity }).decision, "deny");
+  assert.equal(evaluateApprovalPolicy(base, { ...policy, maxUses: 1.5 }).decision, "deny", "bounded use counts must be whole safe integers");
   assert.equal(evaluateApprovalPolicy(base, policy).decision, "allow");
   assert.equal(evaluateApprovalPolicy(base, { ...policy, enabled: false }).decision, "deny");
   assert.equal(evaluateApprovalPolicy(base, { ...policy, mode: "smart_approval" }).decision, "require_approval", "model confidence is not authority");
   assert.equal(evaluateApprovalPolicy(base, { ...policy, mode: "smart_approval" }, { verifySmartApproval: () => true }).decision, "allow");
+  assert.equal(evaluateApprovalPolicy(base, { ...policy, mode: "smart_approval" }, { verifySmartApproval: () => { throw new Error("unavailable"); } }).decision, "require_approval", "evaluator errors must not become authorization errors");
 });
 
 test("permission diff identifies additions, removals, and edits without mutating inputs", () => {
@@ -138,6 +140,7 @@ test("recovery codes are normalized, fingerprinted, and consumed once", async ()
   const store = { async consumeRecoveryCode(_accountId, fingerprint) { if (used.has(fingerprint)) return false; used.add(fingerprint); return true; } };
   assert.equal((await consumeRecoveryCode({ accountId: "acct", code: "ABCD-EFGH-IJKL-MNOP", store })).verified, true);
   assert.equal((await consumeRecoveryCode({ accountId: "acct", code: "abcdefghijklmnop", store })).verified, false);
+  assert.deepEqual(await consumeRecoveryCode({ accountId: "acct", code: "ZYXW-VUTS-RQPO-NMLK", store: { async consumeRecoveryCode() { throw new Error("offline"); } } }), { verified: false, reason: "recovery_store_unavailable" });
 });
 
 test("device enrollment verifies signed one-time account challenge and starts provisional", async () => {
@@ -160,6 +163,8 @@ test("device enrollment verifies signed one-time account challenge and starts pr
   const challenge = await createDeviceEnrollmentChallenge({ accountId: "acct", store, now });
   const signature = await crypto.subtle.sign({ name: "Ed25519" }, keyPair.privateKey, new TextEncoder().encode(challenge.challenge));
   const proof = { challengeId: challenge.id, challenge: challenge.challenge, signature: b64url(new Uint8Array(signature)), publicKey: b64url(publicKeyBytes), accountId: "acct", label: "Laptop", store, now };
+  assert.equal((await completeDeviceEnrollment({ ...proof, signature: b64url(new Uint8Array(64)) })).reason, "device_proof_invalid");
+  assert.equal(challenges.get(challenge.id).usedAt, null, "an invalid signature must not consume the enrollment challenge");
   const enrolled = await completeDeviceEnrollment(proof);
   assert.equal(enrolled.enrolled, true);
   assert.equal(enrolled.device.status, "registered");
