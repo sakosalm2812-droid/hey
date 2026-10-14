@@ -1,4 +1,5 @@
 const FORMAT = "hey.evidence-envelope.v1";
+export const EVIDENCE_STORE_CONTRACT_VERSION = "hey.evidence-store.v1";
 const encoder = new TextEncoder();
 
 function canonical(value, ancestors = new WeakSet()) {
@@ -49,17 +50,27 @@ async function sha256(value) {
 }
 
 export class EvidenceStoreContract {
-  async isInvalidated() { throw new Error("Implement isInvalidated(evidenceId) against durable evidence storage."); }
-  async invalidate() { throw new Error("Implement invalidate(evidenceId, reason) against durable evidence storage."); }
+  constructor() { this.contractVersion = EVIDENCE_STORE_CONTRACT_VERSION; }
+  async isInvalidated() { throw new Error("Implement account-scoped isInvalidated(evidenceId, { accountId }) against durable evidence storage."); }
+  async invalidate() { throw new Error("Implement account-scoped invalidate(evidenceId, reason, { accountId }) against durable evidence storage."); }
 }
 
 export class InMemoryEvidenceStore {
-  constructor() { this.invalidations = new Map(); }
-  async isInvalidated(evidenceId) { return this.invalidations.has(evidenceId); }
-  async invalidate(evidenceId, reason) {
-    if (!evidenceId || !reason) throw new TypeError("Evidence ID and invalidation reason are required.");
-    if (!this.invalidations.has(evidenceId)) this.invalidations.set(evidenceId, { evidenceId, reason: String(reason).slice(0, 500), invalidatedAt: new Date().toISOString() });
-    return this.invalidations.get(evidenceId);
+  constructor() {
+    this.contractVersion = EVIDENCE_STORE_CONTRACT_VERSION;
+    Object.defineProperty(this, "testOnly", { value: true, enumerable: true });
+    this.invalidations = new Map();
+  }
+  async isInvalidated(evidenceId, { accountId } = {}) {
+    if (typeof accountId !== "string" || !accountId.trim()) throw new TypeError("An accountId is required for evidence invalidation lookup.");
+    return this.invalidations.has(`${accountId}\u0000${evidenceId}`);
+  }
+  async invalidate(evidenceId, reason, { accountId } = {}) {
+    if (!evidenceId || !reason || typeof accountId !== "string" || !accountId.trim()) throw new TypeError("Evidence ID, account, and invalidation reason are required.");
+    const key = `${accountId}\u0000${evidenceId}`;
+    const safeReason = typeof reason === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(reason) ? reason : "integrity_failure";
+    if (!this.invalidations.has(key)) this.invalidations.set(key, { evidenceId, accountId, reason: safeReason, invalidatedAt: new Date().toISOString() });
+    return { ...this.invalidations.get(key) };
   }
 }
 
@@ -91,9 +102,16 @@ export async function createEvidenceEnvelope(input, { privateKey, keyId, now = D
   return Object.freeze({ payload: Object.freeze(payload), signature: Object.freeze({ algorithm: "Ed25519", keyId: keyId.trim(), value: toBase64(new Uint8Array(signature)) }), body: input.body });
 }
 
-export async function verifyEvidenceEnvelope(envelope, body, context, { trustedKeys = {}, store, now = Date.now(), online = true, maxAgeMs = Infinity } = {}) {
+export async function verifyEvidenceEnvelope(envelope, body, context, { trustedKeys = {}, store, now = Date.now(), online = true, maxAgeMs = Infinity, allowTestOnlyStore = false } = {}) {
   const deny = (reason, status = "invalid") => ({ valid: false, status, reason });
-  if (!store || typeof store.isInvalidated !== "function") return deny("Durable evidence invalidation storage is required.", "unavailable");
+  let isInvalidated;
+  try {
+    if (!store || store.contractVersion !== EVIDENCE_STORE_CONTRACT_VERSION || typeof store.isInvalidated !== "function") return deny("A durable v1 evidence invalidation store is required.", "unavailable");
+    if (store.testOnly === true && allowTestOnlyStore !== true) return deny("The in-memory evidence store is test-only; durable invalidation storage is required.", "unavailable");
+    isInvalidated = store.isInvalidated;
+  } catch {
+    return deny("Evidence store contract inspection failed.", "unavailable");
+  }
   if (!Number.isFinite(now) || !(maxAgeMs === Infinity || Number.isFinite(maxAgeMs) && maxAgeMs >= 0)) return deny("Evidence verification time and freshness limit are invalid.");
   const payload = envelope?.payload;
   const signature = envelope?.signature;
@@ -117,14 +135,15 @@ export async function verifyEvidenceEnvelope(envelope, body, context, { trustedK
   if (!Number.isSafeInteger(context.currentRevocationEpoch) || context.currentRevocationEpoch !== payload.revocationEpoch) return deny("Evidence revocation epoch is stale or unavailable.", "stale");
   if (!online && payload.offlineAllowed !== true) return deny("Evidence is not approved for offline use.", "offline_denied");
   try {
-    if (await store.isInvalidated(payload.id)) return deny("Evidence has been invalidated.", "invalidated");
+    if (await Reflect.apply(isInvalidated, store, [payload.id, { accountId: payload.accountId }])) return deny("Evidence has been invalidated.", "invalidated");
   } catch { return deny("Evidence invalidation check failed; evidence was rejected.", "unavailable"); }
   return { valid: true, status: "verified", evidenceId: payload.id, signerKeyId: signature.keyId, capturedAt: payload.capturedAt, expiresAt: payload.expiresAt };
 }
 
-export async function invalidateEvidence(evidenceId, reason, store) {
-  if (!store || typeof store.invalidate !== "function") throw new TypeError("A durable evidence invalidation store is required.");
-  return store.invalidate(evidenceId, reason);
+export async function invalidateEvidence(evidenceId, reason, store, { accountId, allowTestOnlyStore = false } = {}) {
+  if (!store || store.contractVersion !== EVIDENCE_STORE_CONTRACT_VERSION || typeof store.invalidate !== "function") throw new TypeError("A durable v1 evidence invalidation store is required.");
+  if (store.testOnly === true && allowTestOnlyStore !== true) throw new TypeError("The in-memory evidence store is test-only; durable invalidation storage is required.");
+  return Reflect.apply(store.invalidate, store, [evidenceId, reason, { accountId }]);
 }
 
 export { FORMAT as EVIDENCE_ENVELOPE_FORMAT };

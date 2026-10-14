@@ -162,13 +162,17 @@ Coordinator implementation in progress on `codex/resume-emergency-2026-10-14`: a
 
 Verification at this checkpoint: full Node suite **129/129**; scoped ESLint (`src tests scripts supabase/functions/hey-mandate`); production build; `git diff --check`. Focused mandate/repair suites: **20/20**. Build skipped sitemap generation without `SITE_URL` and retained the existing dynamic-import warning. No Supabase CLI/PostgreSQL is installed, so migration compilation, live account isolation and concurrent RPC behavior remain unverified. Edge deployment still needs trusted public key configuration in `HEY_ACTION_MANDATE_TRUSTED_KEYS`; production key custody and live Supabase secrets are external blockers. Do not call Step 01 complete.
 
+### Step 01 durable evidence invalidation — 2026-10-14
+
+Added account-scoped `SupabaseEvidenceStore` and migration `20261014010000_durable_evidence.sql`; verification now requires the v1 store contract and denies the volatile in-memory adapter unless tests explicitly opt in. Invalidation reasons are machine-safe bounded codes. The live Supabase harness attacks cross-account lookup and direct table access. Evidence adapter and migration invariants have focused unit coverage. Full Node suite **144/144**, scoped ESLint, build and diff check passed. The SQL runtime checks are present but unexecuted because this host lacks Supabase CLI/PostgreSQL.
+
 ## Current integration checkpoint — 2026-10-14
 
 - Steps 36–38 worker branch `codex/resume-steps-36-38-2026-10-14`, commit `91e0603b28122e096b97d990d66619f43d2e83b8`; integrated as `0f35146`, then adversarial context handling was tightened in the current coordinator diff.
 - Steps 43–45 worker branch `codex/resume-steps-43-45-2026-10-14`, implementation `888ebd6c3b7db0a4e325524330f24579590a8fd8` and worker-doc checkpoint `c1bd180`; integrated as `29fc7ce`; explicit empty capture timestamps now fail closed in current coordinator diff.
 - Steps 46–47 worker branch `codex/step46-47-evidence-gates`, commit `185a1f7afdb7e77c7a1e68854c3adc5ce0da8919`; integrated as `a60cfe7` with verifier-backed release evidence gate.
-- Workers checked in; no parallel worker is running. Their Codex references are collaboration task refs `/root/resume_steps_05_08`, `/root/resume_steps_09_11`, `/root/steps46_47_tooling`; persistent standalone task UUIDs are not exposed by this environment.
-- Combined current verification before adding the live SQL RPC harness cases: full suite **139/139**, scoped ESLint, production build, diff check. The harness now contains direct-client permission denial, cross-account reads, stale epoch, revocation, replay, concurrent single-use and failed-chain retry cases; local Supabase execution is pending because the runtime is absent here. Syntax-check/lint the harness, rerun the unit suite, commit/push the ledger update, then continue Step 01 integration and additional code gaps.
+- Active Luna/high worker `/root/durable_event_outbox` is implementing a transactional Supabase outbox adapter on an isolated branch from `c21a48a`; exact branch/worktree/commit pending.
+- Combined current verification: full suite **144/144**, scoped ESLint, production build and diff check. The runtime harness contains direct-client permission denial, cross-account mandate/evidence reads, direct evidence-table denial, stale epoch, revocation, replay, concurrent single-use and failed-chain retry cases; local Supabase execution is pending because the runtime is absent here. Review/commit the current evidence adapter, integrate the outbox worker on check-in, then continue Step 01 integration and remaining code gaps.
 
 ### Steps 43–45 targeted freshness guard — 2026-10-14
 

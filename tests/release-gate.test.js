@@ -25,7 +25,7 @@ async function fixture({ signer = "release-auditor", body = {}, ageMs = 0, store
     now,
     envelope,
     store,
-    options: { trustedKeys: { [signer]: keys.publicKey }, store, maxAgeMs: 30_000 },
+    options: { trustedKeys: { [signer]: keys.publicKey }, store, maxAgeMs: 30_000, allowTestOnlyStore: true },
   };
 }
 
@@ -60,7 +60,7 @@ test("release evidence fails closed when stale, revoked, signed by an unapproved
 
   await t.test("revoked", async () => {
     const data = await fixture();
-    await data.store.invalidate(data.envelope.payload.id, "audit withdrawn");
+    await data.store.invalidate(data.envelope.payload.id, "audit_withdrawn", { accountId });
     const result = await request(data);
     assert.equal(result.recommendation, "NOT_READY");
   });

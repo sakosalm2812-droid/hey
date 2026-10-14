@@ -157,6 +157,34 @@ try {
   });
   assert.ok(crossAccountRevocation.error, "an authenticated user cannot query another account's revocation state");
 
+  const evidenceId = randomUUID();
+  const evidenceBefore = await first.client.rpc("is_hey_evidence_invalidated", {
+    p_account_id: first.userId,
+    p_evidence_id: evidenceId,
+  });
+  assert.equal(evidenceBefore.error, null);
+  assert.equal(evidenceBefore.data, false);
+  const crossAccountEvidence = await second.client.rpc("is_hey_evidence_invalidated", {
+    p_account_id: first.userId,
+    p_evidence_id: evidenceId,
+  });
+  assert.ok(crossAccountEvidence.error, "evidence invalidation lookups cannot cross account boundaries");
+  const directInvalidationRows = await first.client.from("hey_evidence_invalidations").select("evidence_id");
+  assert.ok(directInvalidationRows.error, "clients cannot bypass account-bound invalidation RPCs through table access");
+  const invalidatedEvidence = await first.client.rpc("invalidate_hey_evidence", {
+    p_account_id: first.userId,
+    p_evidence_id: evidenceId,
+    p_reason: "source_withdrawn",
+  });
+  assert.equal(invalidatedEvidence.error, null);
+  assert.equal(invalidatedEvidence.data, true);
+  const evidenceAfter = await first.client.rpc("is_hey_evidence_invalidated", {
+    p_account_id: first.userId,
+    p_evidence_id: evidenceId,
+  });
+  assert.equal(evidenceAfter.error, null);
+  assert.equal(evidenceAfter.data, true);
+
   const directClientConsume = await first.client.rpc("consume_hey_action_mandate_chain", {
     p_account_id: first.userId,
     p_revocation_epoch: 0,
