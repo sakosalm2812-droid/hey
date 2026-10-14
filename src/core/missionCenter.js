@@ -4,7 +4,7 @@ import { executeTask, getExecutionHistory } from "./executionEngine.js";
 import { createPlan } from "./planner.js";
 import { safeStorage } from "../lib/safeStorage.js";
 
-const MISSION_STATES = Object.freeze({
+export const MISSION_STATES = Object.freeze({
   DRAFT: "draft",
   PLANNING: "planning",
   READY: "ready",
@@ -23,7 +23,7 @@ const MISSION_STATES = Object.freeze({
   CANCELLED: "cancelled",
 });
 
-const STEP_STATES = Object.freeze({
+export const STEP_STATES = Object.freeze({
   PENDING: "pending",
   RUNNING: "running",
   COMPLETED: "completed",
@@ -32,6 +32,7 @@ const STEP_STATES = Object.freeze({
   SKIPPED: "skipped",
   CANCELLED: "cancelled",
 });
+const STATE_UPDATE_TOKEN = Symbol("mission-state-transition");
 
 function generateMissionId() {
   return `mission_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -41,16 +42,19 @@ function generateStepId() {
   return `step_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-class MissionCenter {
-  constructor() {
+export class MissionCenter {
+  constructor({ storage = safeStorage, evidenceService = null } = {}) {
     this.missions = new Map();
     this.listeners = new Set();
+    this.activeRuns = new Map();
+    this.storage = storage;
+    this.evidenceService = evidenceService;
     this.load();
   }
 
   load() {
     try {
-      const stored = safeStorage.getItem("hey_missions");
+      const stored = this.storage.getItem("hey_missions");
       if (stored) {
         const parsed = JSON.parse(stored);
         Object.entries(parsed).forEach(([id, mission]) => {
@@ -65,16 +69,24 @@ class MissionCenter {
   save() {
     try {
       const data = Object.fromEntries(this.missions);
-      safeStorage.setItem("hey_missions", JSON.stringify(data));
+      this.storage.setItem("hey_missions", JSON.stringify(data));
     } catch (err) {
       console.warn("Failed to save missions:", err);
     }
   }
 
+  configureEvidenceService(evidenceService) {
+    const create = evidenceService?.createEnvelope || evidenceService?.createEvidenceEnvelope;
+    const verify = evidenceService?.verifyEnvelope || evidenceService?.verifyEvidenceEnvelope;
+    if (typeof create !== "function" || typeof verify !== "function") throw new TypeError("The canonical evidence service must expose envelope creation and verification.");
+    this.evidenceService = evidenceService;
+    return true;
+  }
+
   createMission(goal, options = {}) {
     const id = generateMissionId();
     const plan = createPlan(goal);
-    
+
     const mission = {
       id,
       goal,
@@ -151,13 +163,19 @@ class MissionCenter {
     return this.getAllMissions().filter(m => m.projectId === projectId);
   }
 
-  updateMission(id, updates) {
+  updateMission(id, updates, stateToken = null) {
     const mission = this.missions.get(id);
     if (!mission) return null;
+
+    if (updates?.state === MISSION_STATES.COMPLETED && stateToken !== STATE_UPDATE_TOKEN) {
+      throw new Error("Mission completion must pass the verified mission state transition.");
+    }
+    if (updates?.verification?.status === "verified" && stateToken !== STATE_UPDATE_TOKEN) throw new Error("Verified mission evidence can only be recorded by the mission verifier.");
 
     const updated = {
       ...mission,
       ...updates,
+      state: stateToken === STATE_UPDATE_TOKEN && updates.state !== undefined ? updates.state : mission.state,
       updatedAt: new Date().toISOString(),
     };
 
@@ -176,6 +194,9 @@ class MissionCenter {
     const validTransitions = this.getValidTransitions(mission.state);
     if (!validTransitions.includes(state)) {
       throw new Error(`Invalid state transition: ${mission.state} -> ${state}`);
+    }
+    if (state === MISSION_STATES.COMPLETED && mission.verification?.status !== "verified") {
+      throw new Error("Mission cannot be completed without independently verified postconditions.");
     }
 
     const updates = { state };
@@ -197,7 +218,7 @@ class MissionCenter {
       updates.cancellationReason = reason;
     }
 
-    return this.updateMission(id, updates);
+    return this.updateMission(id, updates, STATE_UPDATE_TOKEN);
   }
 
   getValidTransitions(currentState) {
@@ -208,11 +229,11 @@ class MissionCenter {
       [MISSION_STATES.QUEUED]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLED],
       [MISSION_STATES.RUNNING]: [MISSION_STATES.VERIFYING, MISSION_STATES.AWAITING_PERMISSION, MISSION_STATES.AWAITING_INPUT, MISSION_STATES.PAUSED, MISSION_STATES.BLOCKED_DEPENDENCY, MISSION_STATES.CANCELLING, MISSION_STATES.FAILED],
       [MISSION_STATES.VERIFYING]: [MISSION_STATES.COMPLETED, MISSION_STATES.RECOVERING, MISSION_STATES.PARTIAL, MISSION_STATES.FAILED],
-      [MISSION_STATES.AWAITING_PERMISSION]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING],
-      [MISSION_STATES.AWAITING_INPUT]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING],
-      [MISSION_STATES.PAUSED]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING],
-      [MISSION_STATES.BLOCKED_DEPENDENCY]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING],
-      [MISSION_STATES.RECOVERING]: [MISSION_STATES.VERIFYING, MISSION_STATES.PARTIAL, MISSION_STATES.FAILED],
+      [MISSION_STATES.AWAITING_PERMISSION]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING, MISSION_STATES.CANCELLED],
+      [MISSION_STATES.AWAITING_INPUT]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING, MISSION_STATES.CANCELLED],
+      [MISSION_STATES.PAUSED]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING, MISSION_STATES.CANCELLED],
+      [MISSION_STATES.BLOCKED_DEPENDENCY]: [MISSION_STATES.RUNNING, MISSION_STATES.CANCELLING, MISSION_STATES.CANCELLED],
+      [MISSION_STATES.RECOVERING]: [MISSION_STATES.VERIFYING, MISSION_STATES.PARTIAL, MISSION_STATES.FAILED, MISSION_STATES.CANCELLED],
       [MISSION_STATES.PARTIAL]: [MISSION_STATES.QUEUED, MISSION_STATES.CANCELLED],
       [MISSION_STATES.FAILED]: [MISSION_STATES.QUEUED, MISSION_STATES.CANCELLED],
       [MISSION_STATES.CANCELLING]: [MISSION_STATES.CANCELLED],
@@ -225,36 +246,58 @@ class MissionCenter {
   async startMission(id, executor, options = {}) {
     const mission = this.missions.get(id);
     if (!mission) throw new Error("Mission not found");
+    if (this.activeRuns.has(id)) throw new Error("Mission already has an active execution run.");
     if (mission.state !== MISSION_STATES.QUEUED && mission.state !== MISSION_STATES.READY) {
       throw new Error(`Mission must be queued or ready to start, current: ${mission.state}`);
     }
 
+    const controller = new AbortController();
+    this.activeRuns.set(id, controller);
+    this.updateMission(id, { runStartedAt: new Date().toISOString(), outcome: "running" });
+    if (this.missions.get(id)?.state === MISSION_STATES.READY) this.setMissionState(id, MISSION_STATES.QUEUED);
     this.setMissionState(id, MISSION_STATES.RUNNING);
 
     try {
       const result = await executeTask(mission.goal, executor, {
         ...options,
+        signal: controller.signal,
         maxSteps: mission.steps.length,
       });
 
-      if (result.status === "completed") {
+      if (controller.signal.aborted || this.missions.get(id)?.state === MISSION_STATES.CANCELLING) {
+        if (this.missions.get(id)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancellation raced with task completion; outcome retained as unverified.");
+        this.updateMission(id, { outcome: "unknown_after_cancellation", verification: { status: "unverified", at: new Date().toISOString() } });
+        return { ...result, status: "cancelled", verified: false, cancellationOutcome: "unknown" };
+      }
+      if (result.status === "completed") this.setMissionState(id, MISSION_STATES.VERIFYING);
+      if (result.status === "completed" && result.verified === true) {
+        this.updateMission(id, { outcome: "verified", verification: { status: "verified", at: new Date().toISOString(), completedSteps: result.metadata?.executionHistory?.filter((event) => event.type === "step_completed" && event.verified === true).length || 0 } }, STATE_UPDATE_TOKEN);
         this.setMissionState(id, MISSION_STATES.COMPLETED);
       } else if (result.status === "cancelled") {
         this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancelled during execution");
+        this.updateMission(id, { outcome: "cancelled", verification: { status: "unknown_after_cancellation", at: new Date().toISOString() } });
       } else if (result.status === "blocked") {
         this.setMissionState(id, MISSION_STATES.BLOCKED_DEPENDENCY, result.blockReason);
       } else {
-        this.setMissionState(id, MISSION_STATES.FAILED, result.error);
+        this.setMissionState(id, result.status === "completed" ? MISSION_STATES.PARTIAL : MISSION_STATES.FAILED, result.error || (result.status === "completed" ? "Execution produced no independently verified completed step." : null));
+        this.updateMission(id, { outcome: result.status === "completed" ? "unverified" : "failed", verification: { status: "unverified", at: new Date().toISOString() } });
       }
 
       return result;
     } catch (error) {
-      this.setMissionState(id, MISSION_STATES.FAILED, error.message);
+      const current = this.missions.get(id);
+      if (current?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, current.cancellationReason || "Cancelled during execution");
+      else this.setMissionState(id, MISSION_STATES.FAILED, error.message);
       throw error;
+    } finally {
+      this.activeRuns.delete(id);
+      const current = this.missions.get(id);
+      if (current) this.updateMission(id, { runFinishedAt: new Date().toISOString() });
     }
   }
 
   pauseMission(id) {
+    if (this.activeRuns.has(id)) throw new Error("The current executor cannot durably pause in-flight work; cancellation or an explicit wait state is required.");
     return this.setMissionState(id, MISSION_STATES.PAUSED);
   }
 
@@ -267,21 +310,22 @@ class MissionCenter {
   cancelMission(id, reason = "User cancelled") {
     const mission = this.missions.get(id);
     if (!mission) return null;
+    if ([MISSION_STATES.COMPLETED, MISSION_STATES.CANCELLED, MISSION_STATES.FAILED].includes(mission.state)) return false;
     
-    this.setMissionState(id, MISSION_STATES.CANCELLING, reason);
-    
-    if (mission.abortController) {
-      mission.abortController.abort();
-    }
-
-    setTimeout(() => {
+    const active = this.activeRuns.has(id);
+    if (active) this.setMissionState(id, MISSION_STATES.CANCELLING, reason);
+    else if (this.getValidTransitions(mission.state).includes(MISSION_STATES.CANCELLED)) this.setMissionState(id, MISSION_STATES.CANCELLED, reason);
+    else if (this.getValidTransitions(mission.state).includes(MISSION_STATES.CANCELLING)) {
+      this.setMissionState(id, MISSION_STATES.CANCELLING, reason);
       this.setMissionState(id, MISSION_STATES.CANCELLED, reason);
-    }, 100);
+    } else return false;
+    const controller = this.activeRuns.get(id) || mission.abortController;
+    controller?.abort?.();
 
-    publish("mission.cancelled", { missionId: id, reason });
+    publish(active ? "mission.cancellation_requested" : "mission.cancelled", { missionId: id, reason });
     recordAudit({
-      action: "mission.cancelled",
-      status: "completed",
+      action: active ? "mission.cancellation_requested" : "mission.cancelled",
+      status: active ? "pending" : "completed",
       metadata: { missionId: id, reason },
     });
 
@@ -311,7 +355,9 @@ class MissionCenter {
       failedSteps: 0,
       blockingReason: null,
       cancellationReason: null,
-    });
+      verification: null,
+      outcome: "retry_queued",
+    }, STATE_UPDATE_TOKEN);
 
     return this.startMission(id, executor, options);
   }
@@ -344,38 +390,72 @@ class MissionCenter {
     });
   }
 
-  createCheckpoint(id) {
+  async createCheckpoint(id, { accountId, privateKey, keyId, revocationEpoch = 0, expiresAt } = {}) {
     const mission = this.missions.get(id);
     if (!mission) return null;
+    const createEnvelope = this.evidenceService?.createEnvelope || this.evidenceService?.createEvidenceEnvelope;
+    if (typeof createEnvelope !== "function" || typeof accountId !== "string" || !privateKey || !keyId) {
+      throw new Error("A canonical signed evidence service, authenticated account, and signing key are required for checkpoints.");
+    }
 
-    const checkpoint = {
+    const body = {
+      schemaVersion: 1,
       missionId: id,
       state: mission.state,
       steps: mission.steps.map(s => ({ ...s })),
       currentStepIndex: mission.currentStepIndex,
       completedSteps: mission.completedSteps,
       progress: mission.progress,
+      outcome: mission.outcome || null,
+      verification: mission.verification || null,
       timestamp: new Date().toISOString(),
     };
+    const envelope = await createEnvelope({ accountId, source: { type: "mission_checkpoint", missionId: id }, body, revocationEpoch, offlineAllowed: false, expiresAt }, { privateKey, keyId });
+    const checkpoint = { ...body, evidenceEnvelope: envelope, evidenceStatus: "signed" };
 
     this.updateMission(id, { checkpoint });
     return checkpoint;
   }
 
-  restoreCheckpoint(id) {
+  async restoreCheckpoint(id, { accountId, currentRevocationEpoch, trustedKeys, store, now = Date.now(), online = true, maxAgeMs = Infinity } = {}) {
     const mission = this.missions.get(id);
-    if (!mission || !mission.checkpoint) return false;
+    if (!mission || !mission.checkpoint) return { restored: false, reason: "checkpoint_missing" };
+    if (this.activeRuns.has(id)) return { restored: false, reason: "mission_execution_active" };
 
     const { checkpoint } = mission;
-    this.updateMission(id, {
+    const verifyEnvelope = this.evidenceService?.verifyEnvelope || this.evidenceService?.verifyEvidenceEnvelope;
+    if (typeof verifyEnvelope !== "function" || !checkpoint.evidenceEnvelope) return { restored: false, reason: "signed_checkpoint_verifier_unavailable" };
+    const evidence = await verifyEnvelope(checkpoint.evidenceEnvelope, {
+      schemaVersion: checkpoint.schemaVersion,
+      missionId: checkpoint.missionId,
       state: checkpoint.state,
       steps: checkpoint.steps,
       currentStepIndex: checkpoint.currentStepIndex,
       completedSteps: checkpoint.completedSteps,
       progress: checkpoint.progress,
-    });
+      outcome: checkpoint.outcome,
+      verification: checkpoint.verification,
+      timestamp: checkpoint.timestamp,
+    }, { accountId, currentRevocationEpoch }, { trustedKeys, store, now, online, maxAgeMs });
+    if (evidence?.valid !== true) return { restored: false, reason: evidence?.reason || "checkpoint_evidence_invalid" };
+    if (checkpoint.missionId !== id || !Array.isArray(checkpoint.steps) || checkpoint.currentStepIndex < 0 || checkpoint.currentStepIndex > checkpoint.steps.length || checkpoint.steps.some((step) => !Object.values(STEP_STATES).includes(step.state))) {
+      return { restored: false, reason: "checkpoint_schema_invalid" };
+    }
+    if (checkpoint.state === MISSION_STATES.COMPLETED && checkpoint.verification?.status !== "verified") return { restored: false, reason: "completed_checkpoint_unverified" };
+    const restoredState = [MISSION_STATES.RUNNING, MISSION_STATES.VERIFYING, MISSION_STATES.CANCELLING].includes(checkpoint.state)
+      ? MISSION_STATES.RECOVERING
+      : checkpoint.state;
+    this.updateMission(id, {
+      state: restoredState,
+      steps: checkpoint.steps,
+      currentStepIndex: checkpoint.currentStepIndex,
+      completedSteps: checkpoint.completedSteps,
+      progress: checkpoint.progress,
+      outcome: checkpoint.outcome,
+      verification: checkpoint.verification,
+    }, STATE_UPDATE_TOKEN);
 
-    return true;
+    return { restored: true, state: restoredState, evidence };
   }
 
   getMissionProgress(id) {
@@ -426,9 +506,7 @@ class MissionCenter {
     const mission = this.missions.get(id);
     if (!mission) return false;
 
-    if ([MISSION_STATES.RUNNING, MISSION_STATES.QUEUED].includes(mission.state)) {
-      this.cancelMission(id, "Deleted while running");
-    }
+    if (this.activeRuns.has(id) || [MISSION_STATES.RUNNING, MISSION_STATES.QUEUED, MISSION_STATES.CANCELLING].includes(mission.state)) return false;
 
     this.missions.delete(id);
     this.save();
@@ -510,12 +588,12 @@ export function updateMissionStep(id, stepIndex, updates) {
   return missionCenter.updateStep(id, stepIndex, updates);
 }
 
-export function createMissionCheckpoint(id) {
-  return missionCenter.createCheckpoint(id);
+export function createMissionCheckpoint(id, options) {
+  return missionCenter.createCheckpoint(id, options);
 }
 
-export function restoreMissionCheckpoint(id) {
-  return missionCenter.restoreCheckpoint(id);
+export function restoreMissionCheckpoint(id, options) {
+  return missionCenter.restoreCheckpoint(id, options);
 }
 
 export function getMissionProgress(id) {
@@ -533,7 +611,5 @@ export function deleteMission(id) {
 export function subscribeToMissions(listener) {
   return missionCenter.subscribe(listener);
 }
-
-export { MISSION_STATES, STEP_STATES };
 
 export default missionCenter;
