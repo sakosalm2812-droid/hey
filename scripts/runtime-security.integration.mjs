@@ -145,7 +145,116 @@ try {
   assert.equal(isolatedLimit.error, null);
   assert.equal(isolatedLimit.data, true, "a separate account must have its own rate limit");
 
-  console.log("Local Supabase RLS, trusted transcript writes, account isolation, and concurrent rate-limit tests passed.");
+  const firstEpoch = await first.client.rpc("get_hey_action_mandate_epoch", { p_account_id: first.userId });
+  assert.equal(firstEpoch.error, null);
+  assert.equal(firstEpoch.data, 0);
+
+  const crossAccountEpoch = await second.client.rpc("get_hey_action_mandate_epoch", { p_account_id: first.userId });
+  assert.ok(crossAccountEpoch.error, "an authenticated user cannot read another account's mandate epoch");
+  const crossAccountRevocation = await second.client.rpc("is_hey_action_mandate_revoked", {
+    p_account_id: first.userId,
+    p_mandate_id: randomUUID(),
+  });
+  assert.ok(crossAccountRevocation.error, "an authenticated user cannot query another account's revocation state");
+
+  const directClientConsume = await first.client.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 0,
+    p_mandates: [{ mandate_id: randomUUID(), max_uses: 1, revocation_epoch: 0 }],
+    p_idempotency_key: `client-direct:${randomUUID()}`,
+  });
+  assert.ok(directClientConsume.error, "client roles cannot bypass Edge Function signature verification with the use RPC");
+
+  const revokeId = randomUUID();
+  const revoked = await first.client.rpc("revoke_hey_action_mandate", {
+    p_account_id: first.userId,
+    p_mandate_id: revokeId,
+    p_reason: "runtime security test",
+  });
+  assert.equal(revoked.error, null);
+  assert.equal(revoked.data, true);
+  const revokedRead = await first.client.rpc("is_hey_action_mandate_revoked", {
+    p_account_id: first.userId,
+    p_mandate_id: revokeId,
+  });
+  assert.equal(revokedRead.error, null);
+  assert.equal(revokedRead.data, true);
+
+  const nextEpoch = await first.client.rpc("advance_hey_action_mandate_epoch", { p_account_id: first.userId });
+  assert.equal(nextEpoch.error, null);
+  assert.equal(nextEpoch.data, 1);
+
+  const staleUse = await admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 0,
+    p_mandates: [{ mandate_id: randomUUID(), max_uses: 1, revocation_epoch: 0 }],
+    p_idempotency_key: `stale:${randomUUID()}`,
+  });
+  assert.equal(staleUse.error, null);
+  assert.deepEqual(staleUse.data, { consumed: false, reason: "stale_epoch" });
+
+  const concurrentMandateId = randomUUID();
+  const concurrentMandateUses = await Promise.all(Array.from({ length: 24 }, (_, index) => admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 1,
+    p_mandates: [{ mandate_id: concurrentMandateId, max_uses: 1, revocation_epoch: 1 }],
+    p_idempotency_key: `concurrent:${index}:${randomUUID()}`,
+  })));
+  for (const use of concurrentMandateUses) assert.equal(use.error, null);
+  assert.equal(concurrentMandateUses.filter(({ data }) => data?.consumed === true).length, 1, "concurrent use claims cannot exceed maxUses");
+  assert.equal(concurrentMandateUses.filter(({ data }) => data?.reason === "max_uses").length, 23);
+
+  const replayMandateId = randomUUID();
+  const replayKey = `replay:${randomUUID()}`;
+  const firstReplayUse = await admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 1,
+    p_mandates: [{ mandate_id: replayMandateId, max_uses: 3, revocation_epoch: 1 }],
+    p_idempotency_key: replayKey,
+  });
+  assert.equal(firstReplayUse.error, null);
+  assert.equal(firstReplayUse.data?.consumed, true);
+  const duplicateReplayUse = await admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 1,
+    p_mandates: [{ mandate_id: replayMandateId, max_uses: 3, revocation_epoch: 1 }],
+    p_idempotency_key: replayKey,
+  });
+  assert.equal(duplicateReplayUse.error, null);
+  assert.deepEqual(duplicateReplayUse.data, { consumed: false, reason: "replay" });
+
+  const childMandateId = randomUUID();
+  const rejectedChainKey = `chain-reject:${randomUUID()}`;
+  const rejectedChain = await admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 1,
+    p_mandates: [
+      { mandate_id: childMandateId, max_uses: 1, revocation_epoch: 1 },
+      { mandate_id: concurrentMandateId, max_uses: 1, revocation_epoch: 1 },
+    ],
+    p_idempotency_key: rejectedChainKey,
+  });
+  assert.equal(rejectedChain.error, null);
+  assert.deepEqual(rejectedChain.data, { consumed: false, reason: "max_uses" });
+  const childUseAfterRejectedChain = await admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 1,
+    p_mandates: [{ mandate_id: childMandateId, max_uses: 1, revocation_epoch: 1 }],
+    p_idempotency_key: rejectedChainKey,
+  });
+  assert.equal(childUseAfterRejectedChain.error, null);
+  assert.equal(childUseAfterRejectedChain.data?.consumed, true, "a failed chain cannot consume the earlier child mandate");
+
+  const revokedUse = await admin.rpc("consume_hey_action_mandate_chain", {
+    p_account_id: first.userId,
+    p_revocation_epoch: 1,
+    p_mandates: [{ mandate_id: revokeId, max_uses: 1, revocation_epoch: 0 }],
+    p_idempotency_key: `revoked:${randomUUID()}`,
+  });
+  assert.equal(revokedUse.error, null);
+  assert.deepEqual(revokedUse.data, { consumed: false, reason: "revoked" });
+
+  console.log("Local Supabase RLS, account isolation, trusted transcript writes, rate limits, and mandate authority tests passed.");
 } finally {
   await Promise.all(identities.map((id) => admin.auth.admin.deleteUser(id)));
 }

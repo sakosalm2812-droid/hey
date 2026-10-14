@@ -168,7 +168,7 @@ Verification at this checkpoint: full Node suite **129/129**; scoped ESLint (`sr
 - Steps 43–45 worker branch `codex/resume-steps-43-45-2026-10-14`, implementation `888ebd6c3b7db0a4e325524330f24579590a8fd8` and worker-doc checkpoint `c1bd180`; integrated as `29fc7ce`; explicit empty capture timestamps now fail closed in current coordinator diff.
 - Steps 46–47 worker branch `codex/step46-47-evidence-gates`, commit `185a1f7afdb7e77c7a1e68854c3adc5ce0da8919`; integrated as `a60cfe7` with verifier-backed release evidence gate.
 - Workers checked in; no parallel worker is running. Their Codex references are collaboration task refs `/root/resume_steps_05_08`, `/root/resume_steps_09_11`, `/root/steps46_47_tooling`; persistent standalone task UUIDs are not exposed by this environment.
-- Combined current verification: full suite **139/139**, scoped ESLint, production build, diff check. Commit/push the small follow-up hardening and this ledger update, then continue Step 01 migration/runtime integration and additional real code gaps from the program.
+- Combined current verification before adding the live SQL RPC harness cases: full suite **139/139**, scoped ESLint, production build, diff check. The harness now contains direct-client permission denial, cross-account reads, stale epoch, revocation, replay, concurrent single-use and failed-chain retry cases; local Supabase execution is pending because the runtime is absent here. Syntax-check/lint the harness, rerun the unit suite, commit/push the ledger update, then continue Step 01 integration and additional code gaps.
 
 ### Steps 43–45 targeted freshness guard — 2026-10-14
 
