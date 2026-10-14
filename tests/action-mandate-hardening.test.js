@@ -107,6 +107,7 @@ test("mandate consumption atomically rejects a revocation epoch advanced after p
   let advanced = false;
   const racingStore = {
     contractVersion: MANDATE_STORE_CONTRACT_VERSION,
+    testOnly: true,
     async isRevoked(id) {
       const revoked = await backingStore.isRevoked(id);
       if (!advanced) {
@@ -124,10 +125,35 @@ test("mandate consumption atomically rejects a revocation epoch advanced after p
     resource: "web.search",
     currentRevocationEpoch: 0,
     idempotencyKey: "epoch-race-1",
-  }, { trustedKeys: { root: keys.publicKey }, store: racingStore, now });
+  }, { trustedKeys: { root: keys.publicKey }, store: racingStore, now, allowTestOnlyStore: true });
 
   assert.equal(result.authorized, false);
   assert.match(result.reason, /epoch changed/i);
   assert.equal(backingStore.usage.size, 0, "a stale epoch must not consume any delegation-chain use");
   assert.equal(backingStore.idempotency.size, 0, "a stale epoch must not reserve the replay key");
+});
+
+test("volatile in-memory mandate state is rejected unless a test explicitly opts in", async () => {
+  const now = Date.parse("2026-10-14T12:00:00.000Z");
+  const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const mandate = await issueActionMandate({
+    accountId: "acct-volatile",
+    actions: ["web.search"],
+    resources: ["web.search"],
+    expiresAt: new Date(now + 60_000).toISOString(),
+  }, { privateKey: keys.privateKey, keyId: "root", now });
+  const context = {
+    accountId: "acct-volatile",
+    action: "web.search",
+    resource: "web.search",
+    currentRevocationEpoch: 0,
+    idempotencyKey: "volatile-test-only",
+  };
+  const store = new InMemoryMandateStore();
+  const denied = await verifyAndConsumeMandate(mandate, context, { trustedKeys: { root: keys.publicKey }, store, now });
+  assert.equal(denied.authorized, false);
+  assert.match(denied.reason, /test-only/i);
+  assert.equal(store.usage.size, 0);
+  const allowedForTest = await verifyAndConsumeMandate(mandate, context, { trustedKeys: { root: keys.publicKey }, store, now, allowTestOnlyStore: true });
+  assert.equal(allowedForTest.authorized, true);
 });

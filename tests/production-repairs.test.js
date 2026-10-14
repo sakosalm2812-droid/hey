@@ -51,24 +51,25 @@ test("signed action mandates attenuate delegation and prevent replay, overuse, a
     accountId: "acct-1", actions: ["web.search"], resources: ["web.search"], expiresAt: new Date(now + 30_000).toISOString(), maxUses: 2,
   }, { privateKey: delegate.privateKey, keyId: "delegate", parent, now });
   const context = { accountId: "acct-1", action: "web.search", resource: "web.search", idempotencyKey: "mission:step:1", currentRevocationEpoch: 0 };
-  assert.equal((await verifyAndConsumeMandate(child, context, { trustedKeys, store, now })).authorized, true);
-  assert.match((await verifyAndConsumeMandate(child, context, { trustedKeys, store, now })).reason, /replay/i);
-  assert.equal((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:2" }, { trustedKeys, store, now })).authorized, true);
-  assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:3" }, { trustedKeys, store, now })).reason, /use limit/i);
+  const testStore = { trustedKeys, store, now, allowTestOnlyStore: true };
+  assert.equal((await verifyAndConsumeMandate(child, context, testStore)).authorized, true);
+  assert.match((await verifyAndConsumeMandate(child, context, testStore)).reason, /replay/i);
+  assert.equal((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:2" }, testStore)).authorized, true);
+  assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:3" }, testStore)).reason, /use limit/i);
   await store.revoke(parent.payload.id);
-  assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:4" }, { trustedKeys, store, now })).reason, /revoked/i);
+  assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:4" }, testStore)).reason, /revoked/i);
   await assert.rejects(() => issueActionMandate({ accountId: "acct-1", actions: ["terminal.execute"], resources: ["*"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: delegate.privateKey, keyId: "delegate", parent, now }), /subset/i);
 
   const singleUse = await issueActionMandate({ accountId: "acct-1", actions: ["web.search"], resources: ["web.search"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: root.privateKey, keyId: "root", now });
   const sharedStore = new InMemoryMandateStore();
-  const concurrent = await Promise.all(Array.from({ length: 32 }, (_, index) => verifyAndConsumeMandate(singleUse, { ...context, idempotencyKey: `shared-race:${index}` }, { trustedKeys, store: sharedStore, now })));
+  const concurrent = await Promise.all(Array.from({ length: 32 }, (_, index) => verifyAndConsumeMandate(singleUse, { ...context, idempotencyKey: `shared-race:${index}` }, { trustedKeys, store: sharedStore, now, allowTestOnlyStore: true })));
   assert.equal(concurrent.filter((entry) => entry.authorized).length, 1);
   const forged = { ...singleUse, payload: { ...singleUse.payload, resources: ["*", "web.search"] } };
-  assert.equal((await verifyAndConsumeMandate(forged, context, { trustedKeys, store: sharedStore, now })).authorized, false);
+  assert.equal((await verifyAndConsumeMandate(forged, context, { trustedKeys, store: sharedStore, now, allowTestOnlyStore: true })).authorized, false);
   assert.match((await verifyAndConsumeMandate(singleUse, context, { trustedKeys, store: {}, now })).reason, /durable.*store/i);
-  assert.match((await verifyAndConsumeMandate(singleUse, context, { trustedKeys, store: new InMemoryMandateStore(), now: now + 20_000 })).reason, /expired/i);
+  assert.match((await verifyAndConsumeMandate(singleUse, context, { trustedKeys, store: new InMemoryMandateStore(), now: now + 20_000, allowTestOnlyStore: true })).reason, /expired/i);
   const offlineMandate = await issueActionMandate({ accountId: "acct-1", actions: ["web.search"], resources: ["web.search"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: root.privateKey, keyId: "root", now });
-  assert.match((await verifyAndConsumeMandate(offlineMandate, context, { trustedKeys, store: new InMemoryMandateStore(), now, online: false })).reason, /offline/i);
+  assert.match((await verifyAndConsumeMandate(offlineMandate, context, { trustedKeys, store: new InMemoryMandateStore(), now, online: false, allowTestOnlyStore: true })).reason, /offline/i);
 });
 
 test("action execution enforces mandates when the caller requires them", async () => {

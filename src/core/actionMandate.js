@@ -135,6 +135,7 @@ function hasControlCharacters(value) {
 export class InMemoryMandateStore {
   constructor() {
     this.contractVersion = MANDATE_STORE_CONTRACT_VERSION;
+    Object.defineProperty(this, "testOnly", { value: true, enumerable: true });
     this.usage = new Map();
     this.revoked = new Set();
     this.idempotency = new Set();
@@ -249,9 +250,10 @@ async function verifySignature(mandate, trustedKeys) {
   } catch { return false; }
 }
 
-export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = {}, store, now = Date.now(), online = true } = {}) {
+export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = {}, store, now = Date.now(), online = true, allowTestOnlyStore = false } = {}) {
   const deny = (reason) => ({ authorized: false, reason });
   if (!store || store.contractVersion !== MANDATE_STORE_CONTRACT_VERSION || typeof store.consumeChain !== "function" || typeof store.isRevoked !== "function") return deny("A durable v2 mandate store with atomic revocation-epoch and delegation-chain consumption is required.");
+  if (store.testOnly === true && allowTestOnlyStore !== true) return deny("The in-memory mandate store is test-only; durable authority storage is required.");
   if (!await verifySignature(mandate, trustedKeys)) return deny("Mandate signature is invalid or untrusted.");
   const payload = mandate.payload;
   const expiry = Date.parse(payload.expiresAt);
