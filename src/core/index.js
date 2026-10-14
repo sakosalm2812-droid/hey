@@ -79,6 +79,7 @@ import { processInputFusion, createTextInput, createVoiceInput, createImageInput
 import { createAction, listActions, getAction, approveAction, executeAction, undoAction } from "./actionEngine.js";
 import { issueActionMandate, verifyAndConsumeMandate, InMemoryMandateStore, MandateStoreContract } from "./actionMandate.js";
 import { createEvidenceEnvelope, verifyEvidenceEnvelope, invalidateEvidence, InMemoryEvidenceStore, EvidenceStoreContract, EVIDENCE_ENVELOPE_FORMAT } from "./evidenceIntegrity.js";
+import { evaluateReleaseGate } from "./releaseGate.js";
 import { createMission, getMission, getAllMissions, getActiveMissions, getMissionsByState, getMissionsByProject, updateMission, setMissionState, startMission, pauseMission, resumeMission, cancelMission, retryMission, updateMissionStep, createMissionCheckpoint, restoreMissionCheckpoint, getMissionProgress, getMissionReplay, deleteMission, subscribeToMissions, MISSION_STATES, STEP_STATES } from "./missionCenter.js";
 import { parseNaturalCommand } from "./commandParser.js";
 import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
@@ -602,6 +603,10 @@ import {
       InMemoryEvidenceStore,
       EvidenceStoreContract,
       format: EVIDENCE_ENVELOPE_FORMAT,
+    },
+
+    releaseGate: {
+      evaluate: evaluateReleaseGate,
     },
 
     forge: {
