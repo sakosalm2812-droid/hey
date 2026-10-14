@@ -2,7 +2,7 @@
 
 Updated: 2026-10-14  
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `58830d8d0a2b71849180645ed3c7ebc284964beb`
+Latest verified implementation checkpoint: `9af7533` (integrated code; exact full SHA is in the execution handoff)
 
 ## Status rules
 
@@ -16,7 +16,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 | # | Program subsystem | Status | Repository evidence and remaining proof gap |
 |---:|---|---|---|
-| 01 | Global Foundation / Product Constitution / Shared Contracts | In progress | `actionMandate.js`, `evidenceIntegrity.js`, `eventOutbox.js`; hostile-input/outbox/evidence tests. The v2 mandate-store contract requires atomic current-epoch, revocation, idempotency and delegated-use checks; verification refuses unversioned legacy stores. `action-mandate-hardening.test.js` reproduces an epoch advance after preflight and verifies no use/key is consumed. Durable authority, evidence and outbox adapters plus full mission persistence contract remain unverified. |
+| 01 | Global Foundation / Product Constitution / Shared Contracts | In progress | `actionMandate.js`, `evidenceIntegrity.js`, `eventOutbox.js`; hostile-input/outbox/evidence tests. The v2 mandate-store contract requires atomic current-epoch, revocation, idempotency and delegated-use checks; verification refuses unversioned legacy stores. Volatile in-memory mandate state is denied by default; tests must opt in explicitly. `action-mandate-hardening.test.js` covers stale-epoch atomicity and default rejection of volatile state. Durable authority, evidence and outbox adapters plus full mission persistence contract remain unverified. |
 | 02 | Identity, Accounts, Sessions, Devices & Trust | In progress | `sessionAuthority.js`, `accountScope.js`, `accountState.js`; `steps-02-04-security-runtime.test.js`, `account-scoped-logs.test.js`. Real identity providers, passkeys, service/agent identity, and production transactional store are not wired. |
 | 03 | Trust Kernel, Authorization, Permissions & Action Mandates | In progress | `trustKernelPolicy.js`, `permissionManager.js`, `actionMandate.js`; security and mandate tests. Complete policy rollout/rollback, multi-node revocation propagation, export/retention and production key custody are not evidenced. |
 | 04 | Mission Runtime, Durable Workflows, Checkpointing & Recovery | In progress | `missionCenter.js`, `workflowEngine.js`; `mission-runtime-hardening.test.js`, journey tests. Durable timers/waits, compensation graph, distributed leases, migration and load/concurrency evidence remain. |
@@ -43,12 +43,12 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 | 25 | Video, Audio, Animation & Media Studio | In progress | Studio/generation paths and video brief tests exist. Full timeline/media editing, export codecs, provider/device behavior and output verification remain. |
 | 26 | Software Studio, Websites, Apps, Code & Repository Engineering | In progress | `forgeEngine.js`, code/software surfaces and artifact store exist; Forge and artifact tests. Sandboxed build/test/deploy, repository collaboration and rollback are not established. |
 | 27 | Artifact Graph, Version Control, Collaboration & Universal Export | In progress | `artifactEngine.js`; `artifact-engine-integrity.test.js`, `forge-artifact.test.js`. Artifact identity tampering was fixed at `4d14e4c`; graph collaboration, durable history, export and restore remain. |
-| 28 | Planner, Tasks, Calendar, Meetings, Inbox & Personal Operations | In progress | `planner.js`, `taskEngine.js`, `tasksCalendarEngine.js`, `briefingEngine.js`; journey tests. Real calendar/mail connectors, conflict sync and full operational workflows remain. |
+| 28 | Planner, Tasks, Calendar, Meetings, Inbox & Personal Operations | In progress | `planner.js`, `taskEngine.js`, `tasksCalendarEngine.js`, `briefingEngine.js`; `personal-operations-contracts.test.js` now checks dependency existence, transitive cycles on add/update, and mutation isolation. Calendar/mail connectors, conflict sync and full operational workflows remain. |
 | 29 | Learning, Study, Skill Growth & Personal Development | Incomplete | Teach/study surfaces and generic agent systems exist, but no focused learning-plan, progress, assessment, privacy or efficacy test suite was found. |
 | 30 | Personal Life Systems: Health, Finance, Travel, Home & Relationships | In progress | `healthEngine.js`, `prayerTimes.js`, planner and finance surfaces; limited domain tests. High-stakes evidence, professional boundaries, live integrations, consent and domain certification remain. |
 | 31 | Organizations, Enterprise, Teams, Education & Managed Environments | Incomplete | `workspaceEngine.js`, `workspaceManager.js`, account scoping exist, but no focused organization-admin/data-boundary contract suite or managed-environment integration is evidenced. |
 | 32 | Families, Minors, Household, Social & Community | Incomplete | `communityEngine.js` and family-facing UI exist; dedicated minor safety, guardian transparency, shared/private household and commerce tests are absent. |
-| 33 | Marketplace, Extensions, Skills Economy & Certification | In progress | `developerEngine.js`, `packageValidation.js`; `production-repairs.test.js` covers signed package validation. Marketplace review, certification, isolation, economics and distribution are incomplete. |
+| 33 | Marketplace, Extensions, Skills Economy & Certification | In progress | `developerEngine.js`, `packageValidation.js`; signed-package tests and `extension-install-integrity.test.js` require a trusted installed package, exact manifest/capability agreement, and isolate returned state. Marketplace review, certification, runtime sandboxing, economics and distribution are incomplete. |
 | 34 | API, SDK, Connectors, MCP/A2A & External Interoperability | Incomplete | Connector/provider seams exist, but no stable public SDK/connector interoperability contracts or MCP/A2A conformance tests were found. |
 | 35 | Billing, Plans, Compute Economy, Commerce & Sponsorship | In progress | `accountsBillingEngine.js`, plan/entitlement policy and attention sponsorship suppression; limited entitlement tests. Payments, metering, settlement, commerce, and sponsorship firewall evidence remain. |
 | 36 | Privacy, Data Governance, Trust Center & Personal Constitution | In progress | `trustCenterEngine.js`, account scope, notification redaction and situation privacy filters; security/situation tests. Export/deletion/retention governance and user-facing constitution policy are incomplete. |
@@ -66,7 +66,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 ## Verified integrated checkpoint
 
-At integrated code checkpoint `2e41c59`, focused artifact/capability tests passed; full Node suite passed **113/113**; lint, production build, and `git diff --check` passed. After the Step 01 epoch-race fix at `94ca9f7`, full Node suite passed **114/114**; lint, production build, and `git diff --check` passed. The build skipped sitemap generation because `SITE_URL` is unset and emitted the existing ineffective mixed static/dynamic import warning for `contextManager.js`. These gates verify this local code state only; they do not prove live provider, database, device, external service, or production behavior.
+At integrated code checkpoint `2e41c59`, full Node suite passed **113/113**; at `94ca9f7`, **114/114**; at `09f0622`, **115/115**. After adding Step 01 malformed-store accessor defenses and integrating the targeted Step 28 and Step 33 fixes at `9af7533`, the full Node suite passed **121/121**, `npx eslint src tests scripts` passed, production build passed, and `git diff --check` passed. The build skipped sitemap generation because `SITE_URL` is unset and emitted the existing ineffective mixed static/dynamic import warning for `contextManager.js`. These gates verify this local code state only; they do not prove live provider, database, device, external service, or production behavior.
 
 ## Source completeness limits
 
