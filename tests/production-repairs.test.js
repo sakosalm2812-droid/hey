@@ -6,6 +6,8 @@ import { DeveloperEngine } from "../src/core/developerEngine.js";
 import { packageSigningPayload, versionSatisfies } from "../src/core/packageValidation.js";
 import { calculateNextRun } from "../src/core/scheduleTime.js";
 import { AutomationEngine } from "../src/core/automationEngine.js";
+import { InMemoryMandateStore, issueActionMandate, verifyAndConsumeMandate } from "../src/core/actionMandate.js";
+import { createAction, executeAction, clearActions } from "../src/core/actionEngine.js";
 
 const memoryStorage = () => {
   const data = new Map();
@@ -33,6 +35,52 @@ test("recovery blocks missing or unverifiable adapters and only reports verified
   assert.equal(recovered.success, true);
   assert.equal(recovered.state, "completed");
   registerTrue();
+});
+
+test("signed action mandates attenuate delegation and prevent replay, overuse, and revoked-parent use", async () => {
+  const root = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const delegate = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const trustedKeys = { root: root.publicKey, delegate: delegate.publicKey };
+  const store = new InMemoryMandateStore();
+  const now = Date.parse("2026-10-14T12:00:00Z");
+  const parent = await issueActionMandate({
+    accountId: "acct-1", actions: ["web.search", "memory.read"], resources: ["web.search", "memory.read"],
+    expiresAt: new Date(now + 60_000).toISOString(), maxUses: 3, delegable: true, delegateKeyIds: ["delegate"],
+  }, { privateKey: root.privateKey, keyId: "root", now });
+  const child = await issueActionMandate({
+    accountId: "acct-1", actions: ["web.search"], resources: ["web.search"], expiresAt: new Date(now + 30_000).toISOString(), maxUses: 2,
+  }, { privateKey: delegate.privateKey, keyId: "delegate", parent, now });
+  const context = { accountId: "acct-1", action: "web.search", resource: "web.search", idempotencyKey: "mission:step:1", currentRevocationEpoch: 0 };
+  assert.equal((await verifyAndConsumeMandate(child, context, { trustedKeys, store, now })).authorized, true);
+  assert.match((await verifyAndConsumeMandate(child, context, { trustedKeys, store, now })).reason, /replay/i);
+  assert.equal((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:2" }, { trustedKeys, store, now })).authorized, true);
+  assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:3" }, { trustedKeys, store, now })).reason, /use limit/i);
+  await store.revoke(parent.payload.id);
+  assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:4" }, { trustedKeys, store, now })).reason, /revoked/i);
+  await assert.rejects(() => issueActionMandate({ accountId: "acct-1", actions: ["terminal.execute"], resources: ["*"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: delegate.privateKey, keyId: "delegate", parent, now }), /subset/i);
+
+  const singleUse = await issueActionMandate({ accountId: "acct-1", actions: ["web.search"], resources: ["web.search"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: root.privateKey, keyId: "root", now });
+  const sharedStore = new InMemoryMandateStore();
+  const concurrent = await Promise.all(Array.from({ length: 32 }, (_, index) => verifyAndConsumeMandate(singleUse, { ...context, idempotencyKey: `shared-race:${index}` }, { trustedKeys, store: sharedStore, now })));
+  assert.equal(concurrent.filter((entry) => entry.authorized).length, 1);
+  const forged = { ...singleUse, payload: { ...singleUse.payload, resources: ["*", "web.search"] } };
+  assert.equal((await verifyAndConsumeMandate(forged, context, { trustedKeys, store: sharedStore, now })).authorized, false);
+  assert.match((await verifyAndConsumeMandate(singleUse, context, { trustedKeys, store: {}, now })).reason, /durable.*store/i);
+  assert.match((await verifyAndConsumeMandate(singleUse, context, { trustedKeys, store: new InMemoryMandateStore(), now: now + 20_000 })).reason, /expired/i);
+  const offlineMandate = await issueActionMandate({ accountId: "acct-1", actions: ["web.search"], resources: ["web.search"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: root.privateKey, keyId: "root", now });
+  assert.match((await verifyAndConsumeMandate(offlineMandate, context, { trustedKeys, store: new InMemoryMandateStore(), now, online: false })).reason, /offline/i);
+});
+
+test("action execution enforces mandates when the caller requires them", async () => {
+  clearActions();
+  const action = createAction({ title: "Search", tool: "web.search", permission: "web.search", riskLevel: "low" });
+  let executed = false;
+  const result = await executeAction(action.id, async () => { executed = true; return { success: true, verified: true }; }, {
+    user: { id: "acct-1", plan: "free", permissions: ["web.search"] }, confirmed: true, requireMandate: true,
+  });
+  assert.equal(result.success, false);
+  assert.equal(executed, false);
+  assert.match(result.error, /mandate is required/i);
 });
 
 test("package validation fails closed, verifies real signatures and revalidates before install", async () => {

@@ -1,6 +1,7 @@
 import { recordAudit } from "./auditLog.js";
 import { authorizeExecution } from "./permissionManager.js";
 import { publish } from "./eventBus.js";
+import { verifyAndConsumeMandate } from "./actionMandate.js";
 
 const actions = new Map();
 
@@ -23,6 +24,27 @@ export function listActions(status) {
 
 export function getAction(actionId) {
   return actions.get(actionId) || null;
+}
+
+async function verifyActionMandate(action, options) {
+  if (!options.mandate && !options.requireMandate) return { authorized: true };
+  if (!options.mandate) return { authorized: false, reason: "A signed action mandate is required." };
+  try {
+    return await verifyAndConsumeMandate(options.mandate, {
+      accountId: options.user?.id || options.user?.userId || options.user?.accountId,
+      action: action.tool || action.permission,
+      resource: options.resource || action.permission,
+      idempotencyKey: options.idempotencyKey || action.id,
+      currentRevocationEpoch: options.currentRevocationEpoch,
+    }, {
+      trustedKeys: options.trustedMandateKeys,
+      store: options.mandateStore,
+      now: options.now,
+      online: options.online,
+    });
+  } catch {
+    return { authorized: false, reason: "Mandate verification failed; execution was denied." };
+  }
 }
 
 export function approveAction(actionId) {
@@ -49,6 +71,13 @@ export async function executeAction(actionId, handler, options = {}) {
     confirmed: options.confirmed === true,
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
+  const mandate = await verifyActionMandate(action, options);
+  if (!mandate.authorized) return { success: false, error: mandate.reason, action, mandate };
+  // Mandate verification is asynchronous; reserve the action only after it
+  // completes, then re-check admission to prevent concurrent double dispatch.
+  if (action.status !== "queued" && action.status !== "approved") {
+    return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
+  }
   if (typeof handler !== "function") return { success: false, error: "No action handler registered." };
   action.status = "running";
   action.updatedAt = new Date();
@@ -84,6 +113,14 @@ export async function undoAction(actionId, handler, options = {}) {
     confirmed: options.confirmed === true,
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
+  action.status = "undo_authorizing";
+  action.updatedAt = new Date();
+  const mandate = await verifyActionMandate(action, options);
+  if (!mandate.authorized) {
+    action.status = "completed";
+    action.updatedAt = new Date();
+    return { success: false, error: mandate.reason, action, mandate };
+  }
   action.status = "undoing";
   action.updatedAt = new Date();
   publish("action.updated", action);

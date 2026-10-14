@@ -12,11 +12,23 @@ Branch: `codex/production-readiness-2026-10-13`
 
 ### Verification evidence
 
-- `node --test tests/production-repairs.test.js`: 5 passed, 0 failed.
-- `npm test`: 59 passed, 0 failed.
+- `node --test tests/production-repairs.test.js`: 7 passed, 0 failed (expanded later in this same work session).
+- `npm test`: 61 passed, 0 failed.
 - `npm run lint`: passed.
 - `npm run build`: passed. Sitemap generation was skipped because `SITE_URL` is unset; Vite reported the existing mixed static/dynamic import warning for `src/core/contextManager.js`.
-- `git diff --check`: passed before ledger addition.
+- `git diff --check`: passed.
+
+## Step 01: Global Foundation / Product Constitution / Shared Contracts
+
+Status: **in progress**. The first shared authority contract is implemented in `src/core/actionMandate.js` and exposed through the existing `hey.actions` execution path and `hey.mandates` API. It provides versioned canonical serialization, Ed25519 signing/verification, account/action/resource binding, bounded delegation with signing-key attenuation, expiry, max-use enforcement, revocation and epoch checks, offline opt-in, replay prevention, and atomic use consumption across the delegation chain. A durable store contract is explicit; the in-memory adapter is for local runtime/test use and is not represented as durable production storage. Action and undo admission re-checks after async mandate verification to prevent double execution.
+
+- Step 01 focused tests: 7 passed, including 32-way shared-store use race, tamper, replay, expiry, revocation, delegation attenuation, offline denial, missing store, and execution-boundary denial.
+- Whole suite after Step 01 slice: 61 passed, 0 failed.
+- Lint and production build: passed; same sitemap input and existing chunking warning noted above.
+- Benchmark: 1,000 signature verifications and atomic consumes; 1000/1000 authorized, p50 0.353 ms, p95 0.606 ms, about 2,457 ops/sec in this environment. This measures the in-memory adapter only; durable database latency/concurrency is not measured.
+- Adversarial regression: asynchronous mandate verification initially opened a double-dispatch race in the action layer; the existing concurrent action test reproduced a hang/double admission. Admission now rechecks after async authorization, and `tests/security-regressions.test.js` passes 10/10.
+- Remaining independently implementable Step 01 items: evidence integrity/freshness/invalidation contract, mission persistence/recovery schema contract, policy validation, malformed input/property-based cases, and improved independent runtime verification. Do not advance the 47-step sequence until these are implemented and verified.
+- External Step 01 constraints: real production authority storage/transaction semantics and deployment signing keys need the connected HEY backend and owner-managed keys; continue defining adapters and conformance tests without claiming them verified.
 
 ### Current checkpoint
 
@@ -24,4 +36,4 @@ Local repair commit SHA: `714f3461eb28c0c0cae84937afbab62fe78b8352`.
 
 GitHub development-branch sync commit SHA: `9890ce4f5228c065ab8d6c9bf77cb7919cfb3532` (`sakosalm2812-droid/hey`, branch verified at this SHA). Its tree contains the same repair source/tests as the local repair commit; the SHA differs because the local checkout's parent commit did not match the branch's GitHub commit object. GitHub combined status returned no status checks yet.
 
-Next: Step 01 — Global Foundation / Product Constitution / Shared Contracts. Begin by extending canonical shared authority, mandate, evidence, and mission persistence contracts in existing systems; no separate identity, permission, or mission authority is to be introduced. The 47-step program remains incomplete.
+Next: continue Step 01 in this branch; no separate identity, permission, or mission authority is to be introduced. The 47-step program remains incomplete.
