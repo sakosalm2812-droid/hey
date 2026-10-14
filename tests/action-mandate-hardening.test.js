@@ -74,3 +74,43 @@ test("mandate authority read failures fail closed instead of escaping verificati
   assert.equal(result.authorized, false);
   assert.match(result.reason, /storage failed/i);
 });
+
+test("mandate consumption atomically rejects a revocation epoch advanced after preflight", async () => {
+  const now = Date.parse("2026-10-14T12:00:00.000Z");
+  const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const mandate = await issueActionMandate({
+    accountId: "acct-epoch-race",
+    actions: ["web.search"],
+    resources: ["web.search"],
+    revocationEpoch: 0,
+    maxUses: 2,
+    expiresAt: new Date(now + 60_000).toISOString(),
+  }, { privateKey: keys.privateKey, keyId: "root", now });
+  const backingStore = new InMemoryMandateStore();
+  backingStore.setCurrentRevocationEpoch("acct-epoch-race", 0);
+  let advanced = false;
+  const racingStore = {
+    async isRevoked(id) {
+      const revoked = await backingStore.isRevoked(id);
+      if (!advanced) {
+        advanced = true;
+        backingStore.setCurrentRevocationEpoch("acct-epoch-race", 1);
+      }
+      return revoked;
+    },
+    consumeChain: (...args) => backingStore.consumeChain(...args),
+  };
+
+  const result = await verifyAndConsumeMandate(mandate, {
+    accountId: "acct-epoch-race",
+    action: "web.search",
+    resource: "web.search",
+    currentRevocationEpoch: 0,
+    idempotencyKey: "epoch-race-1",
+  }, { trustedKeys: { root: keys.publicKey }, store: racingStore, now });
+
+  assert.equal(result.authorized, false);
+  assert.match(result.reason, /epoch changed/i);
+  assert.equal(backingStore.usage.size, 0, "a stale epoch must not consume any delegation-chain use");
+  assert.equal(backingStore.idempotency.size, 0, "a stale epoch must not reserve the replay key");
+});

@@ -136,23 +136,32 @@ export class InMemoryMandateStore {
     this.usage = new Map();
     this.revoked = new Set();
     this.idempotency = new Set();
+    this.revocationEpochs = new Map();
     this.transaction = Promise.resolve();
   }
 
   async isRevoked(mandateId) { return this.revoked.has(mandateId); }
   async revoke(mandateId) { this.revoked.add(mandateId); }
-  async consumeUse({ mandateId, maxUses, idempotencyKey }) {
-    return this.consumeChain([{ mandateId, maxUses }], idempotencyKey);
+  setCurrentRevocationEpoch(accountId, epoch) {
+    if (typeof accountId !== "string" || !accountId.trim() || !Number.isSafeInteger(epoch) || epoch < 0) throw new TypeError("A valid account and non-negative revocation epoch are required.");
+    this.revocationEpochs.set(accountId, epoch);
+  }
+  async consumeUse({ mandateId, maxUses, idempotencyKey, accountId, revocationEpoch }) {
+    return this.consumeChain([{ mandateId, maxUses, revocationEpoch }], idempotencyKey, { accountId, revocationEpoch });
   }
 
-  async consumeChain(mandates, idempotencyKey) {
-    // A durable production adapter must implement this transactionally across
-    // every mandate in a delegation chain.
+  async consumeChain(mandates, idempotencyKey, { accountId, revocationEpoch } = {}) {
+    // A durable production adapter must check the account epoch, all revocation
+    // records, use counters, and replay keys in the same transaction.
     let release;
     const prior = this.transaction;
     this.transaction = new Promise((resolve) => { release = resolve; });
     await prior;
     try {
+      if (!Array.isArray(mandates) || mandates.length === 0 || typeof accountId !== "string" || !accountId.trim() || !Number.isSafeInteger(revocationEpoch) || revocationEpoch < 0) {
+        return { consumed: false, reason: "invalid_context" };
+      }
+      if ((this.revocationEpochs.get(accountId) ?? 0) !== revocationEpoch) return { consumed: false, reason: "stale_epoch" };
       if (mandates.some(({ mandateId }) => this.revoked.has(mandateId))) return { consumed: false, reason: "revoked" };
       const replayKeys = mandates.map(({ mandateId }) => `${mandateId}:${idempotencyKey}`);
       if (replayKeys.some((key) => this.idempotency.has(key))) return { consumed: false, reason: "replay" };
@@ -170,7 +179,7 @@ export class InMemoryMandateStore {
 export class MandateStoreContract {
   async isRevoked() { throw new Error("Implement isRevoked(mandateId) against durable authority storage."); }
   async revoke() { throw new Error("Implement revoke(mandateId) against durable authority storage."); }
-  async consumeChain() { throw new Error("Implement atomic consumeChain(mandates, idempotencyKey) in one durable transaction."); }
+  async consumeChain() { throw new Error("Implement atomic consumeChain(mandates, idempotencyKey, { accountId, revocationEpoch }) in one durable transaction. Recheck current account epoch, revocation, idempotency, and every delegation-chain use counter before committing any increment."); }
 }
 
 export async function issueActionMandate(input, { privateKey, keyId, parent = null, now = Date.now() } = {}) {
@@ -278,13 +287,19 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
   if (typeof idempotencyKey !== "string" || !idempotencyKey.trim() || idempotencyKey.length > 256 || [...idempotencyKey].some((character) => character.codePointAt(0) < 32 || character.codePointAt(0) === 127)) return deny("A stable idempotency key up to 256 printable characters is required.");
   let result;
   try {
-    result = await store.consumeChain(chain.map(({ payload: item }) => ({ mandateId: item.id, maxUses: item.maxUses })), idempotencyKey.trim());
+    result = await store.consumeChain(
+      chain.map(({ payload: item }) => ({ mandateId: item.id, maxUses: item.maxUses, revocationEpoch: item.revocationEpoch })),
+      idempotencyKey.trim(),
+      { accountId: context.accountId, revocationEpoch: context.currentRevocationEpoch },
+    );
   } catch {
     return deny("Mandate authority storage failed; execution was denied.");
   }
   if (result.consumed) return { authorized: true, mandateId: payload.id, remainingUses: result.remainingUses };
   if (result.reason === "replay") return deny("Mandate request replay detected.");
   if (result.reason === "revoked") return deny("Mandate was revoked before atomic use consumption.");
+  if (result.reason === "stale_epoch") return deny("Mandate revocation epoch changed before atomic use consumption.");
+  if (result.reason === "invalid_context") return deny("Atomic mandate storage rejected the authority context.");
   return deny("Mandate use limit reached.");
 }
 
