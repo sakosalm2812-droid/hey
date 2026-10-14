@@ -32,6 +32,16 @@ const ARTIFACT_STATUS = {
   ARCHIVED: "archived",
 };
 
+const ARTIFACT_UPDATE_FIELDS = new Set([
+  "title",
+  "description",
+  "content",
+  "metadata",
+  "status",
+  "branchName",
+  "tags",
+]);
+
 class ArtifactEngine {
   constructor() {
     this.artifacts = new Map();
@@ -110,6 +120,25 @@ class ArtifactEngine {
       throw new Error(`Artifact not found: ${artifactId}`);
     }
 
+    if (!updates || typeof updates !== "object" || Array.isArray(updates)
+      || (Object.getPrototypeOf(updates) !== Object.prototype && Object.getPrototypeOf(updates) !== null)) {
+      throw new TypeError("Artifact updates must be a plain object");
+    }
+
+    for (const key of Reflect.ownKeys(updates)) {
+      const descriptor = Object.getOwnPropertyDescriptor(updates, key);
+      if (typeof key !== "string" || !descriptor || !Object.hasOwn(descriptor, "value")) {
+        throw new TypeError("Artifact updates must contain only string data fields");
+      }
+      if (!ARTIFACT_UPDATE_FIELDS.has(key)) {
+        throw new Error(`Artifact field cannot be updated: ${key}`);
+      }
+    }
+
+    if (Object.hasOwn(updates, "status") && !Object.values(ARTIFACT_STATUS).includes(updates.status)) {
+      throw new Error(`Invalid artifact status: ${updates.status}`);
+    }
+
     const previousVersion = { ...artifact };
 
     const updated = {
@@ -120,7 +149,7 @@ class ArtifactEngine {
       previousContent: artifact.content,
     };
 
-    if (updates.content && updates.branchName) {
+    if (Object.hasOwn(updates, "content") && Object.hasOwn(updates, "branchName")) {
       updated.branchName = updates.branchName;
     }
 
