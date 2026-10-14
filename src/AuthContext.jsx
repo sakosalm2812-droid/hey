@@ -4,6 +4,7 @@ import { resolveAccountPlan } from './lib/accountRecords.js'
 import { enablePersistenceSync, disablePersistenceSync, hydrateFromSupabase } from './lib/persistenceSync.js'
 import { createAuthLifecycle } from './lib/authLifecycle.js'
 import { resetAccountState } from './core/accountState.js'
+import { setLogScope } from './core/heyLogger.js'
 
 const AuthContext = createContext(null)
 
@@ -14,7 +15,12 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const account = createAuthLifecycle({
       client: supabase,
-      onState: (changes) => setState((previous) => ({ ...previous, ...changes })),
+      onState: (changes) => {
+        if (Object.hasOwn(changes, 'session')) {
+          setLogScope(changes.session?.user?.id || null)
+        }
+        setState((previous) => ({ ...previous, ...changes }))
+      },
       resetAccountState,
       hydrate: hydrateFromSupabase,
       enableSync: enablePersistenceSync,

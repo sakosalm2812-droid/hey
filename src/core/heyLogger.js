@@ -1,11 +1,16 @@
 import { subscribe } from "./eventBus.js";
 
-const LOG_KEY = "hey_log";
+const LOG_KEY_PREFIX = "hey_log:";
 const MAX_ENTRIES = 200;
+let activeScope = "anonymous";
 
-function readLog() {
+function scopeKey(scope = activeScope) {
+  return `${LOG_KEY_PREFIX}${encodeURIComponent(String(scope || "anonymous"))}`;
+}
+
+function readLog(scope = activeScope) {
   try {
-    const raw = localStorage.getItem(LOG_KEY);
+    const raw = localStorage.getItem(scopeKey(scope));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -13,9 +18,9 @@ function readLog() {
   }
 }
 
-function writeLog(entries) {
+function writeLog(entries, scope = activeScope) {
   try {
-    localStorage.setItem(LOG_KEY, JSON.stringify(entries.slice(-MAX_ENTRIES)));
+    localStorage.setItem(scopeKey(scope), JSON.stringify(entries.slice(-MAX_ENTRIES)));
   } catch {
     /* storage unavailable */
   }
@@ -31,6 +36,22 @@ export function log(kind, message, data) {
   const next = [...readLog(), entry].slice(-MAX_ENTRIES);
   writeLog(next);
   return entry;
+}
+
+/** Keep local diagnostic history separate when people share a browser profile. */
+export function setLogScope(accountId) {
+  const nextScope = accountId ? `account:${accountId}` : "anonymous";
+  if (nextScope === activeScope) return;
+  activeScope = nextScope;
+  try {
+    window.dispatchEvent(new CustomEvent("hey:log-scope-changed", { detail: { scope: nextScope } }));
+  } catch {
+    /* Scope changes still take effect when DOM events are unavailable. */
+  }
+}
+
+export function getLogScope() {
+  return activeScope;
 }
 
 export function getLog() {
@@ -83,21 +104,33 @@ export function bootLogger() {
   let timer = null;
 
   function flush() {
-    const snapshot = [...pending];
+    const snapshot = pending;
     pending = [];
     if (snapshot.length === 0) return;
-    const next = [...readLog(), ...snapshot].slice(-MAX_ENTRIES);
-    writeLog(next);
+    const byScope = new Map();
+    for (const entry of snapshot) {
+      const group = byScope.get(entry.scope) || [];
+      group.push(entry.value);
+      byScope.set(entry.scope, group);
+    }
+    for (const [scope, scopedEntries] of byScope) {
+      writeLog([...readLog(scope), ...scopedEntries].slice(-MAX_ENTRIES), scope);
+    }
   }
 
   const stops = Object.entries(EVENT_LABELS).map(([eventName, label]) =>
     subscribe(eventName, (payload) => {
-      pending.push({
-        at: new Date().toISOString(),
-        kind: label,
-        message: label,
-        data: payload == null ? null : payload,
-      });
+      // Event payloads may contain prompts, transcripts, or memory values. Keep
+      // the diagnostic stream useful without persisting user content.
+      const safeData = {};
+      for (const key of ["requestId", "actionId", "stepId", "tool", "status", "riskLevel", "verified"]) {
+        const value = payload?.[key];
+        if (["string", "number", "boolean"].includes(typeof value)) safeData[key] = value;
+      }
+      pending.push({ scope: activeScope, value: {
+        at: new Date().toISOString(), kind: label, message: label,
+        data: Object.keys(safeData).length ? safeData : null,
+      } });
       if (timer) return;
       timer = setTimeout(() => {
         timer = null;

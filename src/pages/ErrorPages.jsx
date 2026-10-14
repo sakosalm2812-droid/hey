@@ -2,9 +2,9 @@ import { Link } from "react-router-dom";
 
 const ERROR_PAGES = {
   401: ["401", "You need to sign in.", "This area is reserved for your account. Please sign in to continue.", "If you just signed in, try refreshing the page."],
-  403: ["403", "You do not have access.", "Your account is not allowed to open this area. If you believe this is a mistake, check your permissions or invite me to review them.", "HEY keeps private spaces locked unless you grant access."],
+  403: ["403", "You do not have access.", "Your account is not allowed to open this area. If you believe this is a mistake, check your permissions or contact the workspace owner.", "HEY keeps private spaces locked unless you grant access."],
   429: ["429", "A little too fast.", "HEY has hit the rate limit for a moment. Take a breath and try again shortly.", "Rapid requests are throttled to keep your data safe and the system stable."],
-  500: ["500", "Something went wrong.", "An unexpected error interrupted the request. Your data was not lost — try again in a moment.", "If this keeps happening, open Settings and review the system status."],
+  500: ["500", "Something went wrong.", "An unexpected error interrupted the request. Check whether the action completed before retrying.", "If this keeps happening, open Settings and review the system status."],
 };
 
 export function ErrorState({ code, title, message, hint }) {

@@ -7,11 +7,13 @@ import { getLog, clearLog, downloadLog } from "./core/heyLogger.js";
 import { getNotifications, unreadCount } from "./core/notificationCenter.js";
 import { loadVoiceSettings } from "./core/heyVoiceSettings.js";
 import { computePrayerTimes, nextPrayer, formatTime } from "./core/prayerTimes.js";
+import { listAuditEntries } from "./core/auditLog.js";
 
 export default function DebugPage() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [events, setEvents] = useState([]);
   const [execution, setExecution] = useState(null);
+  const [auditEntries, setAuditEntries] = useState(() => listAuditEntries(25));
   const [logs, setLogs] = useState(() => getLog());
   const [online, setOnline] = useState(() => navigator.onLine);
   const [swStatus, setSwStatus] = useState("checking");
@@ -37,6 +39,7 @@ export default function DebugPage() {
     }));
     const stopLogs = setInterval(() => setLogs(getLog()), 2000);
     const stopNotifications = subscribe("notification.updated", () => setNotificationCount(unreadCount()));
+    const stopAudit = subscribe("audit.recorded", () => setAuditEntries(listAuditEntries(25)));
     const goOnline = () => setOnline(true);
     const goOffline = () => setOnline(false);
     window.addEventListener("online", goOnline);
@@ -52,10 +55,18 @@ export default function DebugPage() {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
       clearInterval(stopLogs);
       stopNotifications();
+      stopAudit();
       window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
     };
   }, []);
+
+  useEffect(() => {
+    setEvents([]);
+    setExecution(null);
+    setLogs(getLog());
+    setAuditEntries(listAuditEntries(25));
+  }, [user?.id, loading]);
 
   const voiceSettings = useMemo(() => loadVoiceSettings(), []);
   const prayer = useMemo(() => {
@@ -160,6 +171,26 @@ export default function DebugPage() {
                 <span className="ml-3">{new Date(item.at).toLocaleTimeString()}</span>
               </div>
             )) : <p className="text-sm text-[var(--text-secondary)]">No events recorded in this session.</p>}
+          </div>
+        </article>
+      </section>
+
+      <section className="mt-4">
+        <article className="glass-card p-6">
+          <h2 className="text-xl text-[var(--text-primary)]">Security and action receipts</h2>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">Account-scoped audit entries. Private prompt, memory, and transcript contents are not shown here.</p>
+          <div className="mt-4 grid gap-2">
+            {auditEntries.length ? auditEntries.map((entry) => (
+              <div key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/10 py-2 text-sm text-[var(--text-secondary)]">
+                <strong className="text-[var(--text-primary)]">{entry.action}</strong>
+                <span>{entry.status}</span>
+                <span>{entry.riskLevel} risk</span>
+                {entry.tool && <span>{entry.tool}</span>}
+                <time className="ml-auto">
+                  {Number.isNaN(new Date(entry.createdAt).getTime()) ? "Unknown time" : new Date(entry.createdAt).toLocaleString()}
+                </time>
+              </div>
+            )) : <p className="text-sm text-[var(--text-secondary)]">No audit entries are available for this account yet.</p>}
           </div>
         </article>
       </section>
