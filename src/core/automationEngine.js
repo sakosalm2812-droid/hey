@@ -100,6 +100,7 @@ class AutomationEngine {
         const parsed = JSON.parse(stored);
         if (parsed.recorders) Object.entries(parsed.recorders).forEach(([k, v]) => this.recorders.set(k, v));
         if (parsed.workflows) Object.entries(parsed.workflows).forEach(([k, v]) => this.workflows.set(k, v));
+        if (parsed.versions) Object.entries(parsed.versions).forEach(([k, v]) => this.versions.set(k, v));
         if (parsed.runs) Object.entries(parsed.runs).forEach(([k, v]) => this.runs.set(k, v));
         if (parsed.occurrences) Object.entries(parsed.occurrences).forEach(([k, v]) => this.occurrences.set(k, v));
         if (parsed.dedupKeys) parsed.dedupKeys.forEach((key) => this.dedupKeys.add(key));
@@ -114,6 +115,7 @@ class AutomationEngine {
       this.storage.setItem("hey_automation", JSON.stringify({
         recorders: Object.fromEntries(this.recorders),
         workflows: Object.fromEntries(this.workflows),
+        versions: Object.fromEntries(this.versions),
         runs: Object.fromEntries(this.runs),
         occurrences: Object.fromEntries(this.occurrences),
         dedupKeys: Array.from(this.dedupKeys),
@@ -318,7 +320,9 @@ class AutomationEngine {
       id: versionId,
       workflowId,
       version: workflow.version,
-      definition: { ...workflow },
+      // Workflow definitions are persisted as JSON, so snapshot the complete
+      // JSON-compatible shape instead of retaining mutable nested references.
+      definition: JSON.parse(JSON.stringify(workflow)),
       createdAt: new Date().toISOString(),
       createdBy: "user",
     };

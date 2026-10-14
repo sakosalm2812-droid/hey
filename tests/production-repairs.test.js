@@ -145,3 +145,23 @@ test("workflow schedule rejects invalid definitions and marks failed runs accura
   assert.equal(engine.getOccurrence(occurrence.id).state, "failed");
   assert.equal(engine.getAllRuns().at(-1).success, false);
 });
+
+test("automation workflow versions remain immutable and survive an engine restart", () => {
+  const storage = memoryStorage();
+  const engine = new AutomationEngine({ storage, recoverOnStart: false });
+  const workflow = engine.createWorkflow({
+    name: "versioned",
+    steps: [{ id: "step-1", input: { nested: { value: "original" } } }],
+  });
+
+  const version = engine.createVersion(workflow.id);
+  workflow.steps[0].input.nested.value = "mutated";
+  engine.updateWorkflow(workflow.id, { name: "updated" });
+
+  const restoredEngine = new AutomationEngine({ storage, recoverOnStart: false });
+  const restoredVersions = restoredEngine.getVersions(workflow.id);
+  assert.equal(restoredVersions.length, 1);
+  assert.equal(restoredVersions[0].id, version.id);
+  assert.equal(restoredVersions[0].definition.name, "versioned");
+  assert.equal(restoredVersions[0].definition.steps[0].input.nested.value, "original");
+});
