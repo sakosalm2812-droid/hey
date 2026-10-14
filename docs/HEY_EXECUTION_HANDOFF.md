@@ -8,7 +8,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 ## Current checkpoint and branch
 
 - Working branch: `codex/resume-emergency-2026-10-14`.
-- Latest coordinator commit: `4d17e6451d677c7933e98f93e7f22430b6b8a970` (Steps 15–18 merge; locally verified, pending push with this handoff refresh).
+- Latest coordinator commit: `eb7b8c24bab90eea41fb81073ac532df5effd0be` (Steps 15–18 adversarial fix; pushed and verified).
 - Base: `origin/codex/production-readiness-2026-10-13` at `97a4f3856398505ffa4dcd4d78348098699d4890` (parent `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`).
 - Verified common checkpoint recorded in `HEY_BUILD_PROGRESS.md`: `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
 - Branch commits after that checkpoint: `4369a3f` event outbox; `ebf36be` evidence-integrity contract; `fa54f27` defensive event snapshots; `4ae2d58` integration ledger; `97a4f38` worker completion checkpoints.
@@ -33,7 +33,8 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
   - Steps 15–18: `codex/par-steps-15-18` at `1a95a149f10ed45fd7d2d3ef32b0effdd4e71154`; integrated locally at coordinator merge `4d17e64`. PR #1 remains draft/open/unmerged; worker focused 6/6 and full 72/72; coordinator after integration 107/107 plus lint/build/diff-check.
   - Steps 05–08: `codex/resume-steps-05-08-2026-10-14` at `6549db09ebbfba7398f8d6106d527e752e05bcae`; integrated locally by merge `205a628`. Agent timeout enforcement and abort behavior verified; focused 4/4, full 69/69, lint/build/diff-check passed on worker branch.
   - Steps 19–21: `codex/resume-steps-19-21-2026-10-14` at `854eccfd0db1c8ed56b0f3608d2d7392d7ef6dff`; integrated locally by merge `c6acc3f`. Automation workflow version persistence and immutable snapshots; focused 8/8, full 69/69, lint/diff-check passed on worker branch.
-  - Steps 09–11, 22–27: branches exist but current useful commits were not yet recovered; prior ledger labels work active/completion-pass but no later GitHub commits were found at recovery. Original worker task/thread IDs are not exposed in this session, so only branch checkpoints are resumable here.
+  - Steps 09–11: resumed worker active on `codex/resume-steps-09-11-2026-10-14`, based on `6f06e01`; worktree `.../work/hey-steps-09-11`. No commit yet. The old branch remains at the shared baseline; original worker task ID is unavailable.
+  - Steps 22–27: branch exists but current useful commits were not recovered; original worker/task IDs are not exposed in this session.
   - Steps 28–30, 31–35, 36–38, 39–42, 43–45: prepared branches exist at `3320c8c`; prior ledger shows no assigned worker.
   - Step 46–47 integration/enforcement: no separate branch or task recovered.
 - Prior ledger says available engineering agents used GPT-6 Luna (`gpt-6-luna`, high reasoning); it also explicitly says no Codex task-creation/model-picker MCP was available and no UI model picker change was made. Do not claim model selection via UI.
@@ -43,7 +44,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 - Existing `HEY_BUILD_PROGRESS.md` records focused repair tests 7/7, earlier full suite 61/61, lint/build pass, plus Step 01 mandate, evidence-integrity and event-outbox tests. Later progress records 66/66 full suite before the latest coordinator snapshot guard; see the ledger for exact scope.
 - Worker PR descriptions report their local verification. No PR changes have been merged into the coordinator branch during this recovery; PR #1's feature branch now contains the 97a4f38 coordinator base.
 - `main` contains no handoff document; this file is the continuity source for the current coordinator branch.
-- Replacement coordinator verification on `ae32aeb`: `npm ci` installed 263 packages, audit reported 0 vulnerabilities; `npm test` passed 68/68; lint/build/diff-check passed. At integrated local HEAD `c6acc3f`, `npm test` passed 88/88; after Steps 12–14, 101/101; after Steps 15–18, 107/107. Lint/build/diff-check passed after each integration. Build skips sitemap generation because `SITE_URL` is unset and reports the existing `contextManager.js` mixed static/dynamic import warning.
+- Replacement coordinator verification on `ae32aeb`: `npm ci` installed 263 packages, audit reported 0 vulnerabilities; `npm test` passed 68/68; lint/build/diff-check passed. At integrated local HEAD `c6acc3f`, `npm test` passed 88/88; after Steps 12–14, 101/101; after Steps 15–18, 107/107. Adversarial attention-gate fix at `eb7b8c2` raised the suite to 108/108; lint/build/diff-check passed. Build skips sitemap generation because `SITE_URL` is unset and reports the existing `contextManager.js` mixed static/dynamic import warning.
 - External constraints: connected Drive is unauthorized; actual machine path `E:\hey` is not mounted in this session. Repository clone is at this session's `work/hey` path. Production identity providers, signing keys, shared transactional storage, external providers, and deployed services remain unverified.
 
 ## Active workers and references
@@ -56,6 +57,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 - Resumed Steps 12–14 worker: `/root/resume_steps_12_14` (collaboration task reference; original Codex task ID unavailable), branch `codex/par-steps-12-14`, worktree `.../work/hey-steps-12-14`, start SHA `ec08fa888a32d1fdd9cc7ab4bb5e711c20144ca7`, commit `7e45e1dfadf6264eafc67dc508366bece2dba739`. Fixed database key mapping/edge endpoints, graph neighborhood contract, research cancellation and sensitive-query checks, and source retraction invalidation. Focused 13/13, full 74/74, lint/build/diff-check passed. Integrated locally at `90bfd7a`; PR #3 remains draft/open; production DB/provider gates remain unverified.
 - Resumed Steps 05–08 worker: `/root/resume_steps_05_08` (collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-05-08-2026-10-14`, commit `6549db09ebbfba7398f8d6106d527e752e05bcae`. Enforced provider timeouts and cancellation; focused 4/4, full 69/69, lint/build/diff-check passed; integrated at merge `205a628`.
 - Resumed Steps 19–21 worker: `/root/resume_steps_19_21` (collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-19-21-2026-10-14`, commit `854eccfd0db1c8ed56b0f3608d2d7392d7ef6dff`. Automation workflow versions persist across engine restart and definitions are deep immutable snapshots; full 69/69, lint/diff-check passed; integrated at merge `c6acc3f`.
+- Resumed Steps 09–11 worker: `/root/resume_steps_09_11` (current collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-09-11-2026-10-14`, worktree `.../work/hey-steps-09-11`, based on `6f06e01`; active, directed to implement one concrete, code-evidenced defect without inventing acceptance criteria while the master program remains inaccessible. Model GPT-6 Luna/high. Pending SHA and verification.
 
 ## Uncommitted/unmerged work
 
@@ -65,8 +67,8 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 
 ## Exact next actions
 
-1. Commit and push this refreshed handoff and the current verified coordinator HEAD.
-2. Continue Step 01 shared persistence/recovery schema, policy validation and adversarial coverage without claiming durable production wiring.
+1. Continue the active Steps 09–11 worker and integrate its verified commit.
+2. Continue Step 01 shared persistence/recovery schema and adversarial coverage without claiming durable production wiring.
 3. Resume remaining branch work only from reviewed tips; record task, model, branch, commit, tests and remaining items.
 4. Recover the master program from connected Drive after reauthentication or from a newly accessible attachment, then reconcile acceptance criteria without restarting audits.
-5. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; unmerged work: PR #1 and later branch ranges; blocker: master-program source access.
+5. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; unmerged work: PR #1/#3 remain draft/open and later branch ranges; blocker: master-program source access.
