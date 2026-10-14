@@ -2,7 +2,7 @@
 
 Updated: 2026-10-14  
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation merge: `2e41c59da17d3f3a4449833afb4619a6cf385b8d`
+Latest verified implementation checkpoint: `94ca9f71fec768cce59bcd0d5ac0800f867c78de`
 
 ## Status rules
 
@@ -16,7 +16,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 | # | Program subsystem | Status | Repository evidence and remaining proof gap |
 |---:|---|---|---|
-| 01 | Global Foundation / Product Constitution / Shared Contracts | In progress | `actionMandate.js`, `evidenceIntegrity.js`, `eventOutbox.js`; hostile-input/outbox/evidence tests. Durable authority, evidence, and outbox adapters; complete mission persistence contract and policy surface remain unverified. |
+| 01 | Global Foundation / Product Constitution / Shared Contracts | In progress | `actionMandate.js`, `evidenceIntegrity.js`, `eventOutbox.js`; hostile-input/outbox/evidence tests. Mandate store contract and in-memory adapter now atomically check current revocation epoch, revocation, idempotency and delegated use limits. `action-mandate-hardening.test.js` reproduces an epoch advance after preflight and verifies no use/key is consumed. Durable authority, evidence and outbox adapters plus full mission persistence contract remain unverified. |
 | 02 | Identity, Accounts, Sessions, Devices & Trust | In progress | `sessionAuthority.js`, `accountScope.js`, `accountState.js`; `steps-02-04-security-runtime.test.js`, `account-scoped-logs.test.js`. Real identity providers, passkeys, service/agent identity, and production transactional store are not wired. |
 | 03 | Trust Kernel, Authorization, Permissions & Action Mandates | In progress | `trustKernelPolicy.js`, `permissionManager.js`, `actionMandate.js`; security and mandate tests. Complete policy rollout/rollback, multi-node revocation propagation, export/retention and production key custody are not evidenced. |
 | 04 | Mission Runtime, Durable Workflows, Checkpointing & Recovery | In progress | `missionCenter.js`, `workflowEngine.js`; `mission-runtime-hardening.test.js`, journey tests. Durable timers/waits, compensation graph, distributed leases, migration and load/concurrency evidence remain. |
@@ -66,7 +66,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 ## Verified integrated checkpoint
 
-At code merge `2e41c59`, focused artifact/capability tests passed; full Node suite passed **113/113**; lint, production build, and `git diff --check` passed. The build skipped sitemap generation because `SITE_URL` is unset and emitted the existing ineffective mixed static/dynamic import warning for `contextManager.js`. These gates verify this local code state only; they do not prove live provider, database, device, external service, or production behavior.
+At integrated code checkpoint `2e41c59`, focused artifact/capability tests passed; full Node suite passed **113/113**; lint, production build, and `git diff --check` passed. After the Step 01 epoch-race fix at `94ca9f7`, full Node suite passed **114/114**; lint, production build, and `git diff --check` passed. The build skipped sitemap generation because `SITE_URL` is unset and emitted the existing ineffective mixed static/dynamic import warning for `contextManager.js`. These gates verify this local code state only; they do not prove live provider, database, device, external service, or production behavior.
 
 ## Source completeness limits
 

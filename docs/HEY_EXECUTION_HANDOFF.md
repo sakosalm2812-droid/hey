@@ -8,12 +8,12 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 ## Current checkpoint and branch
 
 - Working branch: `codex/resume-emergency-2026-10-14`.
-- Latest verified implementation merge: `2e41c59da17d3f3a4449833afb4619a6cf385b8d` (Steps 09–11 and 22–27). Later pushed commits refreshed this handoff and progress ledger.
+- Latest verified implementation commit: `94ca9f71fec768cce59bcd0d5ac0800f867c78de` (atomic mandate use bound to current revocation epoch).
 - Base: `origin/codex/production-readiness-2026-10-13` at `97a4f3856398505ffa4dcd4d78348098699d4890` (parent `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`).
 - Verified common checkpoint recorded in `HEY_BUILD_PROGRESS.md`: `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
 - Branch commits after that checkpoint: `4369a3f` event outbox; `ebf36be` evidence-integrity contract; `fa54f27` defensive event snapshots; `4ae2d58` integration ledger; `97a4f38` worker completion checkpoints.
 - Earlier repair/Step 01 checkpoints on the common history: `9890ce4` diagnostics/package/scheduler repairs; `096a669` mandate implementation; current ledger pointer `3320c8c`.
-- Latest known verified Step 01 state: mandate authority, evidence-integrity envelopes, event outbox and ledger snapshots implemented. The resumed Steps 02–04 worker added strict mission-checkpoint schema/progress validation and bounded policy integers on that branch; integration review is pending. Step 01 remains **in progress**. Durable production adapters and signing-key custody remain deployment dependencies.
+- Latest known Step 01 state: mandate authority, evidence-integrity envelopes, event outbox, strict mission checkpoint validation, and mandate use/revocation checks are implemented in code. `MandateStoreContract.consumeChain` now requires a transactional check of current account epoch, revocation, idempotency and all delegation use counters; the in-memory adapter and race test prove a stale epoch cannot consume a use. Step 01 remains **in progress**. Durable production adapters and signing-key custody remain deployment dependencies.
 - New coordinator change: `src/core/actionMandate.js` enforces the exact v1 payload/envelope schema, rejects accessors, cycles, sparse/custom arrays, non-canonical timestamps/scope lists and invalid delegation metadata, and fails closed on revocation-store read errors. Added `tests/action-mandate-hardening.test.js` with getter, cycle, sparse-list and authority-store failure attacks. Step 02–04, 05–08 and 19–21 feature commits are now integrated locally.
 - `main` at `62ebb360` is the repository snapshot and is not the development checkpoint. Continue from the production-readiness line; do not replace it with `main`.
 
@@ -45,7 +45,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 - Existing `HEY_BUILD_PROGRESS.md` records focused repair tests 7/7, earlier full suite 61/61, lint/build pass, plus Step 01 mandate, evidence-integrity and event-outbox tests. Later progress records 66/66 full suite before the latest coordinator snapshot guard; see the ledger for exact scope.
 - Worker PR descriptions report their local verification. No PR changes have been merged into the coordinator branch during this recovery; PR #1's feature branch now contains the 97a4f38 coordinator base.
 - `main` contains no handoff document; this file is the continuity source for the current coordinator branch.
-- Replacement coordinator verification on `ae32aeb`: `npm ci` installed 263 packages, audit reported 0 vulnerabilities; `npm test` passed 68/68; lint/build/diff-check passed. Integrated full-suite milestones: `c6acc3f` 88/88; Steps 12–14 101/101; Steps 15–18 107/107; attention adversarial fix 108/108; Step 09–11 plus Step 22–27 merges at `2e41c59` 113/113. Lint, build, and diff-check passed. Build skips sitemap generation because `SITE_URL` is unset and reports the existing `contextManager.js` mixed static/dynamic import warning.
+- Replacement coordinator verification on `ae32aeb`: `npm ci` installed 263 packages, audit reported 0 vulnerabilities; `npm test` passed 68/68; lint/build/diff-check passed. Integrated full-suite milestones: `c6acc3f` 88/88; Steps 12–14 101/101; Steps 15–18 107/107; attention adversarial fix 108/108; Steps 09–11 and 22–27 merges `2e41c59` 113/113; mandate epoch race fix `94ca9f7` 114/114. Lint, build, and diff-check passed. Build skips sitemap generation because `SITE_URL` is unset and reports the existing `contextManager.js` mixed static/dynamic import warning.
 - External constraints: connected Drive is unauthorized; actual machine path `E:\hey` is not mounted in this session. Repository clone is at this session's `work/hey` path. Production identity providers, signing keys, shared transactional storage, external providers, and deployed services remain unverified.
 
 ## Active workers and references
@@ -72,4 +72,4 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 1. Use the supplied 47 prompts and [HEY_STEP_STATUS.md](HEY_STEP_STATUS.md) to continue implementing the next independently fixable gaps; prioritize Step 01 global contracts without duplicating stronger existing systems.
 2. Review remaining worker branches only after code/tests are available; record task, model, branch, commit, tests and remaining items.
 3. Recover the separate historical 4,210-item ledger if it is available; do not invent its items.
-4. Update this handoff and `HEY_BUILD_PROGRESS.md` after each verified checkpoint. Latest integrated code merge remains `2e41c59`; docs include the source and complete status map. PRs #1–#3 remain open draft and were not merged/closed by this continuation.
+4. Update this handoff and `HEY_BUILD_PROGRESS.md` after each verified checkpoint. Latest code is `94ca9f7`; status map is in `HEY_STEP_STATUS.md`. PRs #1–#3 remain open draft and were not merged/closed by this continuation.
