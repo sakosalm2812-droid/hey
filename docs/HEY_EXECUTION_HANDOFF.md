@@ -33,8 +33,8 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
   - Steps 15–18: `codex/par-steps-15-18` at `1a95a149f10ed45fd7d2d3ef32b0effdd4e71154`; integrated locally at coordinator merge `4d17e64`. PR #1 remains draft/open/unmerged; worker focused 6/6 and full 72/72; coordinator after integration 107/107 plus lint/build/diff-check.
   - Steps 05–08: `codex/resume-steps-05-08-2026-10-14` at `6549db09ebbfba7398f8d6106d527e752e05bcae`; integrated locally by merge `205a628`. Agent timeout enforcement and abort behavior verified; focused 4/4, full 69/69, lint/build/diff-check passed on worker branch.
   - Steps 19–21: `codex/resume-steps-19-21-2026-10-14` at `854eccfd0db1c8ed56b0f3608d2d7392d7ef6dff`; integrated locally by merge `c6acc3f`. Automation workflow version persistence and immutable snapshots; focused 8/8, full 69/69, lint/diff-check passed on worker branch.
-  - Steps 09–11: resumed worker active on `codex/resume-steps-09-11-2026-10-14`, based on `6f06e01`; worktree `.../work/hey-steps-09-11`. No commit yet. The old branch remains at the shared baseline; original worker task ID is unavailable.
-  - Steps 22–27: branch exists but current useful commits were not recovered; original worker/task IDs are not exposed in this session.
+  - Steps 09–11: resumed worker active on `codex/resume-steps-09-11-2026-10-14`, based on `6f06e01`, now merging coordinator `cca2d6a`; worktree `.../work/hey/work/hey-steps-09-11`. It has fixed a capability-registry policy bypass and added two regressions; final merged-tree verification and commit are pending.
+  - Steps 22–27: resumed worker active on `codex/resume-steps-22-27-2026-10-14`, worktree `.../work/hey/work/hey-steps-22-27`, based on `cca2d6a`. Prior ledger scope: artifact, file and media engines. No commit yet.
   - Steps 28–30, 31–35, 36–38, 39–42, 43–45: prepared branches exist at `3320c8c`; prior ledger shows no assigned worker.
   - Step 46–47 integration/enforcement: no separate branch or task recovered.
 - Prior ledger says available engineering agents used GPT-6 Luna (`gpt-6-luna`, high reasoning); it also explicitly says no Codex task-creation/model-picker MCP was available and no UI model picker change was made. Do not claim model selection via UI.
@@ -57,7 +57,8 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 - Resumed Steps 12–14 worker: `/root/resume_steps_12_14` (collaboration task reference; original Codex task ID unavailable), branch `codex/par-steps-12-14`, worktree `.../work/hey-steps-12-14`, start SHA `ec08fa888a32d1fdd9cc7ab4bb5e711c20144ca7`, commit `7e45e1dfadf6264eafc67dc508366bece2dba739`. Fixed database key mapping/edge endpoints, graph neighborhood contract, research cancellation and sensitive-query checks, and source retraction invalidation. Focused 13/13, full 74/74, lint/build/diff-check passed. Integrated locally at `90bfd7a`; PR #3 remains draft/open; production DB/provider gates remain unverified.
 - Resumed Steps 05–08 worker: `/root/resume_steps_05_08` (collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-05-08-2026-10-14`, commit `6549db09ebbfba7398f8d6106d527e752e05bcae`. Enforced provider timeouts and cancellation; focused 4/4, full 69/69, lint/build/diff-check passed; integrated at merge `205a628`.
 - Resumed Steps 19–21 worker: `/root/resume_steps_19_21` (collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-19-21-2026-10-14`, commit `854eccfd0db1c8ed56b0f3608d2d7392d7ef6dff`. Automation workflow versions persist across engine restart and definitions are deep immutable snapshots; full 69/69, lint/diff-check passed; integrated at merge `c6acc3f`.
-- Resumed Steps 09–11 worker: `/root/resume_steps_09_11` (current collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-09-11-2026-10-14`, worktree `.../work/hey-steps-09-11`, based on `6f06e01`; active, directed to implement one concrete, code-evidenced defect without inventing acceptance criteria while the master program remains inaccessible. Model GPT-6 Luna/high. Pending SHA and verification.
+- Resumed Steps 09–11 worker: `/root/resume_steps_09_11` (current collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-09-11-2026-10-14`, worktree `.../work/hey/work/hey-steps-09-11`; active. Implemented a capability-registry policy bypass fix and two regression cases; worker reports 109/109 tests, lint, build, and diff-check before merging `cca2d6a`; merged-tree rerun/commit pending. Model GPT-6 Luna/high.
+- Resumed Steps 22–27 worker: `/root/resume_steps_22_27` (current collaboration task; original Codex task ID unavailable), branch `codex/resume-steps-22-27-2026-10-14`, worktree `.../work/hey/work/hey-steps-22-27`, based on `cca2d6a`; active, continuing the recovered artifact/files/media implementation scope with regression coverage. Model GPT-6 Luna/high. Pending SHA and verification.
 
 ## Uncommitted/unmerged work
 
@@ -67,8 +68,8 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 
 ## Exact next actions
 
-1. Continue the active Steps 09–11 worker and integrate its verified commit.
+1. Integrate the verified output of active Steps 09–11 and 22–27 workers as they finish.
 2. Continue Step 01 shared persistence/recovery schema and adversarial coverage without claiming durable production wiring.
 3. Resume remaining branch work only from reviewed tips; record task, model, branch, commit, tests and remaining items.
 4. Recover the master program from connected Drive after reauthentication or from a newly accessible attachment, then reconcile acceptance criteria without restarting audits.
-5. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; unmerged work: PR #1/#3 remain draft/open and later branch ranges; blocker: master-program source access.
+5. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; unmerged work: PR #1/#3 remain draft/open and worker branches; blocker: master-program source access.
