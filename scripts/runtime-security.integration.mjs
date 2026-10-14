@@ -47,6 +47,7 @@ const makeSession = async () => {
 };
 
 const identities = [];
+const outboxScopes = [];
 try {
   const first = await makeSession();
   identities.push(first.userId);
@@ -185,6 +186,66 @@ try {
   assert.equal(evidenceAfter.error, null);
   assert.equal(evidenceAfter.data, true);
 
+  const outboxScope = `integration:${randomUUID()}`;
+  outboxScopes.push(outboxScope);
+  const eventName = "integration.outbox_probe";
+  const idempotencyKey = `same-key:${randomUUID()}`;
+  const eventPayload = { accountId: first.userId, probe: "bounded" };
+  const unauthorizedAppend = await first.client.rpc("append_hey_event_outbox_once", {
+    p_idempotency_key: idempotencyKey,
+    p_event_name: eventName,
+    p_payload: eventPayload,
+    p_scope: outboxScope,
+  });
+  assert.ok(unauthorizedAppend.error, "authenticated clients cannot append to the server-only event outbox");
+  const unauthorizedOutboxRead = await first.client.from("hey_event_outbox").select("id");
+  assert.ok(unauthorizedOutboxRead.error, "authenticated clients cannot bypass outbox RPCs through direct table access");
+
+  const duplicateAppends = await Promise.all(Array.from({ length: 16 }, () => admin.rpc("append_hey_event_outbox_once", {
+    p_idempotency_key: idempotencyKey,
+    p_event_name: eventName,
+    p_payload: eventPayload,
+    p_scope: outboxScope,
+  })));
+  for (const append of duplicateAppends) assert.equal(append.error, null);
+  assert.equal(duplicateAppends.filter(({ data }) => data?.created === true).length, 1, "concurrent duplicate append creates one durable event");
+  const eventId = duplicateAppends[0].data.event.id;
+  assert.ok(duplicateAppends.every(({ data }) => data?.event?.id === eventId), "duplicate appends resolve to the original event");
+  const conflictingPayload = await admin.rpc("append_hey_event_outbox_once", {
+    p_idempotency_key: idempotencyKey,
+    p_event_name: eventName,
+    p_payload: { accountId: first.userId, probe: "changed" },
+    p_scope: outboxScope,
+  });
+  assert.ok(conflictingPayload.error, "an idempotency key cannot be reused for a different payload");
+
+  const competingClaims = await Promise.all(Array.from({ length: 24 }, () => admin.rpc("claim_hey_event_outbox", {
+    p_event_id: eventId,
+    p_lease_ms: 30_000,
+  })));
+  for (const claim of competingClaims) assert.equal(claim.error, null);
+  const successfulClaims = competingClaims.filter(({ data }) => data?.leaseToken);
+  assert.equal(successfulClaims.length, 1, "only one concurrent dispatcher can claim a pending event");
+  const leaseToken = successfulClaims[0].data.leaseToken;
+  const staleAck = await admin.rpc("ack_hey_event_outbox", { p_event_id: eventId, p_lease_token: randomUUID() });
+  assert.equal(staleAck.error, null);
+  assert.equal(staleAck.data, false, "an unrelated lease token cannot acknowledge delivery");
+  const released = await admin.rpc("release_hey_event_outbox", { p_event_id: eventId, p_lease_token: leaseToken });
+  assert.equal(released.error, null);
+  assert.equal(released.data, true);
+  const pendingOutbox = await admin.rpc("list_hey_event_outbox_pending", { p_limit: 10 });
+  assert.equal(pendingOutbox.error, null);
+  assert.ok(pendingOutbox.data.some((event) => event.id === eventId && event.lastError === "delivery_failed"), "release retains only a generic failure code for replay");
+  const reclaimed = await admin.rpc("claim_hey_event_outbox", { p_event_id: eventId, p_lease_ms: 30_000 });
+  assert.equal(reclaimed.error, null);
+  assert.ok(reclaimed.data?.leaseToken);
+  const oldLeaseAck = await admin.rpc("ack_hey_event_outbox", { p_event_id: eventId, p_lease_token: leaseToken });
+  assert.equal(oldLeaseAck.error, null);
+  assert.equal(oldLeaseAck.data, false, "a released lease cannot acknowledge a later claim");
+  const acknowledged = await admin.rpc("ack_hey_event_outbox", { p_event_id: eventId, p_lease_token: reclaimed.data.leaseToken });
+  assert.equal(acknowledged.error, null);
+  assert.equal(acknowledged.data, true);
+
   const directClientConsume = await first.client.rpc("consume_hey_action_mandate_chain", {
     p_account_id: first.userId,
     p_revocation_epoch: 0,
@@ -284,5 +345,6 @@ try {
 
   console.log("Local Supabase RLS, account isolation, trusted transcript writes, rate limits, and mandate authority tests passed.");
 } finally {
+  await Promise.all(outboxScopes.map((scope) => admin.from("hey_event_outbox").delete().eq("scope", scope)));
   await Promise.all(identities.map((id) => admin.auth.admin.deleteUser(id)));
 }
