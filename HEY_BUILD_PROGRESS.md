@@ -20,6 +20,8 @@ Branch: `codex/production-readiness-2026-10-13`
 
 ### Current checkpoint
 
-Commit SHA: pending commit.
+Local repair commit SHA: `714f3461eb28c0c0cae84937afbab62fe78b8352`.
 
-Next: continue the earliest incomplete foundational requirements from the master program in the same branch, with a source change, tests, and a checkpoint for each completed implementation slice. Do not claim the 47-step program complete based on this repair batch.
+GitHub development-branch sync commit SHA: `9890ce4f5228c065ab8d6c9bf77cb7919cfb3532` (`sakosalm2812-droid/hey`, branch verified at this SHA). Its tree contains the same repair source/tests as the local repair commit; the SHA differs because the local checkout's parent commit did not match the branch's GitHub commit object. GitHub combined status returned no status checks yet.
+
+Next: Step 01 — Global Foundation / Product Constitution / Shared Contracts. Begin by extending canonical shared authority, mandate, evidence, and mission persistence contracts in existing systems; no separate identity, permission, or mission authority is to be introduced. The 47-step program remains incomplete.
