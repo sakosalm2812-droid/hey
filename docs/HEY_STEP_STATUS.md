@@ -2,7 +2,7 @@
 
 Updated: 2026-10-14  
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `94ca9f71fec768cce59bcd0d5ac0800f867c78de`
+Latest verified implementation checkpoint: `58830d8d0a2b71849180645ed3c7ebc284964beb`
 
 ## Status rules
 
@@ -16,7 +16,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 | # | Program subsystem | Status | Repository evidence and remaining proof gap |
 |---:|---|---|---|
-| 01 | Global Foundation / Product Constitution / Shared Contracts | In progress | `actionMandate.js`, `evidenceIntegrity.js`, `eventOutbox.js`; hostile-input/outbox/evidence tests. Mandate store contract and in-memory adapter now atomically check current revocation epoch, revocation, idempotency and delegated use limits. `action-mandate-hardening.test.js` reproduces an epoch advance after preflight and verifies no use/key is consumed. Durable authority, evidence and outbox adapters plus full mission persistence contract remain unverified. |
+| 01 | Global Foundation / Product Constitution / Shared Contracts | In progress | `actionMandate.js`, `evidenceIntegrity.js`, `eventOutbox.js`; hostile-input/outbox/evidence tests. The v2 mandate-store contract requires atomic current-epoch, revocation, idempotency and delegated-use checks; verification refuses unversioned legacy stores. `action-mandate-hardening.test.js` reproduces an epoch advance after preflight and verifies no use/key is consumed. Durable authority, evidence and outbox adapters plus full mission persistence contract remain unverified. |
 | 02 | Identity, Accounts, Sessions, Devices & Trust | In progress | `sessionAuthority.js`, `accountScope.js`, `accountState.js`; `steps-02-04-security-runtime.test.js`, `account-scoped-logs.test.js`. Real identity providers, passkeys, service/agent identity, and production transactional store are not wired. |
 | 03 | Trust Kernel, Authorization, Permissions & Action Mandates | In progress | `trustKernelPolicy.js`, `permissionManager.js`, `actionMandate.js`; security and mandate tests. Complete policy rollout/rollback, multi-node revocation propagation, export/retention and production key custody are not evidenced. |
 | 04 | Mission Runtime, Durable Workflows, Checkpointing & Recovery | In progress | `missionCenter.js`, `workflowEngine.js`; `mission-runtime-hardening.test.js`, journey tests. Durable timers/waits, compensation graph, distributed leases, migration and load/concurrency evidence remain. |
