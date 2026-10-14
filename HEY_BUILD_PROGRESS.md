@@ -27,7 +27,9 @@ Status: **in progress**. The first shared authority contract is implemented in `
 - Lint and production build: passed; same sitemap input and existing chunking warning noted above.
 - Benchmark: 1,000 signature verifications and atomic consumes; 1000/1000 authorized, p50 0.353 ms, p95 0.606 ms, about 2,457 ops/sec in this environment. This measures the in-memory adapter only; durable database latency/concurrency is not measured.
 - Adversarial regression: asynchronous mandate verification initially opened a double-dispatch race in the action layer; the existing concurrent action test reproduced a hang/double admission. Admission now rechecks after async authorization, and `tests/security-regressions.test.js` passes 10/10.
-- Remaining independently implementable Step 01 items: evidence integrity/freshness/invalidation contract, mission persistence/recovery schema contract, policy validation, malformed input/property-based cases, and improved independent runtime verification. Do not advance the 47-step sequence until these are implemented and verified.
+- Evidence integrity slice now implemented as `src/core/evidenceIntegrity.js`, exported through `HEY.evidence`, with signed canonical envelopes, account/source binding, digest integrity, freshness, revocation epoch, offline policy, invalidation checks, and fail-closed store behavior. Tests attack cycles, accessors, account mismatch, body tampering, stale limits, offline denial, invalidation, and storage failure.
+- Remaining independently implementable Step 01 items: mission persistence/recovery schema contract, policy validation, additional malformed input/property-based cases, and improved independent runtime verification. Do not advance the 47-step sequence until these are implemented and verified.
+- Evidence slice verification: focused tests 2 passed; full suite 63 passed, 0 failed; lint passed; production build passed. Sitemap generation skipped because `SITE_URL` is unset; Vite reported the existing contextManager mixed-import warning. No claim of durable evidence storage: current adapter is explicitly in-memory for local/test use.
 - External Step 01 constraints: real production authority storage/transaction semantics and deployment signing keys need the connected HEY backend and owner-managed keys; continue defining adapters and conformance tests without claiming them verified.
 - Step 01 implementation checkpoint (not completion): local commit `5b3084471b26fada0e189f441a7e8cb6f692161d`; GitHub branch sync commit `096a66904339e7aa3b854b5876c5ba534e2a5e57`.
 
@@ -37,7 +39,7 @@ Local repair commit SHA: `714f3461eb28c0c0cae84937afbab62fe78b8352`.
 
 GitHub development-branch sync commit SHA: `9890ce4f5228c065ab8d6c9bf77cb7919cfb3532` (`sakosalm2812-droid/hey`, branch verified at this SHA). Its tree contains the same repair source/tests as the local repair commit; the SHA differs because the local checkout's parent commit did not match the branch's GitHub commit object. GitHub combined status returned no status checks yet.
 
-Next: continue Step 01 in this branch; no separate identity, permission, or mission authority is to be introduced. The 47-step program remains incomplete.
+Next: finish Step 01 remaining contracts and property/adversarial tests; no separate identity, permission, or mission authority is to be introduced. The 47-step program remains incomplete.
 
 ## Parallel execution checkpoint — 2026-10-14
 
