@@ -1,5 +1,15 @@
 
 
+import {
+  dependencyEntries,
+  packageSigningPayload,
+  validateAgainstSchema,
+  validateJsonSchemaDefinition,
+  validateSpdxLicenses,
+  verifyPackageSignature,
+  versionSatisfies,
+} from "./packageValidation.js";
+
 const TOKEN_STATES = Object.freeze({
   ACTIVE: "active",
   EXPIRED: "expired",
@@ -29,7 +39,7 @@ function generateRunId() {
 }
 
 class DeveloperEngine {
-  constructor() {
+  constructor({ trustedKeys = {}, storage = globalThis.localStorage } = {}) {
     this.apiTokens = new Map();
     this.extensions = new Map();
     this.packages = new Map();
@@ -38,17 +48,22 @@ class DeveloperEngine {
     this.sandboxes = new Map();
     this.featureFlags = new Map();
     this.listeners = new Set();
+    // Trust roots are supplied by the host build/configuration and are never
+    // loaded from mutable package storage.
+    this.trustedKeys = trustedKeys;
+    this.storage = storage;
     this.load();
   }
 
   load() {
     try {
-      const stored = localStorage.getItem("hey_developer");
+      const stored = this.storage?.getItem("hey_developer");
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.apiTokens) Object.entries(parsed.apiTokens).forEach(([k, v]) => this.apiTokens.set(k, v));
         if (parsed.extensions) Object.entries(parsed.extensions).forEach(([k, v]) => this.extensions.set(k, v));
         if (parsed.packages) Object.entries(parsed.packages).forEach(([k, v]) => this.packages.set(k, v));
+        if (parsed.schemas) Object.entries(parsed.schemas).forEach(([k, v]) => this.schemas.set(k, v));
         if (parsed.featureFlags) Object.entries(parsed.featureFlags).forEach(([k, v]) => this.featureFlags.set(k, v));
       }
     } catch (err) {
@@ -58,10 +73,11 @@ class DeveloperEngine {
 
   save() {
     try {
-      localStorage.setItem("hey_developer", JSON.stringify({
+      this.storage?.setItem("hey_developer", JSON.stringify({
         apiTokens: Object.fromEntries(this.apiTokens),
         extensions: Object.fromEntries(this.extensions),
         packages: Object.fromEntries(this.packages),
+        schemas: Object.fromEntries(this.schemas),
         featureFlags: Object.fromEntries(this.featureFlags),
       }));
     } catch (err) {
@@ -173,10 +189,13 @@ class DeveloperEngine {
       version: input.version,
       description: input.description || "",
       manifest: input.manifest,
+      schemaId: input.schemaId || null,
       source: input.source || "local",
-      state: PACKAGE_STATES.DRAFT,
       dependencies: input.dependencies || [],
       compatibility: input.compatibility || [],
+      licenses: input.licenses || (Array.isArray(input.manifest?.licenses) ? input.manifest.licenses : (input.manifest?.license ? [input.manifest.license] : [])),
+      signature: input.signature || null,
+      state: PACKAGE_STATES.DRAFT,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -193,27 +212,68 @@ class DeveloperEngine {
     return Array.from(this.packages.values());
   }
 
-  validatePackage(pkgId) {
+  async validatePackage(pkgId) {
     const pkg = this.packages.get(pkgId);
     if (!pkg) return { error: "Package not found" };
-    
-    const checks = {
-      hasManifest: Boolean(pkg.manifest),
-      validSchema: true,
-      dependenciesResolved: true,
-      licensesValid: true,
-      signatureValid: true,
+
+    const errors = [];
+    const hasManifest = Boolean(pkg.manifest && typeof pkg.manifest === "object" && !Array.isArray(pkg.manifest));
+    if (!hasManifest) errors.push("Package manifest must be a JSON object.");
+
+    const schema = pkg.schemaId ? this.schemas.get(pkg.schemaId)?.definition : {
+      type: "object",
+      required: ["name", "version"],
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 128 },
+        version: { type: "string", pattern: "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[A-Za-z0-9.-]+)?$" },
+      },
+      additionalProperties: true,
     };
-    
+    const schemaErrors = schema ? validateAgainstSchema(pkg.manifest, schema) : ["Package references an unknown manifest schema."];
+    if (pkg.manifest && (pkg.manifest.name !== pkg.name || pkg.manifest.version !== pkg.version)) {
+      schemaErrors.push("Manifest name and version must match the signed package metadata.");
+    }
+    errors.push(...schemaErrors);
+
+    const dependencies = dependencyEntries(pkg.dependencies);
+    let dependenciesResolved = dependencies !== null;
+    if (!dependenciesResolved) errors.push("Dependencies must use name@version or { name, version } entries.");
+    for (const dependency of dependencies || []) {
+      const installed = Array.from(this.packages.values()).find((candidate) =>
+        candidate.id !== pkg.id && candidate.name === dependency.name && candidate.state === PACKAGE_STATES.INSTALLED
+      );
+      if (!installed || !versionSatisfies(installed.version, dependency.version)) {
+        dependenciesResolved = false;
+        errors.push("Missing installed dependency or version mismatch: " + dependency.name + "@" + dependency.version + ".");
+      }
+    }
+
+    const licenseResult = validateSpdxLicenses(pkg.licenses);
+    errors.push(...licenseResult.errors);
+    const signatureValid = await verifyPackageSignature(pkg, this.trustedKeys);
+    if (!signatureValid) errors.push("Package signature is absent, untrusted, malformed, or invalid.");
+
+    const checks = {
+      hasManifest,
+      validSchema: hasManifest && schemaErrors.length === 0,
+      dependenciesResolved,
+      licensesValid: licenseResult.valid,
+      signatureValid,
+    };
+
     const valid = Object.values(checks).every(v => v);
     pkg.state = valid ? PACKAGE_STATES.VALIDATED : PACKAGE_STATES.DRAFT;
+    pkg.validation = { valid, checks, errors, checkedAt: new Date().toISOString(), signedPayload: packageSigningPayload(pkg) };
+    pkg.updatedAt = new Date().toISOString();
     this.packages.set(pkgId, pkg);
     this.save();
-    
-    return { valid, checks };
+
+    return { valid, checks, errors, checkedAt: pkg.validation.checkedAt };
   }
 
-  stagePackage(pkgId) {
+  async stagePackage(pkgId) {
+    const validation = await this.validatePackage(pkgId);
+    if (!validation.valid) return { error: "Package validation failed; package cannot be staged.", validation };
     const pkg = this.packages.get(pkgId);
     if (!pkg) return { error: "Package not found" };
     if (pkg.state !== PACKAGE_STATES.VALIDATED) return { error: "Package not validated" };
@@ -224,14 +284,19 @@ class DeveloperEngine {
     return pkg;
   }
 
-  installPackage(pkgId) {
+  async installPackage(pkgId) {
     const pkg = this.packages.get(pkgId);
     if (!pkg) return { error: "Package not found" };
-    pkg.state = PACKAGE_STATES.INSTALLED;
-    pkg.installedAt = new Date().toISOString();
-    this.packages.set(pkgId, pkg);
+    if (pkg.state !== PACKAGE_STATES.STAGED) return { error: "Package must be staged before installation." };
+    const validation = await this.validatePackage(pkgId);
+    if (!validation.valid) return { error: "Package validation failed; installation was blocked.", validation };
+    const current = this.packages.get(pkgId);
+    current.state = PACKAGE_STATES.STAGED;
+    current.state = PACKAGE_STATES.INSTALLED;
+    current.installedAt = new Date().toISOString();
+    this.packages.set(pkgId, current);
     this.save();
-    return pkg;
+    return current;
   }
 
   rollbackPackage(pkgId, targetVersion) {
@@ -256,6 +321,8 @@ class DeveloperEngine {
   }
 
   registerSchema(input) {
+    const definitionErrors = validateJsonSchemaDefinition(input?.definition);
+    if (definitionErrors.length) return { error: "Schema definition is invalid.", details: definitionErrors };
     const schemaId = `schema_${Date.now()}`;
     const schema = {
       id: schemaId,
@@ -358,6 +425,7 @@ class DeveloperEngine {
   }
 }
 
+export { DeveloperEngine };
 export const developerEngine = new DeveloperEngine();
 
 export function createApiToken(input) {

@@ -1,3 +1,6 @@
+import { disableWorkflow, getWorkflow } from "./automationEngine.js";
+import { getArtifact, getVersion, restoreVersion } from "./artifactEngine.js";
+
 const HEALTH_STATES = Object.freeze({
   HEALTHY: "healthy",
   DEGRADED: "degraded",
@@ -35,6 +38,9 @@ const RECOVERY_ACTIONS = Object.freeze({
   RESTORE_VERSION: "restore_version",
 });
 
+const RECOVERY_ADAPTERS = new Map();
+const HEALTH_CHECKERS = new Map();
+
 function generateCheckId() {
   return `check_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -52,7 +58,8 @@ function generateRecoveryId() {
 }
 
 class DiagnosticsEngine {
-  constructor() {
+  constructor({ storage = globalThis.localStorage } = {}) {
+    this.storage = storage;
     this.healthChecks = new Map();
     this.traces = new Map();
     this.errorFingerprints = new Map();
@@ -67,7 +74,7 @@ class DiagnosticsEngine {
 
   load() {
     try {
-      const stored = localStorage.getItem("hey_diagnostics");
+      const stored = this.storage?.getItem("hey_diagnostics");
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.healthChecks) Object.entries(parsed.healthChecks).forEach(([k, v]) => this.healthChecks.set(k, v));
@@ -85,7 +92,7 @@ class DiagnosticsEngine {
 
   save() {
     try {
-      localStorage.setItem("hey_diagnostics", JSON.stringify({
+      this.storage?.setItem("hey_diagnostics", JSON.stringify({
         healthChecks: Object.fromEntries(this.healthChecks),
         traces: Object.fromEntries(this.traces),
         errorFingerprints: Object.fromEntries(this.errorFingerprints),
@@ -100,7 +107,10 @@ class DiagnosticsEngine {
   }
 
   startPeriodicChecks() {
-    setInterval(() => this.runAllHealthChecks(), 60000);
+    const timer = setInterval(() => this.runAllHealthChecks(), 60000);
+    // Diagnostics must not keep Node-based tests or server-side rendering alive.
+    timer.unref?.();
+    return timer;
   }
 
   async runAllHealthChecks() {
@@ -127,9 +137,9 @@ class DiagnosticsEngine {
       const start = Date.now();
       const result = await this.checkComponent(component);
       check.latency = Date.now() - start;
-      check.state = result.healthy ? HEALTH_STATES.HEALTHY : HEALTH_STATES.DEGRADED;
-      check.details = result.details;
-      check.nextAction = result.nextAction;
+      check.state = result?.healthy === true ? HEALTH_STATES.HEALTHY : HEALTH_STATES.DEGRADED;
+      check.details = result?.details || { verification: "unavailable" };
+      check.nextAction = result?.nextAction || (result?.healthy ? null : "investigate");
     } catch (error) {
       check.state = HEALTH_STATES.DEGRADED;
       check.details.error = error.message;
@@ -142,8 +152,24 @@ class DiagnosticsEngine {
     return check;
   }
 
-  async checkComponent(_component) {
-    return { healthy: true, details: {}, nextAction: null };
+  async checkComponent(component) {
+    const checker = HEALTH_CHECKERS.get(component);
+    if (!checker) {
+      return { healthy: false, details: { verification: "unconfigured" }, nextAction: "configure_health_check" };
+    }
+    const result = await checker();
+    return result && typeof result.healthy === "boolean"
+      ? result
+      : { healthy: false, details: { verification: "invalid_checker_result" }, nextAction: "investigate" };
+  }
+
+  registerHealthChecker(component, checker) {
+    if (!Object.values(COMPONENT_TYPES).includes(component)) throw new TypeError(`Unsupported health component: ${component}`);
+    if (typeof checker !== "function") throw new TypeError("A health checker must be a function.");
+    HEALTH_CHECKERS.set(component, checker);
+    return () => {
+      if (HEALTH_CHECKERS.get(component) === checker) HEALTH_CHECKERS.delete(component);
+    };
   }
 
   getHealthCheck(id) {
@@ -284,31 +310,23 @@ async attemptRecovery(input) {
     this.save();
 
     try {
-      let result;
-      switch (input.action) {
-        case "retry":
-          result = await this.retryOperation(input.target);
-          break;
-        case "fallback":
-          result = await this.fallbackOperation(input.target);
-          break;
-        case "reconnect":
-          result = await this.reconnectService(input.target);
-          break;
-        case "checkpoint_resume":
-          result = await this.resumeFromCheckpoint(input.target);
-          break;
-        case "pause_workflow":
-          result = await this.pauseWorkflow(input.target);
-          break;
-        case "restore_version":
-          result = await this.restorePreviousVersion(input.target);
-          break;
+      const adapter = RECOVERY_ADAPTERS.get(input.action);
+      if (!Object.values(RECOVERY_ACTIONS).includes(input.action)) {
+        throw new Error(`Unsupported recovery action: ${String(input.action)}`);
       }
-
-      attempt.state = "completed";
-      attempt.success = true;
-      attempt.details = result;
+      if (!adapter || typeof adapter.run !== "function" || typeof adapter.verify !== "function") {
+        attempt.state = "blocked";
+        attempt.error = `No verified recovery adapter is configured for ${input.action}.`;
+      } else {
+        const operation = await adapter.run(input.target, input);
+        const verification = await adapter.verify(input.target, operation, input);
+        if (!verification || verification.verified !== true) {
+          throw new Error(verification?.reason || "Recovery postcondition was not verified.");
+        }
+        attempt.state = "completed";
+        attempt.success = true;
+        attempt.details = { operation, verification };
+      }
     } catch (error) {
       attempt.state = "failed";
       attempt.success = false;
@@ -322,12 +340,16 @@ async attemptRecovery(input) {
     return attempt;
   }
 
-  async retryOperation(_target) { return { retried: true }; }
-  async fallbackOperation(_target) { return { fallback: true }; }
-  async reconnectService(_target) { return { reconnected: true }; }
-  async resumeFromCheckpoint(_target) { return { resumed: true }; }
-  async pauseWorkflow(_target) { return { paused: true }; }
-  async restorePreviousVersion(_target) { return { restored: true }; }
+  registerRecoveryAdapter(action, adapter) {
+    if (!Object.values(RECOVERY_ACTIONS).includes(action)) throw new TypeError(`Unsupported recovery action: ${action}`);
+    if (!adapter || typeof adapter.run !== "function" || typeof adapter.verify !== "function") {
+      throw new TypeError("A recovery adapter requires run and independent verify functions.");
+    }
+    RECOVERY_ADAPTERS.set(action, adapter);
+    return () => {
+      if (RECOVERY_ADAPTERS.get(action) === adapter) RECOVERY_ADAPTERS.delete(action);
+    };
+  }
 
   getRecoveryAttempt(id) {
     return this.recoveryAttempts.get(id) || null;
@@ -442,7 +464,44 @@ async attemptRecovery(input) {
   }
 }
 
+export { DiagnosticsEngine };
 export const diagnosticsEngine = new DiagnosticsEngine();
+
+diagnosticsEngine.registerRecoveryAdapter("pause_workflow", {
+  run: async (target) => {
+    const workflowId = typeof target === "string" ? target : target?.workflowId;
+    if (!workflowId) throw new TypeError("pause_workflow requires a workflowId.");
+    const workflow = disableWorkflow(workflowId);
+    if (!workflow || workflow.error) throw new Error(workflow?.error || "Workflow could not be disabled.");
+    return { workflowId };
+  },
+  verify: async (_target, operation) => {
+    const workflow = getWorkflow(operation.workflowId);
+    return workflow?.state === "disabled"
+      ? { verified: true, evidence: { workflowId: workflow.id, state: workflow.state, disabledAt: workflow.disabledAt } }
+      : { verified: false, reason: "Workflow is not disabled after the recovery operation." };
+  },
+});
+
+diagnosticsEngine.registerRecoveryAdapter("restore_version", {
+  run: async (target) => {
+    const artifactId = target?.artifactId;
+    const versionId = target?.versionId;
+    if (!artifactId || !versionId) throw new TypeError("restore_version requires artifactId and versionId.");
+    await restoreVersion(artifactId, versionId);
+    return { artifactId, versionId };
+  },
+  verify: async (_target, operation) => {
+    const [artifact, version] = await Promise.all([
+      getArtifact(operation.artifactId),
+      getVersion(operation.artifactId, operation.versionId),
+    ]);
+    const sameContent = artifact && version && JSON.stringify(artifact.content) === JSON.stringify(version.content);
+    return sameContent
+      ? { verified: true, evidence: { artifactId: artifact.id, versionId: version.id, contentMatched: true } }
+      : { verified: false, reason: "Restored artifact content does not match the selected version." };
+  },
+});
 
 export function runHealthCheck(component) {
   return diagnosticsEngine.runHealthCheck(component);
@@ -502,6 +561,14 @@ export function getAllErrorFingerprints() {
 
 export function attemptRecovery(input) {
   return diagnosticsEngine.attemptRecovery(input);
+}
+
+export function registerRecoveryAdapter(action, adapter) {
+  return diagnosticsEngine.registerRecoveryAdapter(action, adapter);
+}
+
+export function registerHealthChecker(component, checker) {
+  return diagnosticsEngine.registerHealthChecker(component, checker);
 }
 
 export function getRecoveryAttempt(id) {

@@ -1,4 +1,5 @@
 import { safeStorage } from "../lib/safeStorage.js";
+import { calculateNextRun as calculateScheduledNextRun } from "./scheduleTime.js";
 
 const RECORDER_STATES = Object.freeze({
   IDLE: "idle",
@@ -73,7 +74,11 @@ function generateOccurrenceId() {
 }
 
 class AutomationEngine {
-  constructor() {
+  constructor({ storage = safeStorage, now = () => Date.now(), setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, recoverOnStart = true } = {}) {
+    this.storage = storage;
+    this.now = now;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
     this.recorders = new Map();
     this.workflows = new Map();
     this.versions = new Map();
@@ -82,16 +87,22 @@ class AutomationEngine {
     this.dedupKeys = new Set();
     this.stepExecutor = null;
     this.listeners = new Set();
+    this.timers = new Map();
+    this.admitting = new Set();
     this.load();
+    if (recoverOnStart) this.recoverScheduledOccurrences();
   }
 
   load() {
     try {
-      const stored = safeStorage.getItem("hey_automation");
+      const stored = this.storage.getItem("hey_automation");
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.recorders) Object.entries(parsed.recorders).forEach(([k, v]) => this.recorders.set(k, v));
         if (parsed.workflows) Object.entries(parsed.workflows).forEach(([k, v]) => this.workflows.set(k, v));
+        if (parsed.runs) Object.entries(parsed.runs).forEach(([k, v]) => this.runs.set(k, v));
+        if (parsed.occurrences) Object.entries(parsed.occurrences).forEach(([k, v]) => this.occurrences.set(k, v));
+        if (parsed.dedupKeys) parsed.dedupKeys.forEach((key) => this.dedupKeys.add(key));
       }
     } catch (err) {
       console.warn("Failed to load automation:", err);
@@ -100,9 +111,12 @@ class AutomationEngine {
 
   save() {
     try {
-      safeStorage.setItem("hey_automation", JSON.stringify({
+      this.storage.setItem("hey_automation", JSON.stringify({
         recorders: Object.fromEntries(this.recorders),
         workflows: Object.fromEntries(this.workflows),
+        runs: Object.fromEntries(this.runs),
+        occurrences: Object.fromEntries(this.occurrences),
+        dedupKeys: Array.from(this.dedupKeys),
       }));
     } catch (err) {
       console.warn("Failed to save automation:", err);
@@ -397,6 +411,18 @@ class AutomationEngine {
     const workflow = this.workflows.get(workflowId);
     if (!workflow) return { error: "Workflow not found" };
 
+    if (workflow.trigger.type === TRIGGER_TYPES.SCHEDULE) {
+      try {
+        if (!workflow.trigger.schedule) throw new TypeError("A schedule definition is required.");
+        if ((workflow.trigger.schedule.type || workflow.trigger.schedule.frequency) === "interval" && !workflow.trigger.schedule.startAt) {
+          workflow.trigger.schedule = { ...workflow.trigger.schedule, startAt: new Date(this.now()).toISOString() };
+        }
+        this.calculateNextRun(workflow.trigger.schedule, new Date(this.now()));
+      } catch (error) {
+        return { error: `Invalid schedule: ${error.message}` };
+      }
+    }
+
     workflow.state = WORKFLOW_STATES.ENABLED;
     workflow.enabledAt = new Date().toISOString();
     this.workflows.set(workflowId, workflow);
@@ -431,49 +457,122 @@ class AutomationEngine {
     const schedule = workflow.trigger.schedule;
     if (!schedule) return;
 
-    const nextRun = this.calculateNextRun(schedule);
+    if (Array.from(this.occurrences.values()).some((occurrence) => occurrence.workflowId === workflowId && occurrence.state === "pending")) return;
+    const nextRun = this.calculateNextRun(schedule, new Date(this.now()));
     if (!nextRun) return;
-
-    const occurrenceId = generateOccurrenceId();
-    const occurrence = {
-      id: occurrenceId,
-      workflowId,
-      scheduledAt: nextRun.toISOString(),
-      state: "pending",
-      createdAt: new Date().toISOString(),
-    };
-
-    this.occurrences.set(occurrenceId, occurrence);
-    this.save();
-
-    const delay = nextRun.getTime() - Date.now();
-    if (delay > 0) {
-      setTimeout(() => this.admitOccurrence(occurrenceId), delay);
-    }
+    this.createOccurrence(workflowId, nextRun);
   }
 
   unscheduleWorkflow(workflowId) {
     for (const [id, occ] of this.occurrences) {
       if (occ.workflowId === workflowId && occ.state === "pending") {
+        this.clearOccurrenceTimer(id);
         this.occurrences.delete(id);
       }
     }
     this.save();
   }
 
-  calculateNextRun() {
-    return new Date(Date.now() + 60000);
+  calculateNextRun(schedule, after = new Date(this.now())) {
+    return calculateScheduledNextRun(schedule, after);
+  }
+
+  createOccurrence(workflowId, runAt, details = {}) {
+    const occurrenceId = generateOccurrenceId();
+    const occurrence = {
+      id: occurrenceId,
+      workflowId,
+      scheduledAt: runAt.toISOString(),
+      state: "pending",
+      createdAt: new Date(this.now()).toISOString(),
+      ...details,
+    };
+    this.occurrences.set(occurrenceId, occurrence);
+    this.save();
+    this.scheduleOccurrenceTimer(occurrence);
+    return occurrence;
+  }
+
+  scheduleOccurrenceTimer(occurrence) {
+    this.clearOccurrenceTimer(occurrence.id);
+    if (occurrence.state !== "pending") return;
+    const dueAt = new Date(occurrence.scheduledAt).getTime();
+    if (!Number.isFinite(dueAt)) {
+      this.occurrences.set(occurrence.id, { ...occurrence, state: "invalid", error: "Stored schedule time is invalid." });
+      this.save();
+      return;
+    }
+    const delay = Math.max(0, dueAt - this.now());
+    // Node/browser timers are bounded to a signed 32-bit millisecond delay.
+    const boundedDelay = Math.min(delay, 2_147_000_000);
+    const timer = this.setTimer(() => {
+      this.timers.delete(occurrence.id);
+      if (dueAt - this.now() > 0) this.scheduleOccurrenceTimer(occurrence);
+      else void this.admitOccurrence(occurrence.id);
+    }, boundedDelay);
+    timer?.unref?.();
+    this.timers.set(occurrence.id, timer);
+  }
+
+  clearOccurrenceTimer(occurrenceId) {
+    const timer = this.timers.get(occurrenceId);
+    if (timer !== undefined) this.clearTimer(timer);
+    this.timers.delete(occurrenceId);
+  }
+
+  recoverScheduledOccurrences() {
+    const now = this.now();
+    for (const run of this.runs.values()) {
+      if (["running", "verifying", "admitted"].includes(run.state)) {
+        run.state = "recovery_required";
+        run.recoveryReason = "The process restarted while the action outcome could be uncertain; automatic replay is blocked.";
+        run.recoveredAt = new Date(now).toISOString();
+        const occurrence = this.occurrences.get(run.occurrenceId);
+        if (occurrence && ["pending", "admitted"].includes(occurrence.state)) {
+          this.occurrences.set(occurrence.id, { ...occurrence, state: "recovery_required", recoveryReason: run.recoveryReason });
+        }
+      }
+    }
+    for (const occurrence of this.occurrences.values()) {
+      if (occurrence.state === "admitted" && !Array.from(this.runs.values()).some((run) => run.occurrenceId === occurrence.id)) {
+        this.occurrences.set(occurrence.id, { ...occurrence, state: "recovery_required", recoveryReason: "Occurrence was claimed without a durable run record; automatic replay is blocked." });
+      }
+    }
+    for (const workflow of this.workflows.values()) {
+      if (workflow.state !== WORKFLOW_STATES.ENABLED || workflow.trigger?.type !== TRIGGER_TYPES.SCHEDULE) continue;
+      const pending = Array.from(this.occurrences.values()).find((occurrence) => occurrence.workflowId === workflow.id && occurrence.state === "pending");
+      if (pending) {
+        if (new Date(pending.scheduledAt).getTime() <= now) {
+          const policy = workflow.missedRunPolicy || MISSED_RUN_POLICIES.RUN_LATEST;
+          if (policy === MISSED_RUN_POLICIES.SKIP) {
+            this.occurrences.set(pending.id, { ...pending, state: "missed", recoveredAt: new Date(now).toISOString() });
+            const next = this.calculateNextRun(workflow.trigger.schedule, new Date(now));
+            if (next) this.createOccurrence(workflow.id, next, { recovered: true });
+          } else {
+            const caught = { ...pending, scheduledAt: new Date(now).toISOString(), recovered: true };
+            this.occurrences.set(caught.id, caught);
+            this.scheduleOccurrenceTimer(caught);
+          }
+        } else this.scheduleOccurrenceTimer(pending);
+      } else {
+        const next = this.calculateNextRun(workflow.trigger.schedule, new Date(now));
+        if (next) this.createOccurrence(workflow.id, next, { recovered: true });
+      }
+    }
+    this.save();
   }
 
   async admitOccurrence(occurrenceId) {
     const occurrence = this.occurrences.get(occurrenceId);
-    if (!occurrence) return;
+    if (!occurrence || occurrence.state !== "pending" || this.admitting.has(occurrenceId)) return;
+    this.admitting.add(occurrenceId);
 
     const workflow = this.workflows.get(occurrence.workflowId);
     if (!workflow || workflow.state !== WORKFLOW_STATES.ENABLED) {
       occurrence.state = "skipped";
       this.occurrences.set(occurrenceId, occurrence);
       this.save();
+      this.admitting.delete(occurrenceId);
       return;
     }
 
@@ -485,6 +584,7 @@ class AutomationEngine {
         occurrence.state = "skipped_overlap";
         this.occurrences.set(occurrenceId, occurrence);
         this.save();
+        this.admitting.delete(occurrenceId);
         return;
       }
     }
@@ -493,7 +593,12 @@ class AutomationEngine {
     this.occurrences.set(occurrenceId, occurrence);
     this.save();
 
-    this.executeWorkflowRun(occurrenceId);
+    this.admitting.delete(occurrenceId);
+    void this.executeWorkflowRun(occurrenceId).catch((error) => {
+      const current = this.occurrences.get(occurrenceId);
+      if (current) this.occurrences.set(occurrenceId, { ...current, state: "failed", error: error.message });
+      this.save();
+    });
   }
 
   async executeWorkflowRun(occurrenceId) {
@@ -534,7 +639,7 @@ class AutomationEngine {
     }
 
     this.runs.set(runId, run);
-    this.occurrences.set(occurrenceId, { ...occurrence, state: "completed", completedAt: new Date().toISOString() });
+    this.occurrences.set(occurrenceId, { ...occurrence, state: run.success ? "completed" : "failed", completedAt: new Date().toISOString(), ...(run.error ? { error: run.error } : {}) });
     this.save();
 
     this.scheduleNextOccurrence(occurrence.workflowId);
@@ -545,24 +650,8 @@ class AutomationEngine {
     const workflow = this.workflows.get(workflowId);
     if (!workflow || workflow.trigger.type !== TRIGGER_TYPES.SCHEDULE) return;
 
-    const nextRun = this.calculateNextRun(workflow.trigger.schedule);
-    if (nextRun) {
-      const occurrenceId = generateOccurrenceId();
-      const occurrence = {
-        id: occurrenceId,
-        workflowId,
-        scheduledAt: nextRun.toISOString(),
-        state: "pending",
-        createdAt: new Date().toISOString(),
-      };
-      this.occurrences.set(occurrenceId, occurrence);
-      this.save();
-
-      const delay = nextRun.getTime() - Date.now();
-      if (delay > 0) {
-        setTimeout(() => this.admitOccurrence(occurrenceId), delay);
-      }
-    }
+    const nextRun = this.calculateNextRun(workflow.trigger.schedule, new Date(this.now()));
+    if (nextRun) this.createOccurrence(workflowId, nextRun);
   }
 
   getRun(id) {
@@ -593,6 +682,7 @@ class AutomationEngine {
   }
 }
 
+export { AutomationEngine };
 export const automationEngine = new AutomationEngine();
 
 export function startRecording(input) {
