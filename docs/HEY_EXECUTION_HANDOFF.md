@@ -8,7 +8,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 ## Current checkpoint and branch
 
 - Working branch: `codex/resume-emergency-2026-10-14`.
-- Latest coordinator commit: `2e41c59da17d3f3a4449833afb4619a6cf385b8d` (Steps 09–11 and 22–27 merges; locally verified, pending push with handoff refresh).
+- Latest coordinator commit: `2e41c59da17d3f3a4449833afb4619a6cf385b8d` (Steps 09–11 and 22–27 merges; locally verified, pending push with this handoff refresh).
 - Base: `origin/codex/production-readiness-2026-10-13` at `97a4f3856398505ffa4dcd4d78348098699d4890` (parent `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`).
 - Verified common checkpoint recorded in `HEY_BUILD_PROGRESS.md`: `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
 - Branch commits after that checkpoint: `4369a3f` event outbox; `ebf36be` evidence-integrity contract; `fa54f27` defensive event snapshots; `4ae2d58` integration ledger; `97a4f38` worker completion checkpoints.
@@ -71,4 +71,4 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 1. Continue Step 01 shared persistence/recovery schema and adversarial coverage without claiming durable production wiring.
 2. Resume remaining branch work only from reviewed tips; record task, model, branch, commit, tests and remaining items.
 3. When the user attaches the Master Build Program, reconcile acceptance criteria and evidence across all 47 steps without restarting audits.
-4. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; unmerged work: PR #1/#3 remain draft/open and remaining worker branches; waiting on the user's promised master-program attachment for complete step-by-step criteria.
+4. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; current code merges are locally verified. PR #1/#3 remain draft/open. Complete step-by-step criteria still await the promised master-program attachment.
