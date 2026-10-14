@@ -37,6 +37,28 @@ test("agents fail closed until a provider returns a verified result", async () =
   assert.equal(verifiedResult.output.output, "observed");
 });
 
+test("agent execution times out and aborts a provider that does not finish", async () => {
+  let signalAborted = false;
+  const slow = registerAgent({
+    id: "test-agent-timeout",
+    name: "Slow provider",
+    timeout: 15,
+    execute: async (_input, _agent, { signal }) => new Promise((resolve) => {
+      signal.addEventListener("abort", () => {
+        signalAborted = signal.aborted;
+        resolve({ success: true, verified: true, output: "late" });
+      }, { once: true });
+    }),
+  });
+
+  const result = await agentEngine.executeAgent(slow, {});
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /timed out after 15ms/);
+  assert.equal(signalAborted, true);
+  assert.equal(agentEngine.runs.get(result.runId).state, "rejected");
+});
+
 test("automation and Forge validation fail closed without real runners", async () => {
   const workflow = createWorkflow({
     name: "No fake workflow",

@@ -330,7 +330,30 @@ class AgentEngine {
     const executor = this.executors.get(agent.id);
     if (!executor) throw new Error(`No execution provider is configured for agent ${agent.id}.`);
 
-    const result = await executor(input, agent);
+    const configuredTimeout = Number(agent.timeout);
+    const timeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? configuredTimeout
+      : 30000;
+    const controller = new AbortController();
+    let timeoutId;
+    const timeoutError = new Error(`Agent ${agent.id} timed out after ${timeout}ms.`);
+    timeoutError.code = "AGENT_TIMEOUT";
+
+    let result;
+    try {
+      result = await Promise.race([
+        Promise.resolve().then(() => executor(input, agent, { signal: controller.signal })),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(timeoutError);
+            controller.abort(timeoutError);
+          }, timeout);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
     if (!result || result.success !== true || result.verified !== true) {
       throw new Error(`Agent ${agent.id} did not return a verified success result.`);
     }
