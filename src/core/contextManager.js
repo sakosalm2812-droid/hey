@@ -387,6 +387,18 @@ export function addPattern(pattern, metadata = {}) {
   return heyContext.memory.patterns;
 }
 
+export function removeMemoryFromContext(memoryId) {
+  const fields = ["shortTerm", "importantFacts", "patterns", "relevant"];
+  let removed = 0;
+  for (const field of fields) {
+    const before = heyContext.memory[field].length;
+    heyContext.memory[field] = heyContext.memory[field].filter((entry) => entry?.id !== memoryId && entry?.memory?.id !== memoryId);
+    removed += before - heyContext.memory[field].length;
+  }
+  if (removed) touchContext();
+  return removed;
+}
+
 export function setRelevantMemory(memory = []) {
   heyContext.memory.relevant =
     Array.isArray(memory)

@@ -1,6 +1,7 @@
 import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { upsertMemoryNode } from "./memoryGraph.js";
+import { getAccountScope, getAccountStorageKey } from "./accountScope.js";
 
 const STORAGE_KEY = "hey_memory_inbox";
 const AUTOAPPROVE_KEY = "hey_memory_autoapprove";
@@ -8,7 +9,8 @@ const MAX_PENDING = 100;
 const DEFAULT_AUTOAPPROVE = false;
 
 let memory = [];
-let autoApproveOverride = null;
+const autoApproveOverrides = new Map();
+let loadedScope = null;
 
 function storage() {
   return typeof localStorage === "undefined" ? null : localStorage;
@@ -18,17 +20,22 @@ function save() {
   const store = storage();
   if (!store) return;
   try {
-    store.setItem(STORAGE_KEY, JSON.stringify(memory.slice(0, MAX_PENDING)));
+    store.setItem(getAccountStorageKey(STORAGE_KEY), JSON.stringify(memory.slice(0, MAX_PENDING)));
   } catch (err) {
     recordAudit({ action: "memory.inbox.persist_failed", status: "failed", metadata: { reason: err.message } });
   }
 }
 
 function load() {
+  const scope = getAccountScope();
+  if (loadedScope !== scope) {
+    memory = [];
+    loadedScope = scope;
+  }
   const store = storage();
   if (!store) return;
   try {
-    const raw = store.getItem(STORAGE_KEY);
+    const raw = store.getItem(getAccountStorageKey(STORAGE_KEY));
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) memory = parsed;
@@ -39,15 +46,15 @@ function load() {
 
 export function isAutoApproveEnabled() {
   const store = storage();
-  if (!store) return autoApproveOverride ?? DEFAULT_AUTOAPPROVE;
-  return store.getItem(AUTOAPPROVE_KEY) === "1";
+  if (!store) return autoApproveOverrides.get(getAccountScope()) ?? DEFAULT_AUTOAPPROVE;
+  return store.getItem(getAccountStorageKey(AUTOAPPROVE_KEY)) === "1";
 }
 
 export function setAutoApproveEnabled(value) {
   const next = Boolean(value);
-  autoApproveOverride = next;
+  autoApproveOverrides.set(getAccountScope(), next);
   const store = storage();
-  if (store) store.setItem(AUTOAPPROVE_KEY, next ? "1" : "0");
+  if (store) store.setItem(getAccountStorageKey(AUTOAPPROVE_KEY), next ? "1" : "0");
   publish("memory.inbox.setting.updated", { autoApprove: next });
   return next;
 }
@@ -65,6 +72,7 @@ export function queueMemory({ value, type = "important", source = "assistant" } 
     source,
     createdAt: new Date().toISOString(),
     status: "pending",
+    accountScope: getAccountScope(),
   };
   memory.unshift(item);
   save();
@@ -125,6 +133,7 @@ export function rejectMemory(id, reason = "rejected_by_user") {
 }
 
 export function clearInbox() {
+  load();
   memory = memory.filter((item) => item.status !== "pending");
   save();
   publish("memory.inbox.cleared", {});

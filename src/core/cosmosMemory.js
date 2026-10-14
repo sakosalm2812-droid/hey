@@ -1,12 +1,14 @@
 import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
-import { upsertMemoryNode, searchMemoryGraph, getMemoryGraph as getLocalMemoryGraph } from "./memoryGraph.js";
+import { upsertMemoryNode, searchMemoryGraph, getMemoryGraph as getLocalMemoryGraph, deleteMemoryNode as deleteLocalMemoryNode } from "./memoryGraph.js";
 import { rankMemories } from "./memoryRanking.js";
 import { isAutoApproveEnabled, queueMemory, rejectMemory } from "./memoryInbox.js";
 import { memoryGraphService } from "./memoryGraphService.js";
 import { supabaseClient } from "../lib/supabase.js";
 import { searchMemory, connectMemoryNodes as connectMemoryNodesEngine } from "./memoryEngine.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { getAccountScope, getAccountStorageKey } from "./accountScope.js";
+import { removeMemoryFromContext } from "./contextManager.js";
 
 const MEMORY_TYPES = Object.freeze({
   TEMPORARY: "temporary",
@@ -60,6 +62,28 @@ function generateCandidateId() {
   return `cand_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function scopedId(id) {
+  return `${getAccountScope()}\u0000${id}`;
+}
+
+function validateMemoryUpdate(updates = {}) {
+  if (!updates || typeof updates !== "object" || Array.isArray(updates)) return "Memory updates must be an object.";
+  const allowed = new Set(["value", "type", "confidence", "tags", "projectId", "privacyScope", "metadata", "expectedUpdatedAt"]);
+  if (Object.keys(updates).some((key) => !allowed.has(key))) return "Memory updates contain immutable or unsupported fields.";
+  if (updates.value !== undefined && (typeof updates.value !== "string" || !updates.value.trim() || updates.value.length > 20_000)) return "Memory content must be a non-empty string up to 20000 characters.";
+  if (updates.type !== undefined && !Object.values(MEMORY_TYPES).includes(updates.type)) return "Unsupported memory type.";
+  if (updates.confidence !== undefined && (!Number.isFinite(updates.confidence) || updates.confidence < 0 || updates.confidence > 1)) return "Confidence must be between 0 and 1.";
+  if (updates.tags !== undefined && (!Array.isArray(updates.tags) || updates.tags.length > 50 || updates.tags.some((tag) => typeof tag !== "string" || tag.length > 100))) return "Tags must be at most 50 strings of 100 characters or fewer.";
+  if (updates.privacyScope !== undefined && !Object.values(PRIVACY_SCOPES).includes(updates.privacyScope)) return "Unsupported privacy scope.";
+  if (updates.projectId !== undefined && updates.projectId !== null && (typeof updates.projectId !== "string" || updates.projectId.length > 200)) return "Project scope is invalid.";
+  if (updates.metadata !== undefined) {
+    const allowedMetadata = new Set(["validFrom", "validTo", "expiresAt", "freshness", "correctionNote", "contradictionNote", "retentionPolicy"]);
+    if (!updates.metadata || typeof updates.metadata !== "object" || Array.isArray(updates.metadata) || Object.keys(updates.metadata).some((key) => !allowedMetadata.has(key))) return "Memory provenance and authority metadata are immutable through this update API.";
+    try { if (JSON.stringify(updates.metadata).length > 8_000) return "Memory metadata exceeds 8000 characters."; } catch { return "Memory metadata must be serializable JSON."; }
+  }
+  return null;
+}
+
 class CosmosMemory {
   constructor() {
     this.candidates = new Map();
@@ -67,40 +91,48 @@ class CosmosMemory {
     this.deletionTombstones = new Map();
     this.listeners = new Set();
     this.initializedUsers = new Set();
+    this.loadedScopes = new Set();
     this.load();
   }
 
   load() {
+    const scope = getAccountScope();
+    if (this.loadedScopes.has(scope)) return;
     try {
-      const stored = safeStorage.getItem("hey_cosmos_candidates");
+      const stored = safeStorage.getItem(getAccountStorageKey("cosmos_candidates", scope));
       if (stored) {
         const parsed = JSON.parse(stored);
         Object.entries(parsed).forEach(([id, candidate]) => {
-          this.candidates.set(id, candidate);
+          this.candidates.set(scopedId(id), { ...candidate, accountScope: scope });
         });
       }
-      const tombstones = safeStorage.getItem("hey_cosmos_tombstones");
+      const tombstones = safeStorage.getItem(getAccountStorageKey("cosmos_tombstones", scope));
       if (tombstones) {
         const parsed = JSON.parse(tombstones);
         Object.entries(parsed).forEach(([id, tombstone]) => {
-          this.deletionTombstones.set(id, tombstone);
+          this.deletionTombstones.set(scopedId(id), { ...tombstone, accountScope: scope });
         });
       }
+      this.loadedScopes.add(scope);
     } catch (err) {
       console.warn("Failed to load Cosmos memory:", err);
     }
   }
 
   save() {
+    const scope = getAccountScope();
+    this.load();
     try {
-      safeStorage.setItem("hey_cosmos_candidates", JSON.stringify(Object.fromEntries(this.candidates)));
-      safeStorage.setItem("hey_cosmos_tombstones", JSON.stringify(Object.fromEntries(this.deletionTombstones)));
+      const inScope = (entries) => Object.fromEntries(Array.from(entries).filter(([, record]) => record.accountScope === scope).map(([, record]) => [record.id, record]));
+      safeStorage.setItem(getAccountStorageKey("cosmos_candidates", scope), JSON.stringify(inScope(this.candidates)));
+      safeStorage.setItem(getAccountStorageKey("cosmos_tombstones", scope), JSON.stringify(inScope(this.deletionTombstones)));
     } catch (err) {
       console.warn("Failed to save Cosmos memory:", err);
     }
   }
 
   async ingestMemory(input) {
+    this.load();
     const {
       value,
       type = MEMORY_TYPES.FACT,
@@ -150,15 +182,17 @@ class CosmosMemory {
   }
 
   async createCandidate(input) {
+    this.load();
     const id = generateCandidateId();
     const candidate = {
       id,
+      accountScope: getAccountScope(),
       ...input,
       createdAt: new Date().toISOString(),
       status: "pending",
     };
 
-    this.candidates.set(id, candidate);
+    this.candidates.set(scopedId(id), candidate);
     this.save();
 
     queueMemory({
@@ -194,6 +228,7 @@ class CosmosMemory {
   }
 
   async persistMemory(input) {
+    this.load();
     const {
       value,
       type = MEMORY_TYPES.FACT,
@@ -209,6 +244,7 @@ class CosmosMemory {
     const id = generateMemoryId();
     const memory = {
       id,
+      accountScope: getAccountScope(),
       value,
       type,
       source,
@@ -218,6 +254,7 @@ class CosmosMemory {
       privacyScope,
       metadata: {
         ...metadata,
+        accountScope: getAccountScope(),
         explicit,
         ingestedAt: new Date().toISOString(),
       },
@@ -277,38 +314,44 @@ class CosmosMemory {
   }
 
   async retrieveMemories(query, options = {}) {
+    this.load();
+    const queryText = String(query || "").trim();
+    const requestedLimit = Number.isSafeInteger(options.limit) ? options.limit : 20;
+    if (requestedLimit < 1 || requestedLimit > 100) return [];
+    if (queryText.length > 2_000) return [];
+    const minConfidence = options.minConfidence ?? 0;
+    if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) return [];
     const {
       projectId = null,
       privacyScope = null,
       types = null,
-      limit = 20,
       includeGraph = true,
       includeSupabase = true,
-      minConfidence = 0,
     } = options;
 
     let memories = [];
 
-    const localResults = searchMemory(query);
+    const localResults = searchMemory(queryText);
     memories.push(...localResults);
 
     if (includeGraph) {
-      const graphResults = searchMemoryGraph(query, limit);
+      const graphResults = searchMemoryGraph(queryText, requestedLimit);
       memories.push(...graphResults);
     }
 
     const userId = await this.getCurrentUserId();
     if (includeSupabase && userId) {
       try {
-        const supabaseResults = await memoryGraphService.searchMemoryNodes(userId, query, limit);
+        const supabaseResults = await memoryGraphService.searchMemoryNodes(userId, queryText, requestedLimit);
         memories.push(...supabaseResults.map(r => ({
           id: r.id,
           value: r.value,
           type: r.node_type,
           confidence: r.confidence,
           tags: r.tags,
-          projectId: r.project_id,
-          privacyScope: r.privacy_scope,
+          privacyScope: r.privacy_scope || r.metadata?.privacyScope || "private",
+          projectId: r.project_id || r.metadata?.projectId || null,
+          accountScope: getAccountScope(),
           metadata: r.metadata,
           createdAt: new Date(r.created_at),
         })));
@@ -322,7 +365,9 @@ class CosmosMemory {
       if (projectId && m.projectId !== projectId) return false;
       if (privacyScope && m.privacyScope !== privacyScope) return false;
       if (types && Array.isArray(types) && !types.includes(m.type)) return false;
-      if (this.deletionTombstones.has(m.id)) return false;
+      if (this.deletionTombstones.has(scopedId(m.id))) return false;
+      if (m.accountScope && m.accountScope !== getAccountScope()) return false;
+      if (m.metadata?.supersededBy || m.metadata?.superseded_by || m.superseded_by) return false;
       return true;
     });
 
@@ -330,24 +375,30 @@ class CosmosMemory {
       arr.findIndex(m => m.id === memory.id || m.node_key === memory.id) === index
     );
 
-    const ranked = rankMemories(memories, query);
+    const ranked = rankMemories(memories, queryText);
 
-    return ranked.slice(0, limit);
+    return ranked.slice(0, requestedLimit);
   }
 
   async updateMemory(id, updates) {
+    this.load();
+    const validationError = validateMemoryUpdate(updates);
+    if (validationError) return { success: false, error: validationError };
     const userId = await this.getCurrentUserId();
     if (!userId) return { success: false, error: "Not authenticated" };
 
     try {
       const existing = await memoryGraphService.getMemoryNode(userId, id);
       if (!existing) return { success: false, error: "Memory not found" };
+      if (updates.expectedUpdatedAt && updates.expectedUpdatedAt !== existing.updated_at) return { success: false, error: "Memory changed since it was read.", conflict: true, currentVersion: existing.updated_at };
 
       const updated = {
         ...existing,
         ...updates,
+        metadata: { ...(existing.metadata || {}), ...(updates.metadata || {}) },
         updatedAt: new Date().toISOString(),
       };
+      delete updated.expectedUpdatedAt;
 
       await memoryGraphService.upsertMemoryNode(userId, updated);
 
@@ -357,7 +408,7 @@ class CosmosMemory {
         confidence: updated.confidence,
         tags: updated.tags,
         projectId: updated.project_id,
-        privacyScope: updated.privacy_scope,
+        privacyScope: updated.privacy_scope || updated.metadata?.privacyScope,
         metadata: updated.metadata,
       });
 
@@ -385,6 +436,11 @@ class CosmosMemory {
       if (!oldMemory || !newMemory) {
         return { success: false, error: "One or both memories not found" };
       }
+      const alreadySupersededBy = oldMemory.metadata?.supersededBy || oldMemory.superseded_by;
+      if (alreadySupersededBy) {
+        if (alreadySupersededBy === newId) return { success: true, supersession: { id: oldMemory.metadata?.supersessionId || oldMemory.supersession_id, oldId, newId, reason, idempotent: true } };
+        return { success: false, error: "Memory was already superseded by a different record." };
+      }
 
       const supersession = {
         id: `super_${Date.now()}`,
@@ -396,17 +452,22 @@ class CosmosMemory {
 
       this.supersessions.set(supersession.id, supersession);
 
-      await memoryGraphService.upsertMemoryNode(userId, {
-        ...oldMemory,
-        superseded_by: newId,
-        supersession_id: supersession.id,
-      });
+      const oldUpdated = { ...oldMemory, metadata: { ...(oldMemory.metadata || {}), supersededBy: newId, supersessionId: supersession.id } };
+      const newUpdated = { ...newMemory, metadata: { ...(newMemory.metadata || {}), supersedes: oldId, supersessionId: supersession.id } };
 
-      await memoryGraphService.upsertMemoryNode(userId, {
-        ...newMemory,
-        supersedes: oldId,
-        supersession_id: supersession.id,
-      });
+      await memoryGraphService.upsertMemoryNode(userId, oldUpdated);
+      try {
+        await memoryGraphService.upsertMemoryNode(userId, newUpdated);
+      } catch (error) {
+        try {
+          await memoryGraphService.upsertMemoryNode(userId, { ...oldMemory, metadata: oldMemory.metadata || {} });
+        } catch (rollbackError) {
+          return { success: false, error: error.message, rollback: "failed", rollbackError: rollbackError.message };
+        }
+        return { success: false, error: error.message, rollback: "completed" };
+      }
+      upsertMemoryNode(oldMemory.value, { id: oldMemory.id, type: oldMemory.node_type, confidence: oldMemory.confidence, tags: oldMemory.tags, metadata: oldUpdated.metadata });
+      upsertMemoryNode(newMemory.value, { id: newMemory.id, type: newMemory.node_type, confidence: newMemory.confidence, tags: newMemory.tags, metadata: newUpdated.metadata });
 
       publish("cosmos.memory.superseded", supersession);
       recordAudit({
@@ -422,27 +483,29 @@ class CosmosMemory {
   }
 
   async deleteMemory(id, options = {}) {
+    this.load();
     const { hard = false, propagate = true } = options;
+    if (!propagate) return { success: false, error: "Remote propagation is required; local tombstones cannot confirm a completed deletion." };
     const userId = await this.getCurrentUserId();
     if (!userId) return { success: false, error: "Not authenticated" };
 
     try {
       const tombstone = {
         id,
+        accountScope: getAccountScope(),
         deletedAt: new Date().toISOString(),
         hard,
         reason: options.reason || "user_deleted",
       };
 
-      this.deletionTombstones.set(id, tombstone);
+      this.deletionTombstones.set(scopedId(id), tombstone);
       this.save();
+
+      deleteLocalMemoryNode(id);
+      removeMemoryFromContext(id);
 
       if (propagate) {
         await memoryGraphService.deleteMemoryNode(userId, id);
-      }
-
-      if (hard) {
-        await memoryGraphService.hardDeleteMemoryNode(userId, id);
       }
 
       publish("cosmos.memory.deleted", { id, tombstone });
@@ -459,6 +522,7 @@ class CosmosMemory {
   }
 
   async connectMemories(fromId, toId, relation = "related", weight = 0.6) {
+    this.load();
     const userId = await this.getCurrentUserId();
     if (!userId) return { success: false, error: "Not authenticated" };
 
@@ -481,11 +545,15 @@ class CosmosMemory {
   }
 
   async getMemoryGraph(userId, options = {}) {
-    const { limit = 500 } = options;
+    this.load();
+    const limit = Number.isSafeInteger(options.limit) ? options.limit : 500;
+    if (limit < 1 || limit > 500) return { nodes: [], edges: [] };
     
     if (!userId) {
       return getLocalMemoryGraph();
     }
+    const currentUserId = await this.getCurrentUserId();
+    if (!currentUserId || currentUserId !== userId) return { nodes: [], edges: [] };
 
     try {
       return await memoryGraphService.getMemoryGraph(userId, limit);
@@ -551,15 +619,19 @@ class CosmosMemory {
   }
 
   getCandidates() {
-    return Array.from(this.candidates.values()).filter(c => c.status === "pending");
+    this.load();
+    return Array.from(this.candidates.values()).filter(c => c.accountScope === getAccountScope() && c.status === "pending");
   }
 
   getCandidate(id) {
-    return this.candidates.get(id) || null;
+    this.load();
+    return this.candidates.get(scopedId(id)) || null;
   }
 
   async approveCandidate(id) {
-    const candidate = this.candidates.get(id);
+    this.load();
+    const key = scopedId(id);
+    const candidate = this.candidates.get(key);
     if (!candidate) return { success: false, error: "Candidate not found" };
 
     const result = await this.persistMemory({
@@ -577,7 +649,7 @@ class CosmosMemory {
     if (result.success) {
       candidate.status = "approved";
       candidate.approvedAt = new Date().toISOString();
-      this.candidates.delete(id);
+      this.candidates.delete(key);
       this.save();
     }
 
@@ -585,13 +657,15 @@ class CosmosMemory {
   }
 
   rejectCandidate(id, reason = "rejected_by_user") {
-    const candidate = this.candidates.get(id);
+    this.load();
+    const key = scopedId(id);
+    const candidate = this.candidates.get(key);
     if (!candidate) return { success: false, error: "Candidate not found" };
 
     candidate.status = "rejected";
     candidate.rejectedAt = new Date().toISOString();
     candidate.rejectionReason = reason;
-    this.candidates.delete(id);
+    this.candidates.delete(key);
     this.save();
 
     rejectMemory(id, reason);
@@ -599,11 +673,13 @@ class CosmosMemory {
   }
 
   getTombstones() {
-    return Array.from(this.deletionTombstones.values());
+    this.load();
+    return Array.from(this.deletionTombstones.values()).filter((record) => record.accountScope === getAccountScope());
   }
 
   hasTombstone(id) {
-    return this.deletionTombstones.has(id);
+    this.load();
+    return this.deletionTombstones.has(scopedId(id));
   }
 
   subscribe(listener) {

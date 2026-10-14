@@ -21,6 +21,28 @@ import {
   };
   
   const initializedUsers = new Set();
+
+function normalizeMemoryRecord(memory) {
+  const nested = memory.fact && typeof memory.fact === "object"
+    ? memory.fact
+    : memory.pattern && typeof memory.pattern === "object"
+      ? memory.pattern
+      : {};
+  const value = memory.value
+    ?? (typeof memory.fact === "string" ? memory.fact : null)
+    ?? (typeof nested.fact === "string" ? nested.fact : null)
+    ?? (typeof memory.pattern === "string" ? memory.pattern : null)
+    ?? memory.description
+    ?? memory.text;
+  return {
+    ...nested,
+    ...memory,
+    id: memory.id || nested.id,
+    value: typeof value === "string" ? value : value == null ? "" : JSON.stringify(value),
+    confidence: memory.confidence ?? memory.importance ?? 0.5,
+    metadata: memory.metadata || {},
+  };
+}
   
   function createMemory(value, type = memoryTypes.temporary) {
     return {
@@ -263,7 +285,7 @@ export function searchMemory(query) {
         ) === index,
     );
 
-    const ranked = rankMemories(combined, query);
+    const ranked = rankMemories(combined.map(normalizeMemoryRecord).filter((memory) => memory.value), query);
 
     return ranked.map((entry) => ({
       ...entry,
@@ -301,7 +323,7 @@ export async function searchMemoryAsync(query) {
         ) === index,
     );
 
-    const ranked = rankMemories(combined, query);
+    const ranked = rankMemories(combined.map(normalizeMemoryRecord).filter((memory) => memory.value), query);
 
     return ranked.map((entry) => ({
       ...entry,
