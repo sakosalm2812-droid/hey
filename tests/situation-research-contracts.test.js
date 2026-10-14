@@ -136,6 +136,65 @@ test("citation lexical overlap cannot become support; retraction invalidates lin
   assert.equal(invalidateClaimsForSource([claim], "javascript:alert(1)").length, 1);
 });
 
+test("citation evaluation rejects expired, malformed, or jurisdiction-mismatched expert sources", () => {
+  const now = Date.parse("2026-10-14T12:00:00.000Z");
+  const source = {
+    title: "Regional guidance",
+    url: "https://example.org/guidance",
+    snippet: "The guidance applies to regulated services.",
+    jurisdiction: "US-CA",
+    freshness: "volatile",
+    expiresAt: "2026-10-14T11:00:00.000Z",
+  };
+  const claim = createClaimRecord({
+    text: "The guidance applies to regulated services",
+    source,
+    accountScope: "account:alice",
+    workspaceId: "research",
+    createdAt: "2026-10-14T10:00:00.000Z",
+  });
+  const citation = claim.candidateCitations[0];
+
+  assert.deepEqual(evaluateCitationCoverage(claim, citation, { now }), {
+    status: "stale",
+    reason: "source_expired",
+  });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    source: { ...citation.source, expiresAt: "not-a-date" },
+  }, { now }), { status: "stale", reason: "invalid_source_expiry" });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    source: { ...citation.source, expiresAt: Symbol("hostile expiry") },
+  }, { now }), { status: "stale", reason: "invalid_source_expiry" });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    capturedAt: Symbol("hostile timestamp"),
+  }, { now }), { status: "stale", reason: "evidence_timestamp_missing_or_invalid" });
+  assert.deepEqual(evaluateCitationCoverage(claim, citation, { now, maxAgeDays: -1 }), {
+    status: "invalid",
+    reason: "invalid_freshness_policy",
+  });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    source: { ...citation.source, expiresAt: null },
+  }, { now }), { status: "stale", reason: "volatile_source_missing_expiry" });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    source: { ...citation.source, expiresAt: "2026-10-15T12:00:00.000Z" },
+  }, { now, requiredJurisdiction: "US-NY" }), {
+    status: "invalid",
+    reason: "jurisdiction_mismatch",
+  });
+  assert.deepEqual(evaluateCitationCoverage(claim, {
+    ...citation,
+    source: { ...citation.source, jurisdiction: undefined, expiresAt: "2026-10-15T12:00:00.000Z" },
+  }, { now, requiredJurisdiction: "US-CA" }), {
+    status: "invalid",
+    reason: "source_jurisdiction_missing",
+  });
+});
+
 test("claim construction rejects missing scope, malformed sources, and empty claims", () => {
   assert.throws(() => createClaimRecord({ text: "claim", source: { url: "https://example.org", title: "x" }, workspaceId: "research" }), /Account and workspace/);
   assert.throws(() => createClaimRecord({ text: "claim", source: { url: "javascript:alert(1)", title: "x" }, accountScope: "a", workspaceId: "research" }), /valid HTTP/);

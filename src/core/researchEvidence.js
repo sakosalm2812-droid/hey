@@ -53,6 +53,10 @@ function normalizedText(value) {
   return String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function parseTimestamp(value) {
+  return typeof value === "string" && value.trim() ? Date.parse(value) : Number.NaN;
+}
+
 export function sourceFingerprint(source = {}) {
   const url = canonicalizeSourceUrl(source.url);
   if (url) return `url:${url}`;
@@ -96,13 +100,38 @@ export function createClaimRecord({ id, text, source, accountScope, workspaceId,
 }
 
 /** A source excerpt is only a candidate: this function never asserts entailment. */
-export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), maxAgeDays = 3650 } = {}) {
+export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), maxAgeDays = 3650, requiredJurisdiction } = {}) {
   if (!claim?.text || !evidence?.source?.url) return { status: "invalid", reason: "missing_claim_or_source" };
   if (evidence.verification === "retracted" || RETRACTED_STATES.has(evidence.source.status)) {
     return { status: "invalidated", reason: "source_retracted" };
   }
-  const age = now - Date.parse(evidence.capturedAt || evidence.source.retrievedAt || "");
-  if (Number.isFinite(age) && age > maxAgeDays * 86_400_000) return { status: "stale", reason: "evidence_age_exceeded" };
+  if (!Number.isFinite(now) || !(maxAgeDays === Infinity || Number.isFinite(maxAgeDays) && maxAgeDays >= 0)) {
+    return { status: "invalid", reason: "invalid_freshness_policy" };
+  }
+  const capturedAt = parseTimestamp(evidence.capturedAt || evidence.source.retrievedAt);
+  if (!Number.isFinite(capturedAt)) return { status: "stale", reason: "evidence_timestamp_missing_or_invalid" };
+  if (capturedAt > now + 60_000) return { status: "stale", reason: "evidence_timestamp_in_future" };
+  if (now - capturedAt > maxAgeDays * 86_400_000) return { status: "stale", reason: "evidence_age_exceeded" };
+
+  if (evidence.source.freshness === "volatile" && !evidence.source.expiresAt) {
+    return { status: "stale", reason: "volatile_source_missing_expiry" };
+  }
+  if (evidence.source.expiresAt !== undefined && evidence.source.expiresAt !== null) {
+    const expiresAt = parseTimestamp(evidence.source.expiresAt);
+    if (!Number.isFinite(expiresAt)) return { status: "stale", reason: "invalid_source_expiry" };
+    if (now >= expiresAt) return { status: "stale", reason: "source_expired" };
+  }
+
+  const jurisdiction = requiredJurisdiction ?? claim.jurisdiction;
+  if (jurisdiction !== undefined && jurisdiction !== null) {
+    if (typeof jurisdiction !== "string" || !jurisdiction.trim()) return { status: "invalid", reason: "invalid_required_jurisdiction" };
+    const sourceJurisdictions = evidence.source.jurisdictions ?? evidence.source.jurisdiction;
+    const values = Array.isArray(sourceJurisdictions) ? sourceJurisdictions : [sourceJurisdictions];
+    if (!values.some((value) => typeof value === "string" && value.trim().toLowerCase() === jurisdiction.trim().toLowerCase())) {
+      return { status: "invalid", reason: sourceJurisdictions ? "jurisdiction_mismatch" : "source_jurisdiction_missing" };
+    }
+  }
+
   const excerpt = normalizedText(evidence.source.excerpt || evidence.source.snippet);
   const terms = normalizedText(claim.text).split(" ").filter((term) => term.length > 2);
   const coverage = terms.length ? terms.filter((term) => excerpt.includes(term)).length / terms.length : 0;
