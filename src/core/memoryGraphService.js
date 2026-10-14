@@ -49,10 +49,10 @@ class MemoryGraphService {
         user_id: userId,
         node_key: node.nodeKey || node.id,
         value: node.value,
-        node_type: node.type || 'memory',
+        node_type: node.type || node.node_type || 'memory',
         confidence: node.confidence ?? 0.7,
         tags: node.tags || [],
-        metadata: node.metadata || {},
+        metadata: { ...(node.metadata || {}), projectId: node.projectId ?? node.metadata?.projectId ?? null, privacyScope: node.privacyScope ?? node.metadata?.privacyScope ?? "private" },
         updated_at: new Date().toISOString(),
       }, {
         onConflict: 'user_id,node_key',
@@ -120,16 +120,19 @@ class MemoryGraphService {
   }
 
   async searchMemoryNodes(userId, query, limit = 20) {
-    const { data, error } = await supabaseClient
-      .from('hey_memory_nodes')
-      .select('*')
-      .eq('user_id', userId)
-      .or(`value.ilike.%${query}%,node_key.ilike.%${query}%`)
-      .order('confidence', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-    return data || [];
+    const text = String(query || "").trim().slice(0, 256);
+    if (!text) return [];
+    const safeLimit = Math.min(100, Math.max(1, Number.isInteger(limit) ? limit : 20));
+    const pattern = `%${text.replace(/[\\%_]/g, "\\$&")}%`;
+    const [byValue, byKey] = await Promise.all([
+      supabaseClient.from('hey_memory_nodes').select('*').eq('user_id', userId).ilike('value', pattern).order('confidence', { ascending: false }).limit(safeLimit),
+      supabaseClient.from('hey_memory_nodes').select('*').eq('user_id', userId).ilike('node_key', pattern).order('confidence', { ascending: false }).limit(safeLimit),
+    ]);
+    if (byValue.error) throw byValue.error;
+    if (byKey.error) throw byKey.error;
+    const unique = new Map();
+    [...(byValue.data || []), ...(byKey.data || [])].forEach((node) => unique.set(node.id, node));
+    return Array.from(unique.values()).slice(0, safeLimit);
   }
 
   async getMemoryGraph(userId, limit = 500) {
@@ -189,10 +192,10 @@ class MemoryGraphService {
         user_id: userId,
         node_key: n.nodeKey || n.id,
         value: n.value,
-        node_type: n.type || 'memory',
+        node_type: n.type || n.node_type || 'memory',
         confidence: n.confidence ?? 0.7,
         tags: n.tags || [],
-        metadata: n.metadata || {},
+        metadata: { ...(n.metadata || {}), projectId: n.projectId ?? n.metadata?.projectId ?? null, privacyScope: n.privacyScope ?? n.metadata?.privacyScope ?? "private" },
         updated_at: new Date().toISOString(),
       })), {
         onConflict: 'user_id,node_key',
