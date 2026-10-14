@@ -2,7 +2,7 @@
 
 Updated: 2026-10-14  
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `9af7533` (integrated code; exact full SHA is in the execution handoff)
+Latest verified implementation checkpoint: `8cbf4ef40eff32bd3925187b827ca0be18f82953`
 
 ## Status rules
 
@@ -57,7 +57,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 | 39 | Evaluation, QA, Red Team, Evidence & Anti-Fake-Done | Incomplete | Focused regressions and evidence primitives exist, but no consolidated evaluation/red-team matrix, independent evidence scorer or anti-fake-done release gates exist. |
 | 40 | Release Engineering, CI/CD, Deployment, Backup & Disaster Recovery | Incomplete | `platformMatrix.js` and `release-surfaces.test.js` cover declared release surfaces; no verified CI/CD, backup/restore drill, deployment rollback or disaster-recovery run exists. |
 | 41 | Local-First, Offline, Sync, LAN, Self-Hosted & Private Compute | In progress | `offlineEngine.js`, local account-scoped storage and offline mandate policy exist; related security tests. Sync conflict resolution, LAN/self-host deployment and weak-device/offline journey coverage remain. |
-| 42 | Platform & Native Adapters / Web, PWA, Mobile & Desktop | In progress | `platformMatrix.js`, Tauri/OS adapter and capability tests; release matrix. Real native builds, entitlements, device families and parity evidence remain. |
+| 42 | Platform & Native Adapters / Web, PWA, Mobile & Desktop | In progress | `platformMatrix.js`, Tauri/OS adapter and capability tests; capability policies are now snapshot-protected and duplicate IDs cannot replace existing policy (`053ca0f`, `platform-capabilities.test.js`). Real native builds, entitlements, device families and parity evidence remain. |
 | 43 | Accessibility, Localization, Internationalization & Inclusive Interaction | In progress | Theme accessibility test checks action labels and surface tokens for 27 themes. Full screen-reader, keyboard, reduced-motion, RTL, locale and assistive-device verification remains. |
 | 44 | Product Design, Premium UX, Onboarding & Psychology | In progress | Theme/studio and onboarding engines; `theme-studio.test.js`. End-to-end accessibility/usability research, onboarding journeys and broad device validation remain. |
 | 45 | Domain Expert Packs, High-Stakes Specialization & Knowledge Certification | Incomplete | Domain engines and agent seams exist, but no certified expert-pack schema, provenance/knowledge evaluation or high-stakes escalation test suite is evidenced. |
@@ -66,7 +66,7 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 ## Verified integrated checkpoint
 
-At integrated code checkpoint `2e41c59`, full Node suite passed **113/113**; at `94ca9f7`, **114/114**; at `09f0622`, **115/115**. After adding Step 01 malformed-store accessor defenses and integrating the targeted Step 28 and Step 33 fixes at `9af7533`, the full Node suite passed **121/121**, `npx eslint src tests scripts` passed, production build passed, and `git diff --check` passed. The build skipped sitemap generation because `SITE_URL` is unset and emitted the existing ineffective mixed static/dynamic import warning for `contextManager.js`. These gates verify this local code state only; they do not prove live provider, database, device, external service, or production behavior.
+At integrated code checkpoint `2e41c59`, full Node suite passed **113/113**; at `94ca9f7`, **114/114**; at `09f0622`, **115/115**. After adding Step 01 malformed-store accessor defenses, integrating targeted Step 28 and Step 33 fixes at `9af7533`, and integrating Step 42 capability policy protections at `8cbf4ef`, the full Node suite passed **122/122**, `npx eslint src tests scripts` passed, production build passed, and `git diff --check` passed. The build skipped sitemap generation because `SITE_URL` is unset and emitted the existing ineffective mixed static/dynamic import warning for `contextManager.js`. These gates verify this local code state only; they do not prove live provider, database, device, external service, or production behavior.
 
 ## Source completeness limits
 

@@ -156,4 +156,8 @@ On the integrated tree, `npm test` passed 121/121; `npx eslint src tests scripts
 
 Adversarial continuation on Step 01: commit `7b451497876b61a858a3e48d47b3117e2a1b0326` captures fail-closed handling for mandate store contract getters and method access. A hostile adapter getter regression confirms verification resolves to denial rather than throwing. The full suite at that isolated checkpoint passed 116/116; after worker integrations it passed 121/121.
 
-Current active Luna/high workers are `/root/resume_steps_05_08` on Steps 36–38 and `/root/resume_steps_22_27` on Steps 39–42, both starting from coordinator `9af7533`. New branches/SHAs will be recorded as they check in. Steps 43–47 remain unassigned.
+Current active Luna/high workers are `/root/resume_steps_05_08` on Steps 36–38 (from `9af7533`) and `/root/resume_steps_09_11` on Steps 43–45 (from `02b245e`). Steps 46–47 remain with the coordinator.
+
+### Step 42 capability registry integrity — 2026-10-14
+
+Reviewed worker commit `053ca0f20409c51ac0dc9640cd2abd9de13579f3` from `codex/resume-steps-39-42-2026-10-14` and integrated it at coordinator `8cbf4ef40eff32bd3925187b827ca0be18f82953`. `capabilityRegistry.js` now copies policies on registration/read/list and refuses duplicate IDs, preventing external mutation or replacement of registered platform restrictions. The regression mutates caller inputs and returned records and attempts a duplicate-ID policy escalation. Worker verification focused 22/22 and full 122/122; integrated coordinator full suite 122/122, scoped ESLint, production build and diff check passed. The worker's follow-up task context did not expose a model selection override; its previous checkpoint was GPT-6 Luna/high.

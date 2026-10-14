@@ -8,7 +8,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 ## Current checkpoint and branch
 
 - Working branch: `codex/resume-emergency-2026-10-14`.
-- Latest verified implementation commit: `9af7533` (integrates dependency-graph validation from Steps 28–30 and signed-package enforcement from Steps 31–35 on top of the Step 01 volatile-store guard).
+- Latest verified implementation commit: `8cbf4ef40eff32bd3925187b827ca0be18f82953` (integrates Step 42 capability policy snapshotting on top of Steps 28–35 and Step 01 guard).
 - Base: `origin/codex/production-readiness-2026-10-13` at `97a4f3856398505ffa4dcd4d78348098699d4890` (parent `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`).
 - Verified common checkpoint recorded in `HEY_BUILD_PROGRESS.md`: `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
 - Branch commits after that checkpoint: `4369a3f` event outbox; `ebf36be` evidence-integrity contract; `fa54f27` defensive event snapshots; `4ae2d58` integration ledger; `97a4f38` worker completion checkpoints.
@@ -45,7 +45,8 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
   - Steps 22–27: `codex/resume-steps-22-27-2026-10-14` at `4d14e4c`; integrated locally at `2e41c59`. Artifact updates reject immutable-field tampering, accessors and invalid status. Focused 3/3, worker suite 111/111; integrated coordinator currently 113/113 plus lint/build/diff-check. This is a targeted fix, not full completion of Steps 22–27.
   - Steps 28–30: `codex/resume-steps-28-30-2026-10-14` at `933ba4c`; implementation commit `79543fe` is integrated at `272c4e6`. Task dependency writes require existing IDs, reject transitive cycles on add/update, and return snapshots. Focused 1/1; branch full suite 115/115; integrated coordinator suite 121/121. No PR was created.
   - Steps 31–35: `codex/resume-steps-31-35-2026-10-14` at `93af08a`; implementation is integrated at `9af7533`. Extension installation requires a linked installed package with a valid trusted signature and exact declared capabilities/dependencies/licenses; APIs return copies to prevent state mutation. Focused 4/4; branch full suite 118/118; integrated coordinator suite 121/121. Marketplace moderation/runtime sandboxing remain unverified; no PR was created.
-  - Steps 36–38 and 39–42: implementation workers are active on fresh branches from `9af7533`; exact branches/commits will be recorded on check-in.
+  - Steps 39–42: `codex/resume-steps-39-42-2026-10-14` at `053ca0f`; integrated at coordinator `8cbf4ef`. Capability registration/get/list operations now snapshot policy, and duplicate IDs cannot replace registered policies. Focused capability suite 22/22; integrated full suite 122/122. No PR created; broad native hardware parity remains unverified.
+  - Steps 36–38: active worker from `9af7533`; Steps 43–45: active worker from `02b245e`. Their exact new branches/SHAs are pending check-in.
   - Prepared remote branches for Steps 28–45 were at `3320c8c`; newly resumed branches supersede only their scoped prepared refs. Steps 43–45 and 46–47 still need assignment.
   - Step 46–47 integration/enforcement: no separate branch or task recovered.
 - Prior ledger says available engineering agents used GPT-6 Luna (`gpt-6-luna`, high reasoning); it also explicitly says no Codex task-creation/model-picker MCP was available and no UI model picker change was made. Do not claim model selection via UI.
@@ -55,16 +56,16 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 - Existing `HEY_BUILD_PROGRESS.md` records focused repair tests 7/7, earlier full suite 61/61, lint/build pass, plus Step 01 mandate, evidence-integrity and event-outbox tests. Later progress records 66/66 full suite before the latest coordinator snapshot guard; see the ledger for exact scope.
 - Worker PR descriptions report their local verification. No PR changes have been merged into the coordinator branch during this recovery; PR #1's feature branch now contains the 97a4f38 coordinator base.
 - `main` contains no handoff document; this file is the continuity source for the current coordinator branch.
-- Integrated coordinator verification: `npm test` passed **121/121** after worker integrations and Step 01 store hardening. `npx eslint src tests scripts`, production build and `git diff --check` passed. Build skips sitemap generation because `SITE_URL` is unset and reports the existing `contextManager.js` mixed static/dynamic import warning. The repository-wide lint script scans nested worker worktrees and was stopped; scoped lint completed cleanly.
+- Integrated coordinator verification: `npm test` passed **122/122** after Step 42 integration and Step 01 store hardening. `npx eslint src tests scripts`, production build and `git diff --check` passed. Build skips sitemap generation because `SITE_URL` is unset and reports the existing `contextManager.js` mixed static/dynamic import warning. The repository-wide lint script scans nested worker worktrees and was stopped; scoped lint completed cleanly.
 - External constraints: connected Drive is unauthorized; actual machine path `E:\hey` is not mounted in this session. Repository clone is at this session's `work/hey` path. Production identity providers, signing keys, shared transactional storage, external providers, and deployed services remain unverified.
 
 ## Active workers and references
 
 - Coordinator: current Codex task `01a13bf9-ee55-7cc0-82b5-1308bab20328`; branch `codex/resume-emergency-2026-10-14`.
 - Completed follow-up worker `/root/resume_steps_09_11`: GPT-6 Luna/high; Steps 28–30 branch `codex/resume-steps-28-30-2026-10-14`, worktree `.../work/hey/work/hey-steps-28-30`, implementation `79543fe`, worker docs `933ba4c`; integrated code `272c4e6`. No standalone Codex task ID available.
-- Completed follow-up worker `/root/resume_steps_22_27`: GPT-6 Luna/high; Steps 31–35 branch `codex/resume-steps-31-35-2026-10-14`, worktree `.../work/hey/work/hey-steps-31-35-coordinator4296`, commit `93af08a`; integrated code `9af7533`. No standalone Codex task ID available.
+- Completed follow-up worker `/root/resume_steps_22_27`: Steps 31–35 branch `codex/resume-steps-31-35-2026-10-14`, worktree `.../work/hey/work/hey-steps-31-35-coordinator4296`, commit `93af08a`; integrated code `9af7533`. Reassigned Steps 39–42; branch `codex/resume-steps-39-42-2026-10-14`, worktree `.../work/hey/work/hey-steps-39-42-coordinator9af7533`, commit `053ca0f`; integrated at `8cbf4ef`. Worker reported no per-follow-up model override/metadata was available; original worker checkpoint used GPT-6 Luna/high. No standalone Codex task ID available.
 - Active follow-up worker `/root/resume_steps_05_08`: resumed task reference, GPT-6 Luna/high; assigned Steps 36–38 from `9af7533` in a fresh isolated worktree. Branch/commit/worktree will be recorded when the worker checks in. No standalone Codex task ID available.
-- Active follow-up worker `/root/resume_steps_22_27`: resumed task reference, GPT-6 Luna/high; assigned Steps 39–42 from `9af7533` in a fresh isolated worktree. Branch/commit/worktree will be recorded when the worker checks in. No standalone Codex task ID available.
+- Active follow-up worker `/root/resume_steps_09_11`: resumed task reference, GPT-6 Luna/high; assigned Steps 43–45 from `02b245e` in a fresh isolated worktree. Branch/commit/worktree will be recorded when the worker checks in. No standalone Codex task ID available.
 - Previous coordinator/recovery instructions: ChatGPT conversation `6ac68fc8-9170-83eb-815d-81e94e6be7ba`.
 - Prior worker rows and branch assignments are preserved in `HEY_BUILD_PROGRESS.md`. Their individual Codex task references were not present in recovered chat/task listings; do not invent IDs or claim those workers are still running.
 - Resumed Steps 02–04 worker: `/root/resume_steps_02_04` (collaboration task reference; original Codex task ID unavailable), branch `codex/par-steps-02-04`, worktree `.../work/hey-steps-02-04`, commit `2ae50e3d665693279f582b19e787ef81918af2ab`. Implemented challenge burning after Ed25519 verification, fail-closed recovery-store/smart-approval handling, bounded policy integers, caller abort bridging/terminal cancellation and strict checkpoint schema/progress validation. Focused 18/18; full 79/79; lint/build/diff-check pass; PR #2 updated but still draft/open/unmerged. No dirty/unpushed work.
@@ -77,14 +78,14 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 
 ## Uncommitted/unmerged work
 
-- Coordinator source and integrated worker changes through `9af7533` are committed locally; integration and current handoff docs are pending push. Follow-up workers are active in isolated worktrees. Do not stage nested worker checkouts.
+- Coordinator source and integrated worker changes through `8cbf4ef` are committed locally; current handoff docs are pending push. Follow-up workers are active in isolated worktrees. Do not stage nested worker checkouts.
 - Draft PRs #1–#3 are open and unmerged. Review and verify before merging.
 - The durable Steps 34–35 package workspace is isolated, untracked there, and not available in this repository clone; do not copy it in without first checking against canonical product contracts.
 
 ## Exact next actions
 
-1. Commit and push the updated Step 01/28–35 evidence and handoff checkpoint.
-2. Continue Step 01 global-contract work while the active workers implement Steps 36–42; inspect their diffs and tests when ready.
-3. Assign independent work on Steps 43–45 and Step 46/47 enforcement after a worker slot opens.
+1. Commit and push the updated Step 01/28–42 evidence and handoff checkpoint.
+2. Continue Step 01 global-contract work while the active workers implement Steps 36–38 and 43–45; inspect their diffs and tests when ready.
+3. Implement a repo-native Step 46/47 integration and release-evidence gate from the attached prompt without claiming the unavailable full migration toolkit is complete.
 4. Recover the separate historical 4,210-item ledger if it is available; do not invent its items.
-5. Update this handoff and `HEY_BUILD_PROGRESS.md` after each verified checkpoint. Latest integrated code is `9af7533`; status map is in `HEY_STEP_STATUS.md`. PRs #1–#3 remain open draft and were not merged/closed by this continuation.
+5. Update this handoff and `HEY_BUILD_PROGRESS.md` after each verified checkpoint. Latest integrated code is `8cbf4ef`; status map is in `HEY_STEP_STATUS.md`. PRs #1–#3 remain open draft and were not merged/closed by this continuation.
