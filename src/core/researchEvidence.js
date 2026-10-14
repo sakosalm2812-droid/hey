@@ -9,6 +9,29 @@ export function containsSensitiveResearchText(value) {
   return SENSITIVE_QUERY_PATTERNS.some((pattern) => pattern.test(String(value || "")));
 }
 
+export async function fetchResearchResults(query, { signal, fetchImpl = globalThis.fetch, now = () => new Date().toISOString() } = {}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("A research fetch provider is required.");
+  if (signal?.aborted) throw Object.assign(new Error("Research cancelled."), { name: "AbortError" });
+  const safeQuery = String(query || "").trim();
+  if (!safeQuery || safeQuery.length > 500) throw new RangeError("Research query must contain 1 to 500 characters.");
+  if (containsSensitiveResearchText(safeQuery)) throw new Error("Sensitive research queries are blocked before external search.");
+  const response = await fetchImpl(
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(safeQuery)}&format=json&origin=*&srlimit=5`,
+    { signal },
+  );
+  if (!response.ok) throw new Error(`Search provider returned HTTP ${response.status}.`);
+  const data = await response.json();
+  if (signal?.aborted) throw Object.assign(new Error("Research cancelled."), { name: "AbortError" });
+  return deduplicateSources((data?.query?.search || []).slice(0, 5).filter((hit) => typeof hit?.title === "string" && typeof hit?.snippet === "string").map((hit) => ({
+    title: hit.title,
+    snippet: hit.snippet.replace(/<[^>]+>/g, ""),
+    url: `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replaceAll(" ", "_"))}`,
+    retrievedAt: now(),
+    sourceType: "tertiary_reference",
+    authority: "unassessed",
+  })));
+}
+
 export function canonicalizeSourceUrl(value) {
   try {
     const url = new URL(value);
@@ -103,4 +126,4 @@ export function invalidateClaimsForSource(claims = [], sourceUrl, status = "retr
   });
 }
 
-export default { canonicalizeSourceUrl, sourceFingerprint, deduplicateSources, createClaimRecord, evaluateCitationCoverage, invalidateClaimsForSource, containsSensitiveResearchText };
+export default { canonicalizeSourceUrl, sourceFingerprint, deduplicateSources, createClaimRecord, evaluateCitationCoverage, invalidateClaimsForSource, containsSensitiveResearchText, fetchResearchResults };

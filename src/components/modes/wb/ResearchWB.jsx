@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Link2, Loader2, Search } from "lucide-react";
 import { Field, Panel, SmallButton, Tag } from "./primitives.jsx";
 import { getAccountScope } from "../../../core/accountScope.js";
-import { containsSensitiveResearchText, createClaimRecord, deduplicateSources } from "../../../core/researchEvidence.js";
+import { containsSensitiveResearchText, createClaimRecord, fetchResearchResults, invalidateClaimsForSource } from "../../../core/researchEvidence.js";
 
 export default function ResearchWB({ workspace }) {
   const { state, patch, log } = workspace;
@@ -35,20 +35,8 @@ export default function ResearchWB({ workspace }) {
     patch({ payload: { ...state.payload, question: text }, stage: 1 });
     log(`Researching: "${text}"`);
     try {
-      const response = await fetch(
-        `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(text)}&format=json&origin=*&srlimit=5`,
-        { signal: controller.signal },
-      );
-      if (!response.ok) throw new Error(`Search provider returned HTTP ${response.status}.`);
-      const data = await response.json();
-      const hits = deduplicateSources((data?.query?.search || []).map((hit) => ({
-        title: hit.title,
-        snippet: hit.snippet.replace(/<[^>]+>/g, ""),
-        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replaceAll(" ", "_"))}`,
-        retrievedAt: new Date().toISOString(),
-        sourceType: "tertiary_reference",
-        authority: "unassessed",
-      })));
+      const hits = await fetchResearchResults(text, { signal: controller.signal });
+      if (controller.signal.aborted || activeRequest.current !== controller) return;
       setResults(hits);
       log(hits.length ? `Found ${hits.length} sources.` : "No sources found.");
     } catch (err) {
@@ -75,6 +63,9 @@ export default function ResearchWB({ workspace }) {
           source: { ...source, excerpt: source.snippet },
         });
         workspace.addItem({ ...claim, source: title });
+        if (!savedSources.some((saved) => saved.url === source.url)) {
+          workspace.addItem({ kind: "source", title, url: source.url, excerpt: source.snippet, retrievedAt: source.retrievedAt, authority: "unassessed", verification: "unverified" });
+        }
         workspace.log(`Saved an unverified claim and candidate citation: ${title}`);
       } else {
         workspace.addItem({ kind: "source", title, url: source.url, excerpt: source.snippet, retrievedAt: source.retrievedAt, authority: "unassessed", verification: "unverified" });
@@ -83,6 +74,19 @@ export default function ResearchWB({ workspace }) {
     } catch (err) {
       setError(err.message || "Could not save this claim and source.");
     }
+  }
+
+  function retractSource(source) {
+    const nextClaims = invalidateClaimsForSource(claims, source.url, "retracted");
+    nextClaims.forEach((claim, index) => {
+      if (claim !== claims[index]) workspace.updateItem(claim.id, {
+        status: claim.status,
+        confidence: claim.confidence,
+        candidateCitations: claim.candidateCitations,
+      });
+    });
+    workspace.updateItem(source.id, { status: "retracted", verification: "retracted" });
+    log(`Marked source as retracted and invalidated ${nextClaims.filter((claim, index) => claim !== claims[index]).length} linked claim(s).`);
   }
 
   return (
@@ -122,7 +126,7 @@ export default function ResearchWB({ workspace }) {
       )}
 
       {claims.length > 0 && (
-        <Panel label="Claims and candidate evidence" right={<Tag tone="gold">{claims.length} unverified</Tag>}>
+        <Panel label="Claims and candidate evidence" right={<Tag tone="gold">{claims.filter((claim) => claim.status === "unverified").length} unverified</Tag>}>
           <div className="space-y-2">
             {claims.map((claim) => (
               <div key={claim.id} className="rounded-2xl border border-[rgba(255,255,255,.08)] p-3">
@@ -142,7 +146,10 @@ export default function ResearchWB({ workspace }) {
               <div key={source.id} className="rounded-2xl border border-[rgba(255,255,255,.08)] p-3">
                 <a className="text-sm underline" href={source.url} target="_blank" rel="noreferrer">{source.title}</a>
                 <p className="mt-1 text-xs text-[var(--text-secondary)]">{source.excerpt}</p>
-                <p className="mt-1 text-[11px] text-[var(--text-muted)]">Authority unassessed · not verified</p>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <p className="text-[11px] text-[var(--text-muted)]">Authority unassessed · {source.status === "retracted" ? "retracted" : "not verified"}</p>
+                  {source.status !== "retracted" && <SmallButton onClick={() => retractSource(source)}>Mark retracted</SmallButton>}
+                </div>
               </div>
             ))}
           </div>

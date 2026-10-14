@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { clearMemoryGraph, connectMemoryNodes, deleteMemoryNode, getMemoryGraph, searchMemoryGraph, upsertMemoryNode } from "../src/core/memoryGraph.js";
 import { compileSituation } from "../src/core/situationEngine.js";
-import { canonicalizeSourceUrl, containsSensitiveResearchText, createClaimRecord, deduplicateSources, evaluateCitationCoverage, invalidateClaimsForSource, sourceFingerprint } from "../src/core/researchEvidence.js";
+import { canonicalizeSourceUrl, containsSensitiveResearchText, createClaimRecord, deduplicateSources, evaluateCitationCoverage, fetchResearchResults, invalidateClaimsForSource, sourceFingerprint } from "../src/core/researchEvidence.js";
 import { listInbox, queueMemory } from "../src/core/memoryInbox.js";
 import { addImportantFact, resetContext } from "../src/core/contextManager.js";
 import { processInput } from "../src/core/heyBrain.js";
@@ -145,4 +145,32 @@ test("claim construction rejects missing scope, malformed sources, and empty cla
 test("research blocks credential and medical search terms before sending them to an external provider", () => {
   assert.equal(containsSensitiveResearchText("find my API key secret"), true);
   assert.equal(containsSensitiveResearchText("what is photosynthesis"), false);
+});
+
+test("research provider wrapper independently blocks sensitive, empty, and oversized queries", async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: true, json: async () => ({ query: { search: [] } }) }; };
+  await assert.rejects(fetchResearchResults("my password is abc", { fetchImpl }), /Sensitive research queries/);
+  await assert.rejects(fetchResearchResults(" ", { fetchImpl }), /1 to 500/);
+  await assert.rejects(fetchResearchResults("x".repeat(501), { fetchImpl }), /1 to 500/);
+  assert.equal(calls, 0);
+});
+
+test("research cancellation during response parsing discards stale results and binds provider calls to the abort signal", async () => {
+  const controller = new AbortController();
+  let calledWithSignal;
+  let finishJson;
+  const pendingBody = new Promise((resolve) => { finishJson = resolve; });
+  const request = fetchResearchResults("climate", {
+    signal: controller.signal,
+    fetchImpl: async (_url, options) => {
+      calledWithSignal = options.signal;
+      return { ok: true, json: () => pendingBody };
+    },
+    now: () => "2026-10-14T12:00:00.000Z",
+  });
+  controller.abort();
+  finishJson({ query: { search: [{ title: "stale result", snippet: "stale" }] } });
+  await assert.rejects(request, { name: "AbortError" });
+  assert.equal(calledWithSignal, controller.signal);
 });
