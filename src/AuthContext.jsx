@@ -4,7 +4,7 @@ import { resolveAccountPlan } from './lib/accountRecords.js'
 import { enablePersistenceSync, disablePersistenceSync, hydrateFromSupabase } from './lib/persistenceSync.js'
 import { createAuthLifecycle } from './lib/authLifecycle.js'
 import { resetAccountState } from './core/accountState.js'
-import { setLogScope } from './core/heyLogger.js'
+import { setAccountScope } from './core/accountScope.js'
 
 const AuthContext = createContext(null)
 
@@ -17,7 +17,7 @@ export function AuthProvider({ children }) {
       client: supabase,
       onState: (changes) => {
         if (Object.hasOwn(changes, 'session')) {
-          setLogScope(changes.session?.user?.id || null)
+          setAccountScope(changes.session?.user?.id || null)
         }
         setState((previous) => ({ ...previous, ...changes }))
       },

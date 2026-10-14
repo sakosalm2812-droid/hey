@@ -1,6 +1,6 @@
 # HEY final release report
 
-Date: 2026-09-14
+Date: 2026-10-14
 
 ## Product identity
 
@@ -23,6 +23,8 @@ Presence in source is not presented as live end-to-end verification.
 ## Release repairs completed
 
 - Account changes synchronously clear in-memory permissions, memory, actions, tasks, skills, audit data, device registrations, and active workflow state before another account is hydrated.
+- Local diagnostics, notifications, and mode-workspace storage now use a shared account-scoped key space. Boot diagnostics persist only allowlisted operational metadata, and delayed flushes keep the account scope captured when each event was recorded.
+- The Debug page shows action receipt summaries without exposing receipt metadata that may contain private content. Error pages no longer claim a failed action lost no data or ask users to “invite” support.
 - Supabase auth callbacks no longer await network work while the auth notification lock is held.
 - Hydration rejects stale account work and binds cached permissions to the authenticated account.
 - Action execution requires authenticated identity, plan entitlement, permission, explicit confirmation, and a verified success result.
@@ -41,15 +43,19 @@ Presence in source is not presented as live end-to-end verification.
 - Tutorial choreography now uses the supplied registry entry instead of an
   always-empty placeholder.
 
-## Verification observed on the authoritative checkout
+## Verification observed on branch `codex/production-readiness-2026-10-13`
 
-- `npm test`: 33 tests passed, 0 failed.
-- `npm run lint`: passed with 0 errors.
-- `npm run build`: passed; 2,715 modules transformed.
+- `npm test`: 54 tests passed, 0 failed.
+- `npm run lint`: passed.
+- `npm run build`: passed; 2,717 modules transformed. The build warns that `contextManager.js` is statically and dynamically imported, so the dynamic import does not split it into a separate chunk. The sitemap was skipped because `SITE_URL` is not configured.
+- `npm audit --audit-level=high`: passed with 0 reported vulnerabilities.
+- `git diff --check`: passed.
 - `cargo check --manifest-path src-tauri/Cargo.toml`: passed.
-- Browser verification: homepage loaded with the final identity, 27 selectable themes, complete public navigation, visible memory-control language, and working route targets.
-- Pricing verification: Free is available; Pro and Elite display $15/month and $45/month as planned prices with enrollment disabled until billing is configured.
-- Repository verification before update: `sakosalm2812-droid/hey` is private, visibility is private, and GitHub Pages is disabled.
+- Previous browser verification: homepage loaded with the final identity, 27 selectable themes, complete public navigation, visible memory-control language, and working route targets. This was not repeated for this change set.
+- Previous pricing verification: Free is available; Pro and Elite display $15/month and $45/month as planned prices with enrollment disabled until billing is configured. This was not repeated for this change set.
+- Previous repository verification: `sakosalm2812-droid/hey` is private and GitHub Pages is disabled.
+
+This report verifies a source checkout and local checks only. It does not claim that all 47 master-program packages are complete or that a live production deployment has been verified.
 
 ## External launch dependencies
 

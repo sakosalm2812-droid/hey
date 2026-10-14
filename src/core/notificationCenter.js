@@ -1,5 +1,6 @@
 import { loadStoredProactiveSettings } from "../lib/proactiveStore.js";
 import { publish } from "./eventBus.js";
+import { getAccountStorageKey } from "./accountScope.js";
 
 const STORAGE_KEY = "hey_notifications";
 const MAX_VISIBLE = 8;
@@ -8,7 +9,7 @@ const listeners = new Set();
 
 function readStored() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(getAccountStorageKey(STORAGE_KEY));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -18,7 +19,7 @@ function readStored() {
 
 function writeStored(notifications) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(notifications.slice(0, MAX_VISIBLE)));
+    localStorage.setItem(getAccountStorageKey(STORAGE_KEY), JSON.stringify(notifications.slice(0, MAX_VISIBLE)));
   } catch {
     /* storage unavailable */
   }

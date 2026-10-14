@@ -1,16 +1,12 @@
 import { subscribe } from "./eventBus.js";
+import { getAccountScope, getAccountStorageKey } from "./accountScope.js";
 
-const LOG_KEY_PREFIX = "hey_log:";
+const LOG_KEY = "hey_log";
 const MAX_ENTRIES = 200;
-let activeScope = "anonymous";
 
-function scopeKey(scope = activeScope) {
-  return `${LOG_KEY_PREFIX}${encodeURIComponent(String(scope || "anonymous"))}`;
-}
-
-function readLog(scope = activeScope) {
+function readLog(scope = getAccountScope()) {
   try {
-    const raw = localStorage.getItem(scopeKey(scope));
+    const raw = localStorage.getItem(getAccountStorageKey(LOG_KEY, scope));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -18,9 +14,9 @@ function readLog(scope = activeScope) {
   }
 }
 
-function writeLog(entries, scope = activeScope) {
+function writeLog(entries, scope = getAccountScope()) {
   try {
-    localStorage.setItem(scopeKey(scope), JSON.stringify(entries.slice(-MAX_ENTRIES)));
+    localStorage.setItem(getAccountStorageKey(LOG_KEY, scope), JSON.stringify(entries.slice(-MAX_ENTRIES)));
   } catch {
     /* storage unavailable */
   }
@@ -36,22 +32,6 @@ export function log(kind, message, data) {
   const next = [...readLog(), entry].slice(-MAX_ENTRIES);
   writeLog(next);
   return entry;
-}
-
-/** Keep local diagnostic history separate when people share a browser profile. */
-export function setLogScope(accountId) {
-  const nextScope = accountId ? `account:${accountId}` : "anonymous";
-  if (nextScope === activeScope) return;
-  activeScope = nextScope;
-  try {
-    window.dispatchEvent(new CustomEvent("hey:log-scope-changed", { detail: { scope: nextScope } }));
-  } catch {
-    /* Scope changes still take effect when DOM events are unavailable. */
-  }
-}
-
-export function getLogScope() {
-  return activeScope;
 }
 
 export function getLog() {
@@ -127,7 +107,7 @@ export function bootLogger() {
         const value = payload?.[key];
         if (["string", "number", "boolean"].includes(typeof value)) safeData[key] = value;
       }
-      pending.push({ scope: activeScope, value: {
+      pending.push({ scope: getAccountScope(), value: {
         at: new Date().toISOString(), kind: label, message: label,
         data: Object.keys(safeData).length ? safeData : null,
       } });
