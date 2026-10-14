@@ -158,6 +158,12 @@ Adversarial continuation on Step 01: commit `7b451497876b61a858a3e48d47b3117e2a1
 
 Current active Luna/high workers are `/root/resume_steps_05_08` on Steps 36–38 (from `9af7533`) and `/root/resume_steps_09_11` on Steps 43–45 (from `02b245e`). Steps 46–47 remain with the coordinator.
 
+### Steps 43–45 targeted freshness guard — 2026-10-14
+
+The Steps 43–45 worker (`/root/resume_steps_09_11`, GPT-6 Luna/high) started from `02b245e` in isolated worktree `work/hey/work/hey-steps-43-45`, branch `codex/resume-steps-43-45-2026-10-14`, and incorporated the coordinator's two newer commits through `a1bef95`. A targeted Step 45 gap was found in `evaluateCitationCoverage`: it did not honor source-declared expiry or jurisdiction and accepted absent/malformed timestamps. The evaluator now returns stale/invalid for expired or malformed expiry, volatile sources without expiry, invalid/missing/future capture timestamps, invalid age policy, and missing/mismatched required jurisdiction. Regression/adversarial cases are in `tests/situation-research-contracts.test.js`; lexical overlap remains explicitly unverified and is never promoted to entailment.
+
+Verification at this checkpoint: focused research contracts 12/12; full `npm test` 123/123; `npx eslint src tests scripts`; `npm run build`; `git diff --check` all passed. The build skipped sitemap generation because `SITE_URL` is unset and reported the existing mixed static/dynamic import warning in `contextManager.js`. Source/test/doc changes are not yet committed or pushed. This is a narrow evaluator hardening, not a certified expert pack or completion of Steps 43–45. Next: commit and push the isolated branch; then integrate only after coordinator review and rerun combined verification.
+
 ### Step 42 capability registry integrity — 2026-10-14
 
 Reviewed worker commit `053ca0f20409c51ac0dc9640cd2abd9de13579f3` from `codex/resume-steps-39-42-2026-10-14` and integrated it at coordinator `8cbf4ef40eff32bd3925187b827ca0be18f82953`. `capabilityRegistry.js` now copies policies on registration/read/list and refuses duplicate IDs, preventing external mutation or replacement of registered platform restrictions. The regression mutates caller inputs and returned records and attempts a duplicate-ID policy escalation. Worker verification focused 22/22 and full 122/122; integrated coordinator full suite 122/122, scoped ESLint, production build and diff check passed. The worker's follow-up task context did not expose a model selection override; its previous checkpoint was GPT-6 Luna/high.
