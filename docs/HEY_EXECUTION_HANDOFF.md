@@ -19,9 +19,10 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 
 ## Master program/source files
 
-- Recovery chat tool read returned `attachments: []`; no uploaded HEY Master Build Program was exposed there.
-- Connected Google Drive search for `HEY Master Build Program`, `HEY_FINAL_ABSOLUTE_SOURCE_OF_TRUTH`, and `HEY master program` failed with `UNAUTHORIZED` (reauthentication required).
-- Filename search under `Documents/Codex` and `Downloads` found no master-program source file. Do not treat this as evidence that the source does not exist.
+- User supplied `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM (2).txt` (934,196 bytes; modified 2026-10-14 1:16 PM). It contains the complete 01–47 prompts, global product contract, mandatory completion loop, and explicit additional requirements for Steps 01–04. The separate historical 4,210-item concept ledger it references was not attached.
+- Durable evidence/status mapping is recorded in [HEY_STEP_STATUS.md](HEY_STEP_STATUS.md). None of the 47 steps currently meets the source's full VERIFIED/PRODUCTION_READY completion gates; statuses distinguish partial implementation from incomplete evidence.
+- The source also describes building separate HEY-NEXT packages and a one-step/one-task Work orchestration pattern. This continuation follows the user's direct request to resume the actual GitHub repository and run parallel implementation, using the attachment as product requirements rather than changing the work destination or orchestration.
+- Earlier recovery searches predated the user-supplied file: the recovery chat returned `attachments: []`, and Google Drive had returned `UNAUTHORIZED`. Those are superseded for the program text; the separate 4,210-item ledger remains unavailable.
 - Existing code task `01a11c30-7681-7697-b1b3-34d216e68033` (“Set up hey-next-production-program”, durable host) produced Steps 34–35 standalone `HEY-NEXT` reference packages in an isolated cloud workspace. Its final report recorded 224 successful local reference-package test executions and no production integrations; the task workspace reported `HEY-NEXT/` untracked and no commit SHA. This is not integrated HEY code and is not a HEY step completion checkpoint.
 
 ## Steps and active work
@@ -68,7 +69,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 
 ## Exact next actions
 
-1. Continue Step 01 shared persistence/recovery schema and adversarial coverage without claiming durable production wiring.
-2. Resume remaining branch work only from reviewed tips; record task, model, branch, commit, tests and remaining items.
-3. When the user attaches the Master Build Program, reconcile acceptance criteria and evidence across all 47 steps without restarting audits.
-4. Update this handoff and `HEY_BUILD_PROGRESS.md` at each verified checkpoint. Current root uncommitted source changes: none; current code merges are locally verified. PR #1/#3 remain draft/open. Complete step-by-step criteria still await the promised master-program attachment.
+1. Use the supplied 47 prompts and [HEY_STEP_STATUS.md](HEY_STEP_STATUS.md) to continue implementing the next independently fixable gaps; prioritize Step 01 global contracts without duplicating stronger existing systems.
+2. Review remaining worker branches only after code/tests are available; record task, model, branch, commit, tests and remaining items.
+3. Recover the separate historical 4,210-item ledger if it is available; do not invent its items.
+4. Update this handoff and `HEY_BUILD_PROGRESS.md` after each verified checkpoint. Latest integrated code merge remains `2e41c59`; docs include the source and complete status map. PRs #1–#3 remain open draft and were not merged/closed by this continuation.
