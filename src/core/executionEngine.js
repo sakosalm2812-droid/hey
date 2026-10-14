@@ -111,25 +111,8 @@ function resolveExecutor(executor) {
 }
 
 async function verifyStepResult(result, context, verifier) {
-  if (typeof verifier === "function") {
-    return Boolean(
-      await verifier(result, context),
-    );
-  }
-
-  if (result === undefined) {
-    return false;
-  }
-
-  if (
-    result &&
-    typeof result === "object" &&
-    "success" in result
-  ) {
-    return result.success !== false;
-  }
-
-  return true;
+  if (typeof verifier !== "function") return false;
+  return Boolean(await verifier(result, context));
 }
 
 async function executeStep(
@@ -366,6 +349,11 @@ export async function executeTask(
       ? new AbortController()
       : null;
 
+  const externalSignal = options.signal;
+  const abortFromExternal = () => abortController?.abort();
+  if (externalSignal?.aborted) abortFromExternal();
+  else externalSignal?.addEventListener?.("abort", abortFromExternal, { once: true });
+
   if (abortController) {
     plan.abortController =
       abortController;
@@ -446,10 +434,8 @@ export async function executeTask(
        */
       if (
         typeof options.maxSteps === "number" &&
-        plan.metadata.executionHistory.filter(
-          (event) =>
-            event.type === "step_completed",
-        ).length >= options.maxSteps
+        plan.metadata.executionHistory.filter((event) => event.type === "step_completed").length >= options.maxSteps &&
+        getNextStep(plan)
       ) {
         blockPlan(
           plan,
@@ -491,7 +477,9 @@ export async function executeTask(
     content: finalMessage,
   });
 
-  return plan;
+  externalSignal?.removeEventListener?.("abort", abortFromExternal);
+  const completedEvents = plan.metadata?.executionHistory?.filter((event) => event.type === "step_completed" && event.verified === true) || [];
+  return { ...plan, verified: plan.status === "completed" && completedEvents.length > 0 };
 }
 
 export function getRunningTask(taskId) {
