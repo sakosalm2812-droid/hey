@@ -8,7 +8,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 ## Current checkpoint and branch
 
 - Working branch: `codex/resume-emergency-2026-10-14`.
-- Latest coordinator commit: `45642a9` (handoff checkpoint for Steps 09–11 and 22–27 integrations; pushed). Latest verified code merge is `2e41c59da17d3f3a4449833afb4619a6cf385b8d`.
+- Latest verified implementation merge: `2e41c59da17d3f3a4449833afb4619a6cf385b8d` (Steps 09–11 and 22–27). Later pushed commits refreshed this handoff and progress ledger.
 - Base: `origin/codex/production-readiness-2026-10-13` at `97a4f3856398505ffa4dcd4d78348098699d4890` (parent `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`).
 - Verified common checkpoint recorded in `HEY_BUILD_PROGRESS.md`: `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
 - Branch commits after that checkpoint: `4369a3f` event outbox; `ebf36be` evidence-integrity contract; `fa54f27` defensive event snapshots; `4ae2d58` integration ledger; `97a4f38` worker completion checkpoints.
