@@ -25,6 +25,16 @@ test("attention policy suppresses sponsored items and spam, queues focus items, 
   assert.equal(evaluateAttentionCandidate({ ...base, expiresAt: "2026-10-14T11:59:00Z" }, { now }).reason, "expired");
 });
 
+test("attention policy fails closed on malformed expiry, out-of-range scores, and invalid budgets", () => {
+  const now = new Date("2026-10-14T12:00:00Z");
+  const base = { priority: "normal", confidence: 0.95 };
+  assert.equal(evaluateAttentionCandidate({ ...base, expiresAt: "not-a-date" }, { now }).reason, "invalid_expiry");
+  assert.equal(evaluateAttentionCandidate({ ...base, confidence: 4 }, { now }).decision, "ask");
+  assert.equal(evaluateAttentionCandidate({ ...base, interruptionCost: -1 }, { now }).reason, "invalid_interruption_cost");
+  assert.equal(evaluateAttentionCandidate(base, { now, dailyCap: "0", suggestionsToday: 0 }).reason, "invalid_policy_context");
+  assert.equal(evaluateAttentionCandidate(base, { now, minimumConfidence: 2 }).reason, "invalid_policy_context");
+});
+
 test("private notification content is redacted on shared surfaces, including its route and actions", () => {
   const privateItem = { title: "Health detail", body: "Sensitive text", privacy: "sensitive", path: "/private", actions: [{ label: "Open", path: "/private" }] };
   const rendered = presentNotification(privateItem, { sharedSurface: true });
