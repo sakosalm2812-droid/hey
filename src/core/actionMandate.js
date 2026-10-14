@@ -252,8 +252,17 @@ async function verifySignature(mandate, trustedKeys) {
 
 export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = {}, store, now = Date.now(), online = true, allowTestOnlyStore = false } = {}) {
   const deny = (reason) => ({ authorized: false, reason });
-  if (!store || store.contractVersion !== MANDATE_STORE_CONTRACT_VERSION || typeof store.consumeChain !== "function" || typeof store.isRevoked !== "function") return deny("A durable v2 mandate store with atomic revocation-epoch and delegation-chain consumption is required.");
-  if (store.testOnly === true && allowTestOnlyStore !== true) return deny("The in-memory mandate store is test-only; durable authority storage is required.");
+  let consumeChain;
+  let isRevoked;
+  try {
+    if (!store || store.contractVersion !== MANDATE_STORE_CONTRACT_VERSION) return deny("A durable v2 mandate store with atomic revocation-epoch and delegation-chain consumption is required.");
+    consumeChain = store.consumeChain;
+    isRevoked = store.isRevoked;
+    if (typeof consumeChain !== "function" || typeof isRevoked !== "function") return deny("A durable v2 mandate store with atomic revocation-epoch and delegation-chain consumption is required.");
+    if (store.testOnly === true && allowTestOnlyStore !== true) return deny("The in-memory mandate store is test-only; durable authority storage is required.");
+  } catch {
+    return deny("Mandate store contract inspection failed; execution was denied.");
+  }
   if (!await verifySignature(mandate, trustedKeys)) return deny("Mandate signature is invalid or untrusted.");
   const payload = mandate.payload;
   const expiry = Date.parse(payload.expiresAt);
@@ -265,7 +274,7 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
   if (!Number.isSafeInteger(context.currentRevocationEpoch) || context.currentRevocationEpoch < 0 || context.currentRevocationEpoch !== payload.revocationEpoch) return deny("Mandate revocation epoch is stale or unavailable.");
   if (!online && payload.offlineAllowed !== true) return deny("Mandate is not valid for offline execution.");
   try {
-    if (await store.isRevoked(payload.id)) return deny("Mandate has been revoked.");
+    if (await Reflect.apply(isRevoked, store, [payload.id])) return deny("Mandate has been revoked.");
   } catch {
     return deny("Mandate authority storage failed; execution was denied.");
   }
@@ -277,7 +286,7 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
     if (!await verifySignature(current, trustedKeys)) return deny("Delegation chain contains an invalid signature.");
     if (currentPayload.accountId !== payload.accountId || currentPayload.revocationEpoch !== context.currentRevocationEpoch || Date.parse(currentPayload.expiresAt) <= now) return deny("Delegation chain contains expired or stale authority.");
     try {
-      if (await store.isRevoked(currentPayload.id)) return deny("Mandate or parent mandate has been revoked.");
+      if (await Reflect.apply(isRevoked, store, [currentPayload.id])) return deny("Mandate or parent mandate has been revoked.");
     } catch {
       return deny("Mandate authority storage failed; execution was denied.");
     }
@@ -292,11 +301,11 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
   if (typeof idempotencyKey !== "string" || !idempotencyKey.trim() || idempotencyKey.length > 256 || [...idempotencyKey].some((character) => character.codePointAt(0) < 32 || character.codePointAt(0) === 127)) return deny("A stable idempotency key up to 256 printable characters is required.");
   let result;
   try {
-    result = await store.consumeChain(
+    result = await Reflect.apply(consumeChain, store, [
       chain.map(({ payload: item }) => ({ mandateId: item.id, maxUses: item.maxUses, revocationEpoch: item.revocationEpoch })),
       idempotencyKey.trim(),
       { accountId: context.accountId, revocationEpoch: context.currentRevocationEpoch },
-    );
+    ]);
   } catch {
     return deny("Mandate authority storage failed; execution was denied.");
   }

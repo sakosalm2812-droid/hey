@@ -157,3 +157,28 @@ test("volatile in-memory mandate state is rejected unless a test explicitly opts
   const allowedForTest = await verifyAndConsumeMandate(mandate, context, { trustedKeys: { root: keys.publicKey }, store, now, allowTestOnlyStore: true });
   assert.equal(allowedForTest.authorized, true);
 });
+
+test("malformed mandate store accessors fail closed without rejecting verification", async () => {
+  const now = Date.parse("2026-10-14T12:00:00.000Z");
+  const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const mandate = await issueActionMandate({
+    accountId: "acct-hostile-store",
+    actions: ["web.search"],
+    resources: ["web.search"],
+    expiresAt: new Date(now + 60_000).toISOString(),
+  }, { privateKey: keys.privateKey, keyId: "root", now });
+  const store = {
+    contractVersion: "hey.mandate-store.v2",
+    get consumeChain() { throw new Error("hostile contract accessor"); },
+    async isRevoked() { assert.fail("malformed contract must be rejected before adapter methods run"); },
+  };
+  const result = await verifyAndConsumeMandate(mandate, {
+    accountId: "acct-hostile-store",
+    action: "web.search",
+    resource: "web.search",
+    currentRevocationEpoch: 0,
+    idempotencyKey: "hostile-store",
+  }, { trustedKeys: { root: keys.publicKey }, store, now });
+  assert.equal(result.authorized, false);
+  assert.match(result.reason, /contract inspection failed/i);
+});
