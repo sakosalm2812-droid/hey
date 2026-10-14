@@ -29,6 +29,7 @@ Status: **in progress**. The first shared authority contract is implemented in `
 - Adversarial regression: asynchronous mandate verification initially opened a double-dispatch race in the action layer; the existing concurrent action test reproduced a hang/double admission. Admission now rechecks after async authorization, and `tests/security-regressions.test.js` passes 10/10.
 - Remaining independently implementable Step 01 items: evidence integrity/freshness/invalidation contract, mission persistence/recovery schema contract, policy validation, malformed input/property-based cases, and improved independent runtime verification. Do not advance the 47-step sequence until these are implemented and verified.
 - External Step 01 constraints: real production authority storage/transaction semantics and deployment signing keys need the connected HEY backend and owner-managed keys; continue defining adapters and conformance tests without claiming them verified.
+- Step 01 implementation checkpoint (not completion): local commit `5b3084471b26fada0e189f441a7e8cb6f692161d`; GitHub branch sync commit `096a66904339e7aa3b854b5876c5ba534e2a5e57`.
 
 ### Current checkpoint
 
