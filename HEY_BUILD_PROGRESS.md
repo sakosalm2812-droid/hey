@@ -156,7 +156,19 @@ On the integrated tree, `npm test` passed 121/121; `npx eslint src tests scripts
 
 Adversarial continuation on Step 01: commit `7b451497876b61a858a3e48d47b3117e2a1b0326` captures fail-closed handling for mandate store contract getters and method access. A hostile adapter getter regression confirms verification resolves to denial rather than throwing. The full suite at that isolated checkpoint passed 116/116; after worker integrations it passed 121/121.
 
-Current active Luna/high workers are `/root/resume_steps_05_08` on Steps 36–38 (from `9af7533`) and `/root/resume_steps_09_11` on Steps 43–45 (from `02b245e`). Steps 46–47 remain with the coordinator.
+### Step 01 durable mandate path — 2026-10-14
+
+Coordinator implementation in progress on `codex/resume-emergency-2026-10-14`: account-scoped `SupabaseMandateStore`, transactional `20261014000000_action_mandates.sql`, and authenticated `hey-mandate` Edge Function. `actionEngine.executeAction` now calls the Edge verifier when a mandate is required; caller account identity is derived from the validated JWT. The DB use-consumption RPC is service-role-only to prevent clients bypassing Ed25519 verification. The in-memory adapter now scopes use/replay/revocation state by account.
+
+Verification at this checkpoint: full Node suite **129/129**; scoped ESLint (`src tests scripts supabase/functions/hey-mandate`); production build; `git diff --check`. Focused mandate/repair suites: **20/20**. Build skipped sitemap generation without `SITE_URL` and retained the existing dynamic-import warning. No Supabase CLI/PostgreSQL is installed, so migration compilation, live account isolation and concurrent RPC behavior remain unverified. Edge deployment still needs trusted public key configuration in `HEY_ACTION_MANDATE_TRUSTED_KEYS`; production key custody and live Supabase secrets are external blockers. Do not call Step 01 complete.
+
+## Current integration queue — 2026-10-14
+
+- Steps 36–38 worker branch `codex/resume-steps-36-38-2026-10-14`, commit `91e0603b28122e096b97d990d66619f43d2e83b8`; targeted diagnostics privacy fix, not yet integrated.
+- Steps 43–45 worker branch `codex/resume-steps-43-45-2026-10-14`, implementation `888ebd6c3b7db0a4e325524330f24579590a8fd8` and worker-doc checkpoint `c1bd180`; targeted citation freshness/jurisdiction fix, not yet integrated.
+- Steps 46–47 worker branch `codex/step46-47-evidence-gates`, commit `185a1f7afdb7e77c7a1e68854c3adc5ce0da8919`; verifier-backed release evidence gate, not yet integrated.
+- Current workers have checked in; no parallel worker is running. Their Codex references are collaboration task refs `/root/resume_steps_05_08`, `/root/resume_steps_09_11`, `/root/steps46_47_tooling`; persistent standalone task UUIDs are not exposed by this environment.
+- Next: review and cherry-pick each scoped worker commit to the coordinator, run combined tests/lint/build, update the shared handoff, commit and push; then continue Step 01 persistence and edge integration tests where the available environment permits.
 
 ### Step 42 capability registry integrity — 2026-10-14
 

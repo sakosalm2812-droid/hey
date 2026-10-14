@@ -6,6 +6,9 @@ verify_jwt = false
 [functions.hey-studio]
 verify_jwt = true
 
+[functions.hey-mandate]
+verify_jwt = true
+
 # Hosted SMTP must also be configured in the Supabase Dashboard.
 [auth.email.smtp]
 enabled = false

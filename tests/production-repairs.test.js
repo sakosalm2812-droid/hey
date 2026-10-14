@@ -56,7 +56,7 @@ test("signed action mandates attenuate delegation and prevent replay, overuse, a
   assert.match((await verifyAndConsumeMandate(child, context, testStore)).reason, /replay/i);
   assert.equal((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:2" }, testStore)).authorized, true);
   assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:3" }, testStore)).reason, /use limit/i);
-  await store.revoke(parent.payload.id);
+  await store.revoke(parent.payload.id, { accountId: context.accountId });
   assert.match((await verifyAndConsumeMandate(child, { ...context, idempotencyKey: "mission:step:4" }, testStore)).reason, /revoked/i);
   await assert.rejects(() => issueActionMandate({ accountId: "acct-1", actions: ["terminal.execute"], resources: ["*"], expiresAt: new Date(now + 10_000).toISOString() }, { privateKey: delegate.privateKey, keyId: "delegate", parent, now }), /subset/i);
 
@@ -82,6 +82,27 @@ test("action execution enforces mandates when the caller requires them", async (
   assert.equal(result.success, false);
   assert.equal(executed, false);
   assert.match(result.error, /mandate is required/i);
+});
+
+test("action execution rejects accessor-based mandate envelopes without evaluating them", async () => {
+  const action = createAction({ title: "Search", tool: "web.search", permission: "web.search", riskLevel: "low" });
+  let getterCalls = 0;
+  const mandate = {};
+  Object.defineProperty(mandate, "payload", {
+    enumerable: true,
+    get() { getterCalls += 1; return { id: "attacker-controlled" }; },
+  });
+  let executed = false;
+  const result = await executeAction(action.id, async () => { executed = true; return { success: true, verified: true }; }, {
+    confirmed: true,
+    user: { id: "acct-1", permissions: ["web.search"] },
+    mandate,
+    requireMandate: true,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(getterCalls, 0);
+  assert.equal(executed, false);
 });
 
 test("package validation fails closed, verifies real signatures and revalidates before install", async () => {

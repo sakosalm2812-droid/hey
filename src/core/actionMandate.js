@@ -143,8 +143,14 @@ export class InMemoryMandateStore {
     this.transaction = Promise.resolve();
   }
 
-  async isRevoked(mandateId) { return this.revoked.has(mandateId); }
-  async revoke(mandateId) { this.revoked.add(mandateId); }
+  async isRevoked(mandateId, { accountId } = {}) {
+    if (typeof accountId !== "string" || !accountId.trim()) throw new TypeError("An accountId is required for revocation lookup.");
+    return this.revoked.has(`${accountId}\u0000${mandateId}`);
+  }
+  async revoke(mandateId, { accountId } = {}) {
+    if (typeof accountId !== "string" || !accountId.trim()) throw new TypeError("An accountId is required for revocation.");
+    this.revoked.add(`${accountId}\u0000${mandateId}`);
+  }
   setCurrentRevocationEpoch(accountId, epoch) {
     if (typeof accountId !== "string" || !accountId.trim() || !Number.isSafeInteger(epoch) || epoch < 0) throw new TypeError("A valid account and non-negative revocation epoch are required.");
     this.revocationEpochs.set(accountId, epoch);
@@ -165,10 +171,11 @@ export class InMemoryMandateStore {
         return { consumed: false, reason: "invalid_context" };
       }
       if ((this.revocationEpochs.get(accountId) ?? 0) !== revocationEpoch) return { consumed: false, reason: "stale_epoch" };
-      if (mandates.some(({ mandateId }) => this.revoked.has(mandateId))) return { consumed: false, reason: "revoked" };
-      const replayKeys = mandates.map(({ mandateId }) => `${mandateId}:${idempotencyKey}`);
+      if (mandates.some(({ mandateId }) => this.revoked.has(`${accountId}\u0000${mandateId}`))) return { consumed: false, reason: "revoked" };
+      const scopedIds = mandates.map(({ mandateId }) => `${accountId}\u0000${mandateId}`);
+      const replayKeys = scopedIds.map((mandateId) => `${mandateId}:${idempotencyKey}`);
       if (replayKeys.some((key) => this.idempotency.has(key))) return { consumed: false, reason: "replay" };
-      const counters = mandates.map(({ mandateId, maxUses }) => ({ mandateId, maxUses, uses: this.usage.get(mandateId) || 0 }));
+      const counters = mandates.map(({ maxUses }, index) => ({ mandateId: scopedIds[index], maxUses, uses: this.usage.get(scopedIds[index]) || 0 }));
       if (counters.some(({ uses, maxUses }) => uses >= maxUses)) return { consumed: false, reason: "max_uses" };
       for (const { mandateId, uses } of counters) this.usage.set(mandateId, uses + 1);
       replayKeys.forEach((key) => this.idempotency.add(key));
@@ -181,8 +188,8 @@ export class InMemoryMandateStore {
 
 export class MandateStoreContract {
   constructor() { this.contractVersion = MANDATE_STORE_CONTRACT_VERSION; }
-  async isRevoked() { throw new Error("Implement isRevoked(mandateId) against durable authority storage."); }
-  async revoke() { throw new Error("Implement revoke(mandateId) against durable authority storage."); }
+  async isRevoked() { throw new Error("Implement account-scoped isRevoked(mandateId, { accountId }) against durable authority storage."); }
+  async revoke() { throw new Error("Implement account-scoped revoke(mandateId, { accountId, reason }) against durable authority storage."); }
   async consumeChain() { throw new Error("Implement atomic consumeChain(mandates, idempotencyKey, { accountId, revocationEpoch }) in one durable transaction. Recheck current account epoch, revocation, idempotency, and every delegation-chain use counter before committing any increment."); }
 }
 
@@ -274,7 +281,7 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
   if (!Number.isSafeInteger(context.currentRevocationEpoch) || context.currentRevocationEpoch < 0 || context.currentRevocationEpoch !== payload.revocationEpoch) return deny("Mandate revocation epoch is stale or unavailable.");
   if (!online && payload.offlineAllowed !== true) return deny("Mandate is not valid for offline execution.");
   try {
-    if (await Reflect.apply(isRevoked, store, [payload.id])) return deny("Mandate has been revoked.");
+    if (await Reflect.apply(isRevoked, store, [payload.id, { accountId: payload.accountId }])) return deny("Mandate has been revoked.");
   } catch {
     return deny("Mandate authority storage failed; execution was denied.");
   }
@@ -286,7 +293,7 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
     if (!await verifySignature(current, trustedKeys)) return deny("Delegation chain contains an invalid signature.");
     if (currentPayload.accountId !== payload.accountId || currentPayload.revocationEpoch !== context.currentRevocationEpoch || Date.parse(currentPayload.expiresAt) <= now) return deny("Delegation chain contains expired or stale authority.");
     try {
-      if (await Reflect.apply(isRevoked, store, [currentPayload.id])) return deny("Mandate or parent mandate has been revoked.");
+      if (await Reflect.apply(isRevoked, store, [currentPayload.id, { accountId: currentPayload.accountId }])) return deny("Mandate or parent mandate has been revoked.");
     } catch {
       return deny("Mandate authority storage failed; execution was denied.");
     }

@@ -108,8 +108,8 @@ test("mandate consumption atomically rejects a revocation epoch advanced after p
   const racingStore = {
     contractVersion: MANDATE_STORE_CONTRACT_VERSION,
     testOnly: true,
-    async isRevoked(id) {
-      const revoked = await backingStore.isRevoked(id);
+    async isRevoked(id, scope) {
+      const revoked = await backingStore.isRevoked(id, scope);
       if (!advanced) {
         advanced = true;
         backingStore.setCurrentRevocationEpoch("acct-epoch-race", 1);
