@@ -71,3 +71,25 @@ Branch conflict control: each worker has a dedicated worktree and is instructed 
 Coordinator checkpoints: evidence integrity local commit `ba3ad69fbda2616b6c95f9520c51e73f57554899`, GitHub commit `ebf36be13483ee6caec8d3d165cea553613db367`; ledger checkpoint local `09f9c0ab26ef82f55d8e110dbd679c08c4cb5581`, GitHub `7c2c358cea0969d08a3137ad1a44b1a31f77419d`; event outbox local `2f931d7801f5c9636a35b4c4fd8342b66a0cf3d3`, GitHub `4369a3fcbca432b14756ad14bed95a2c959353cb`; defensive event snapshots local `7febddc84912ac7870ba5ea56ab9681642c97a81`, GitHub `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`. Latest coordinator verification: focused event tests 3/3; full suite 66/66; lint, build, and diff-check pass. Benchmark 1,000 in-memory publish+dispatch operations 10.65 ms (~93,885 ops/sec), which does not measure durable storage. Durable invalidation/outbox adapters and signing-key integration remain external adapter/deployment work.
 
 Codex Cloud task-creation/model-picker MCP is not exposed in this session. The available parallel agent API accepted the explicit `gpt-6-luna` model and `high` reasoning selection for all engineering agents. No UI model picker was opened or claimed to be changed. Draft PR #1 (Steps 15–18) is open for coordinator review; its reported `mergeable:false` requires conflict diagnosis before any merge. Steps 02–04 has a verified first-pass remote branch; PR creation follows its completion pass. Branches are updated without force pushes.
+
+## Emergency continuation — 2026-10-14
+
+Coordinator development branch: `codex/resume-emergency-2026-10-14` (based on verified `97a4f3856398505ffa4dcd4d78348098699d4890`). Checkpoint `7b7ef3d26708691f8dd17e63c1b1ce3d2b4bc915` records the recovery handoff; implementation checkpoint `ae32aeb0f32be0e0ec5607e6026346ddf5eeb464` is pushed. The handoff is `docs/HEY_EXECUTION_HANDOFF.md`.
+
+The coordinator hardened `src/core/actionMandate.js`: strict v1 payload/envelope shape and canonical timestamp/scope validation; safe rejection of accessors, cyclic values, sparse/custom arrays; fail-closed revocation-store reads. New hostile tests are in `tests/action-mandate-hardening.test.js`. Verification at `ae32aeb`: `npm ci` (263 packages, 0 reported vulnerabilities), `npm test` 68/68, `npm run lint`, `npm run build`, and `git diff --check` passed. Build skipped sitemap generation without `SITE_URL` and retained the existing `contextManager.js` mixed-import warning.
+
+Resumed feature work, with model set to GPT-6 Luna/high reasoning:
+
+| Scope | Worker task | Branch | Latest checkpoint | State/evidence |
+|---|---|---|---|---|
+| 02–04 | `/root/resume_steps_02_04` (original Codex task ID unavailable) | `codex/par-steps-02-04` | `2ae50e3d665693279f582b19e787ef81918af2ab` | PR #2 draft/open; 18 focused, 79 full tests, lint/build/diff-check passed; integration review pending. |
+| 12–14 | `/root/resume_steps_12_14` (original Codex task ID unavailable) | `codex/par-steps-12-14` | `7e45e1dfadf6264eafc67dc508366bece2dba739` | PR #3 draft/open; 13 focused, 74 full tests, lint/build/diff-check passed; integration review pending. |
+| 15–18 | `/root/repair_pr1_integration` (original Codex task ID unavailable) | `codex/par-steps-15-18` | `1a95a149f10ed45fd7d2d3ef32b0effdd4e71154` | PR #1 draft/open; coordinator `97a4f38` integrated cleanly; 6 focused, 72 full tests, lint/build/diff-check passed; no merge into coordinator branch. |
+| 05–08 | `/root/resume_steps_05_08` | `codex/resume-steps-05-08-2026-10-14` | based on `ae32aeb` | Active; concrete code gap work, no completion evidence yet. |
+| 19–21 | `/root/resume_steps_19_21` | `codex/resume-steps-19-21-2026-10-14` | based on `ae32aeb` | Active; preserve existing scheduler/package repairs; no completion evidence yet. |
+
+PR #2/#3 follow-up commits are not yet integrated. PR #1 now reports `mergeable:true` but is still draft/open/unmerged. Remote branches for ranges 05–08, 09–11, 19–21, 22–27 and 28–47 remain at `3320c8c` unless later refreshed; see `docs/HEY_EXECUTION_HANDOFF.md` before assigning more work. The durable Steps 34–35 task `01a11c30-7681-7697-b1b3-34d216e68033` produced standalone packages outside the HEY repo and no committed source change.
+
+Master program access blocker: recovery chat `6ac68fc8-9170-83eb-815d-81e94e6be7ba` returned no attachments, local filename search found no source, and connected Drive search returned `UNAUTHORIZED`. Do not mark program steps complete without the source and code/test evidence. The actual `E:\hey` path is not mounted; this session works on a clone of the specified GitHub repository in `work/hey`.
+
+Next: finish worker follow-ups; inspect/integrate #2 and #3 commits one at a time, resolving overlap with coordinator `actionMandate.js` without losing either fix; rerun full checks after each integration; resume Step 01 mission/storage and policy contracts; keep draft PR state until independently verified. See `docs/HEY_EXECUTION_HANDOFF.md` for exact next actions and blockers.
