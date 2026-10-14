@@ -1,7 +1,7 @@
 const FORMAT = "hey.action-mandate.v1";
 const encoder = new TextEncoder();
 
-function canonical(value) {
+function canonical(value, ancestors = new WeakSet()) {
   if (value === null) return "null";
   if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number") {
@@ -9,9 +9,96 @@ function canonical(value) {
     return JSON.stringify(value);
   }
   if (!value || typeof value !== "object") throw new TypeError("Signed payloads must contain JSON-compatible values only.");
-  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null && !Array.isArray(value)) throw new TypeError("Signed payloads cannot contain class instances.");
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) throw new TypeError("Signed payloads cannot contain class instances.");
+  if (ancestors.has(value)) throw new TypeError("Signed payloads cannot contain cyclic references.");
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const keys = Object.keys(value);
+      const ownKeys = Reflect.ownKeys(value);
+      if (keys.length !== value.length || keys.some((key, index) => key !== String(index)) || ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) throw new TypeError("Signed payload arrays cannot contain holes or custom properties.");
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      return `[${keys.map((key) => {
+        if (!Object.hasOwn(descriptors[key], "value")) throw new TypeError("Signed payloads cannot contain accessor properties.");
+        return canonical(descriptors[key].value, ancestors);
+      }).join(",")}]`;
+    }
+    const keys = Object.keys(value).sort();
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    for (const key of keys) {
+      if (!Object.hasOwn(descriptors[key], "value")) throw new TypeError("Signed payloads cannot contain accessor properties.");
+    }
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonical(descriptors[key].value, ancestors)}`).join(",")}}`;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function isCanonicalStringList(value, { allowEmpty = false } = {}) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
+  const keys = Object.keys(value);
+  const ownKeys = Reflect.ownKeys(value);
+  if (keys.length !== value.length || keys.some((key, index) => key !== String(index)) || ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const items = keys.map((key) => {
+    const descriptor = descriptors[key];
+    return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+  });
+  return items.every((item, index) => typeof item === "string" && item.length > 0 && item.trim() === item && !hasControlCharacters(item) && (index === 0 || items[index - 1] < item));
+}
+
+function isCanonicalTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
+}
+
+function getDataRecord(record, expectedKeys) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const prototype = Object.getPrototypeOf(record);
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const ownKeys = Reflect.ownKeys(record);
+  if (ownKeys.some((key) => typeof key !== "string")) return null;
+  const keys = ownKeys.sort();
+  const wanted = [...expectedKeys].sort();
+  if (keys.length !== wanted.length || keys.some((key, index) => key !== wanted[index])) return null;
+  const descriptors = Object.getOwnPropertyDescriptors(record);
+  if (keys.some((key) => !Object.hasOwn(descriptors[key], "value") || !descriptors[key].enumerable)) return null;
+  return Object.fromEntries(keys.map((key) => [key, descriptors[key].value]));
+}
+
+function isValidPayload(payload) {
+  try {
+    const expectedKeys = ["accountId", "actions", "delegable", "delegateKeyIds", "delegationDepth", "expiresAt", "format", "id", "issuedAt", "maxUses", "offlineAllowed", "parent", "resources", "revocationEpoch"];
+    const record = getDataRecord(payload, expectedKeys);
+    if (!record) return false;
+    const value = (key) => record[key];
+    const actions = value("actions");
+    const resources = value("resources");
+    const delegateKeyIds = value("delegateKeyIds");
+    const issuedAtText = value("issuedAt");
+    const expiresAtText = value("expiresAt");
+    if (value("format") !== FORMAT
+      || typeof value("id") !== "string" || !value("id") || value("id").length > 128
+      || typeof value("accountId") !== "string" || !value("accountId") || value("accountId").length > 256 || value("accountId").trim() !== value("accountId") || hasControlCharacters(value("accountId"))
+      || !isCanonicalStringList(actions)
+      || !isCanonicalStringList(resources)
+      || !isCanonicalStringList(delegateKeyIds, { allowEmpty: true })
+      || !Number.isSafeInteger(value("maxUses")) || value("maxUses") < 1 || value("maxUses") > 10000
+      || !Number.isSafeInteger(value("revocationEpoch")) || value("revocationEpoch") < 0
+      || typeof value("offlineAllowed") !== "boolean"
+      || typeof value("delegable") !== "boolean"
+      || !Number.isSafeInteger(value("delegationDepth")) || value("delegationDepth") < 0 || value("delegationDepth") > 4
+      || !isCanonicalTimestamp(issuedAtText)
+      || !isCanonicalTimestamp(expiresAtText)) return false;
+    const issuedAt = Date.parse(issuedAtText);
+    const expiresAt = Date.parse(expiresAtText);
+    if (expiresAt <= issuedAt || expiresAt - issuedAt > 30 * 24 * 60 * 60 * 1000) return false;
+    if (value("delegationDepth") === 0) return value("parent") === null && (value("delegable") || delegateKeyIds.length === 0);
+    return value("parent") !== null && !value("delegable") && delegateKeyIds.length === 0;
+  } catch {
+    return false;
+  }
 }
 
 function bytesToBase64(bytes) {
@@ -38,6 +125,10 @@ function normalizedScope(values, field) {
 
 function assertSubset(childValues, parentValues, field) {
   if (!childValues.every((value) => parentValues.includes(value))) throw new Error(`Delegated ${field} must be a subset of the parent mandate.`);
+}
+
+function hasControlCharacters(value) {
+  return [...value].some((character) => character.codePointAt(0) < 32 || character.codePointAt(0) === 127);
 }
 
 export class InMemoryMandateStore {
@@ -84,6 +175,8 @@ export class MandateStoreContract {
 
 export async function issueActionMandate(input, { privateKey, keyId, parent = null, now = Date.now() } = {}) {
   if (!globalThis.crypto?.subtle || !privateKey || !keyId) throw new TypeError("WebCrypto signing key and keyId are required.");
+  if (!Number.isFinite(now)) throw new TypeError("A finite issuance time is required.");
+  if (typeof keyId !== "string" || keyId.trim() !== keyId || keyId.length > 256 || hasControlCharacters(keyId)) throw new TypeError("keyId must be a bounded, printable string.");
   if (!input || typeof input !== "object" || typeof input.accountId !== "string" || !input.accountId.trim()) throw new TypeError("An authenticated accountId is required.");
   const actions = normalizedScope(input.actions, "actions");
   const resources = normalizedScope(input.resources, "resources");
@@ -120,6 +213,7 @@ export async function issueActionMandate(input, { privateKey, keyId, parent = nu
     delegateKeyIds: parent ? [] : normalizedOptionalScope(input.delegateKeyIds || []),
     parent: parent ? { payload: parent.payload, signature: parent.signature } : null,
   };
+  if (!isValidPayload(payload)) throw new TypeError("The action mandate payload does not satisfy the versioned schema.");
   const signature = await globalThis.crypto.subtle.sign({ name: "Ed25519" }, privateKey, encoder.encode(canonical(payload)));
   return Object.freeze({ payload: Object.freeze(payload), signature: Object.freeze({ algorithm: "Ed25519", keyId, value: bytesToBase64(new Uint8Array(signature)) }) });
 }
@@ -130,15 +224,16 @@ function normalizedOptionalScope(values) {
 }
 
 async function verifySignature(mandate, trustedKeys) {
-  const signature = mandate?.signature;
-  if (mandate?.payload?.format !== FORMAT || signature?.algorithm !== "Ed25519" || typeof signature.keyId !== "string") return false;
-  const key = trustedKeys instanceof Map ? trustedKeys.get(signature.keyId) : trustedKeys?.[signature.keyId];
-  const signatureBytes = base64ToBytes(signature.value);
-  if (!key || !signatureBytes || signatureBytes.length !== 64) return false;
   try {
+    const envelope = getDataRecord(mandate, ["payload", "signature"]);
+    const signature = getDataRecord(envelope?.signature, ["algorithm", "keyId", "value"]);
+    if (!envelope || !isValidPayload(envelope.payload) || !signature || signature.algorithm !== "Ed25519" || typeof signature.keyId !== "string" || !signature.keyId.trim() || signature.keyId.length > 256) return false;
+    const key = trustedKeys instanceof Map ? trustedKeys.get(signature.keyId) : trustedKeys?.[signature.keyId];
+    const signatureBytes = base64ToBytes(signature.value);
+    if (!key || !signatureBytes || signatureBytes.length !== 64) return false;
     const isCryptoKey = typeof CryptoKey !== "undefined" && key instanceof CryptoKey;
     const publicKey = isCryptoKey ? key : await globalThis.crypto.subtle.importKey("raw", base64ToBytes(key), { name: "Ed25519" }, false, ["verify"]);
-    return await globalThis.crypto.subtle.verify({ name: "Ed25519" }, publicKey, signatureBytes, encoder.encode(canonical(mandate.payload)));
+    return await globalThis.crypto.subtle.verify({ name: "Ed25519" }, publicKey, signatureBytes, encoder.encode(canonical(envelope.payload)));
   } catch { return false; }
 }
 
@@ -155,7 +250,11 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
   if (!payload.actions.includes(context.action) || !payload.resources.includes(context.resource)) return deny("Mandate does not authorize this action and resource.");
   if (!Number.isSafeInteger(context.currentRevocationEpoch) || context.currentRevocationEpoch < 0 || context.currentRevocationEpoch !== payload.revocationEpoch) return deny("Mandate revocation epoch is stale or unavailable.");
   if (!online && payload.offlineAllowed !== true) return deny("Mandate is not valid for offline execution.");
-  if (await store.isRevoked(payload.id)) return deny("Mandate has been revoked.");
+  try {
+    if (await store.isRevoked(payload.id)) return deny("Mandate has been revoked.");
+  } catch {
+    return deny("Mandate authority storage failed; execution was denied.");
+  }
   const chain = [mandate];
   while (chain.at(-1).payload.parent) chain.push(chain.at(-1).payload.parent);
   for (let index = 0; index < chain.length; index += 1) {
@@ -163,7 +262,11 @@ export async function verifyAndConsumeMandate(mandate, context, { trustedKeys = 
     const currentPayload = current.payload;
     if (!await verifySignature(current, trustedKeys)) return deny("Delegation chain contains an invalid signature.");
     if (currentPayload.accountId !== payload.accountId || currentPayload.revocationEpoch !== context.currentRevocationEpoch || Date.parse(currentPayload.expiresAt) <= now) return deny("Delegation chain contains expired or stale authority.");
-    if (await store.isRevoked(currentPayload.id)) return deny("Mandate or parent mandate has been revoked.");
+    try {
+      if (await store.isRevoked(currentPayload.id)) return deny("Mandate or parent mandate has been revoked.");
+    } catch {
+      return deny("Mandate authority storage failed; execution was denied.");
+    }
     if (index < chain.length - 1) {
       const child = chain[index];
       const parent = chain[index + 1];
