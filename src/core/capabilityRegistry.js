@@ -17,7 +17,7 @@ export function registerCapability(capability) {
     status: "unavailable",
     riskLevel: "low",
     platforms: ALL_PLATFORMS,
-    platformSupport: Object.fromEntries(ALL_PLATFORMS.map((platform) => [platform, CAPABILITY_STATUS.unsupported])),
+    platformSupport: {},
     ...capability,
   });
   return capabilities.get(capability.id);
@@ -37,9 +37,17 @@ export function getCapabilityAvailability(id, platform = "web", adapter = null) 
     return { capability: id, platform, status: CAPABILITY_STATUS.unsupported, available: false, error: `Capability ${id} is not registered.` };
   }
 
-  const declaredStatus = capability.platformSupport?.[platform] || CAPABILITY_STATUS.unsupported;
+  const hasDeclaredStatus = Object.hasOwn(capability.platformSupport || {}, platform);
+  const declaredStatus = hasDeclaredStatus
+    ? capability.platformSupport[platform]
+    : CAPABILITY_STATUS.unsupported;
   const adapterSupportsCapability = adapter?.platform === platform && adapter.capabilities?.includes(id);
-  const status = adapterSupportsCapability ? CAPABILITY_STATUS.supported : declaredStatus;
+  // Explicit policy is authoritative: an adapter may establish support when
+  // no platform policy was declared, but it cannot clear permission/restriction
+  // state supplied by the capability owner.
+  const status = adapterSupportsCapability && !hasDeclaredStatus
+    ? CAPABILITY_STATUS.supported
+    : declaredStatus;
 
   return {
     capability: id,
@@ -55,7 +63,24 @@ export function executeCapability(id, input = {}, adapter = null) {
   const capability = getCapability(id);
   if (!capability) return unsupportedCapability(id);
   if (!adapter || typeof adapter.execute !== "function") return unsupportedCapability(id);
-  if (capability.platforms && !capability.platforms.includes(adapter.platform)) return unsupportedCapability(id, adapter.platform);
+  const availability = getCapabilityAvailability(id, adapter.platform, adapter);
+  const adapterSupportsCapability = adapter.capabilities?.includes(id) === true;
+  if (!capability.platforms?.includes(adapter.platform) || !adapterSupportsCapability) {
+    return unsupportedCapability(id, adapter.platform);
+  }
+  if (availability.status === CAPABILITY_STATUS.restricted || availability.status === CAPABILITY_STATUS.permissionRequired) {
+    return {
+      success: false,
+      capability: id,
+      platform: adapter.platform,
+      status: availability.status,
+      error: availability.status === CAPABILITY_STATUS.restricted
+        ? `Capability ${id} is restricted on ${adapter.platform}.`
+        : `Capability ${id} requires platform permission before execution.`,
+      verified: false,
+    };
+  }
+  if (!availability.available) return unsupportedCapability(id, adapter.platform);
   return adapter.execute({ capability: id, input });
 }
 
