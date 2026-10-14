@@ -8,7 +8,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 ## Current checkpoint and branch
 
 - Working branch: `codex/resume-emergency-2026-10-14`.
-- Latest coordinator commit: `2e41c59da17d3f3a4449833afb4619a6cf385b8d` (Steps 09–11 and 22–27 merges; locally verified, pending push with this handoff refresh).
+- Latest coordinator commit: `45642a9` (handoff checkpoint for Steps 09–11 and 22–27 integrations; pushed). Latest verified code merge is `2e41c59da17d3f3a4449833afb4619a6cf385b8d`.
 - Base: `origin/codex/production-readiness-2026-10-13` at `97a4f3856398505ffa4dcd4d78348098699d4890` (parent `fa54f27ff0f8fac3acb8dabaf348bbc0f9a0f429`).
 - Verified common checkpoint recorded in `HEY_BUILD_PROGRESS.md`: `3320c8ce44df5d3a37a3513b1023300c29cb10fa`.
 - Branch commits after that checkpoint: `4369a3f` event outbox; `ebf36be` evidence-integrity contract; `fa54f27` defensive event snapshots; `4ae2d58` integration ledger; `97a4f38` worker completion checkpoints.
@@ -62,7 +62,7 @@ Repository: `sakosalm2812-droid/hey` (`https://github.com/sakosalm2812-droid/hey
 
 ## Uncommitted/unmerged work
 
-- Coordinator source and integrated worker changes through `2e41c59` are committed locally; coordinator is four commits ahead of origin before the handoff refresh. Push this branch after committing the refreshed handoff. The only root-checkout untracked path is `work/`, containing isolated agent worktrees and excluded from commits. Do not stage it.
+- Coordinator source and integrated worker changes through `2e41c59` are committed and pushed; handoff commit `45642a9` is also pushed. Root checkout is clean; isolated worker checkouts live below `work/` and are excluded from commits. Do not stage them.
 - Draft PRs #1–#3 are open and unmerged. Review and verify before merging.
 - The durable Steps 34–35 package workspace is isolated, untracked there, and not available in this repository clone; do not copy it in without first checking against canonical product contracts.
 
