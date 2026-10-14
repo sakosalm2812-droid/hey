@@ -13,22 +13,25 @@ const ALL_PLATFORMS = ["web", "windows", "macos", "linux", "android", "ios"];
 
 export function registerCapability(capability) {
   if (!capability?.id || !capability.name) throw new TypeError("A capability id and name are required.");
-  capabilities.set(capability.id, {
+  if (capabilities.has(capability.id)) throw new Error(`Capability is already registered: ${capability.id}`);
+  const registered = structuredClone({
     status: "unavailable",
     riskLevel: "low",
     platforms: ALL_PLATFORMS,
     platformSupport: {},
     ...capability,
   });
-  return capabilities.get(capability.id);
+  capabilities.set(capability.id, registered);
+  return structuredClone(registered);
 }
 
 export function getCapability(id) {
-  return capabilities.get(id) || null;
+  const capability = capabilities.get(id);
+  return capability ? structuredClone(capability) : null;
 }
 
 export function listCapabilities() {
-  return Array.from(capabilities.values());
+  return Array.from(capabilities.values(), (capability) => structuredClone(capability));
 }
 
 export function getCapabilityAvailability(id, platform = "web", adapter = null) {
