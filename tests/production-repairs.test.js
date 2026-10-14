@@ -37,6 +37,56 @@ test("recovery blocks missing or unverifiable adapters and only reports verified
   registerTrue();
 });
 
+test("diagnostic error capture redacts secrets and private context before storing or fingerprinting", () => {
+  const engine = new DiagnosticsEngine({ storage: memoryStorage() });
+  const secret = "Bearer super-secret-credential-value";
+  const privateEmail = "person@example.com";
+  const context = {
+    requestId: "req-safe-1",
+    prompt: "keep this private user request",
+    access_token: "raw-access-token-value",
+    nested: { route: "/api/work", email: privateEmail },
+    customNote: "private free-form diagnostic content",
+  };
+  context.cycle = context;
+  Object.defineProperty(context, "explosive", {
+    enumerable: true,
+    get() { throw new Error("context accessor must not execute"); },
+  });
+  const sourceError = new Error(`Provider failed for ${secret} and ${privateEmail}`);
+  sourceError.code = "ECONNRESET";
+  sourceError.stack = `Error: ${secret}\n at request (?access_token=raw-access-token-value)`;
+
+  const record = engine.recordError({ error: sourceError, context });
+  const persisted = JSON.stringify(engine.getAllErrorFingerprints());
+  const serialized = JSON.stringify(record);
+
+  assert.equal(record.context.requestId, "req-safe-1");
+  assert.equal(record.context.prompt, "[REDACTED]");
+  assert.equal(record.context.access_token, "[REDACTED]");
+  assert.equal(record.context.nested.email, "[REDACTED]");
+  assert.equal(record.context.nested.route, "[REDACTED]");
+  assert.equal(record.context.customNote, "[REDACTED]");
+  assert.equal(record.context.cycle, "[REDACTED]");
+  assert.equal(Object.hasOwn(record.context, "explosive"), false);
+  assert.equal(record.code, "ECONNRESET");
+  assert.equal(record.message, "Error (ECONNRESET)");
+  for (const output of [serialized, persisted]) {
+    assert.equal(output.includes(secret), false);
+    assert.equal(output.includes("raw-access-token-value"), false);
+    assert.equal(output.includes(privateEmail), false);
+    assert.equal(output.includes("Provider failed for"), false);
+  }
+
+  const freeFormContext = engine.recordError({ error: new Error("safe error"), context: "private free-form context" });
+  assert.equal(freeFormContext.context, "[REDACTED]");
+  assert.equal(JSON.stringify(engine.getAllErrorFingerprints()).includes("private free-form context"), false);
+  const proxyContext = new Proxy({}, { ownKeys() { throw new Error("hostile proxy context"); } });
+  let proxyRecord;
+  assert.doesNotThrow(() => { proxyRecord = engine.recordError({ error: new Error("proxy context"), context: proxyContext }); });
+  assert.equal(proxyRecord.context, "[unavailable]");
+});
+
 test("signed action mandates attenuate delegation and prevent replay, overuse, and revoked-parent use", async () => {
   const root = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const delegate = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
