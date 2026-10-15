@@ -280,7 +280,7 @@ test("Tauri bridge stays inactive in a normal web runtime", () => {
   assert.equal(createTauriAdapter(), null);
 });
 
-test("Tauri bridge recognizes production desktop origins and the injected development runtime", () => {
+test("Tauri bridge recognizes only the configured production desktop origins", () => {
   const originalWindow = globalThis.window;
   try {
     globalThis.window = { location: { protocol: "http:", hostname: "tauri.localhost" } };
@@ -288,7 +288,9 @@ test("Tauri bridge recognizes production desktop origins and the injected develo
     globalThis.window = { location: { protocol: "tauri:", hostname: "localhost" } };
     assert.equal(isTauriRuntime(), true);
     globalThis.window = { location: { protocol: "http:", hostname: "localhost" }, __TAURI_INTERNALS__: {} };
-    assert.equal(isTauriRuntime(), true);
+    assert.equal(isTauriRuntime(), false);
+    globalThis.window = { location: { protocol: "https:", hostname: "tauri.localhost" } };
+    assert.equal(isTauriRuntime(), false);
     globalThis.window = { location: { protocol: "https:", hostname: "example.com" } };
     assert.equal(isTauriRuntime(), false);
   } finally {

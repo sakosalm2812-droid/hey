@@ -27,6 +27,8 @@ test("device queue adapter binds account/device scope and exports trusted-server
     enqueue_hey_device_command_authorized: { data: { created: true, command: row }, error: null },
     claim_hey_device_command: { data: { command: row, leaseToken }, error: null },
     renew_hey_device_command_lease: { data: renewal, error: null },
+    begin_hey_device_command_execution: { data: { execute: true, alreadyVerified: false, ambiguous: false }, error: null },
+    complete_hey_device_command_execution: { data: true, error: null },
     ack_hey_device_command: { data: true, error: null },
     fail_hey_device_command: { data: true, error: null },
   });
@@ -37,12 +39,16 @@ test("device queue adapter binds account/device scope and exports trusted-server
   assert.deepEqual(await store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 5_000), {
     renewed: true, leaseUntil: Date.parse(renewal.leaseUntil), idempotent: false,
   });
+  assert.deepEqual(await store.beginExecution(accountId, deviceId, commandId, leaseToken), { execute: true, alreadyVerified: false, ambiguous: false });
+  assert.equal(await store.completeExecution(accountId, deviceId, commandId, leaseToken), true);
   assert.equal(await store.acknowledge(accountId, deviceId, commandId, leaseToken), true);
   assert.equal(await store.recordFailure(accountId, deviceId, commandId, leaseToken), true);
   assert.deepEqual(calls, [
     { name: "enqueue_hey_device_command_authorized", params: { p_account_id: accountId, p_device_id: deviceId, p_idempotency_key: "request-1", p_envelope: envelope, p_mandate_ids: [mandateId], p_mandate_expires_at: authority.expiresAt, p_mandate_revocation_epoch: 2 } },
     { name: "claim_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_lease_ms: 5_000 } },
     { name: "renew_hey_device_command_lease", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_idempotency_key: "renew-1", p_lease_ms: 5_000 } },
+    { name: "begin_hey_device_command_execution", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
+    { name: "complete_hey_device_command_execution", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
     { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
     { name: "fail_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
   ]);
@@ -53,6 +59,8 @@ test("queue rejects malformed identifiers, envelopes, accessors, oversized paylo
     enqueue_hey_device_command_authorized: { data: null, error: { message: "private account payload" } },
     claim_hey_device_command: { data: { command: row, leaseToken: "bad" }, error: null },
     renew_hey_device_command_lease: { data: { renewed: true, leaseUntil: "bad", idempotent: false }, error: null },
+    begin_hey_device_command_execution: { data: { execute: true, alreadyVerified: true, ambiguous: false }, error: null },
+    complete_hey_device_command_execution: { data: "true", error: null },
     ack_hey_device_command: { data: "true", error: null },
     fail_hey_device_command: { data: { ok: true }, error: null },
   });
@@ -75,6 +83,8 @@ test("queue rejects malformed identifiers, envelopes, accessors, oversized paylo
   await assert.rejects(store.claimNext(accountId, deviceId), /malformed/);
   await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1"), /malformed/);
   await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 300_001), /5 minutes/);
+  await assert.rejects(store.beginExecution(accountId, deviceId, commandId, leaseToken), /malformed/);
+  await assert.rejects(store.completeExecution(accountId, deviceId, commandId, leaseToken), /malformed/);
   await assert.rejects(store.acknowledge(accountId, deviceId, commandId, leaseToken), /malformed/);
   await assert.rejects(store.recordFailure(accountId, deviceId, commandId, leaseToken), /malformed/);
   assert.equal(await store.acknowledge(accountId, "not-a-uuid", commandId, leaseToken), false);

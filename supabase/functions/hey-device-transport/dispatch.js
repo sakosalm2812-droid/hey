@@ -42,7 +42,7 @@ export function normalizeTransportRequest(body) {
         || keys.some((key) => !["deviceId", "operation", "commandId", "leaseToken", "idempotencyKey", "leaseMs"].includes(key))) return null;
       return { deviceId: source.deviceId, operation: "renew", commandId: source.commandId, leaseToken: source.leaseToken, idempotencyKey: source.idempotencyKey.trim(), leaseMs };
     }
-    if (source.operation === "ack" || source.operation === "fail") {
+    if (["begin", "complete", "ack", "fail"].includes(source.operation)) {
       if (!validUuid(source.commandId) || !validUuid(source.leaseToken)
         || keys.some((key) => !["deviceId", "operation", "commandId", "leaseToken"].includes(key))) return null;
       return { deviceId: source.deviceId, operation: source.operation, commandId: source.commandId, leaseToken: source.leaseToken };
@@ -118,6 +118,16 @@ export async function handleDeviceTransport({ authorization, body, credentialSto
       if (typeof queue.renewLease !== "function") return result(false, { status: 503, reason: "Device transport is unavailable." });
       const renewal = await queue.renewLease(identity.accountId, identity.deviceId, request.commandId, request.leaseToken, request.idempotencyKey, request.leaseMs);
       return result(renewal.renewed, { status: renewal.renewed ? 200 : 409, renewal });
+    }
+    if (request.operation === "begin") {
+      if (typeof queue.beginExecution !== "function") return result(false, { status: 503, reason: "Device transport is unavailable." });
+      const reservation = await queue.beginExecution(identity.accountId, identity.deviceId, request.commandId, request.leaseToken);
+      return result(true, { status: 200, reservation });
+    }
+    if (request.operation === "complete") {
+      if (typeof queue.completeExecution !== "function") return result(false, { status: 503, reason: "Device transport is unavailable." });
+      const accepted = await queue.completeExecution(identity.accountId, identity.deviceId, request.commandId, request.leaseToken);
+      return result(accepted, { status: accepted ? 200 : 409, accepted });
     }
     const accepted = request.operation === "ack"
       ? await queue.acknowledge(identity.accountId, identity.deviceId, request.commandId, request.leaseToken)

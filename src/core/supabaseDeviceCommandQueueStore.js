@@ -158,6 +158,32 @@ export class SupabaseDeviceCommandQueueStore {
     return { renewed: true, leaseUntil: Date.parse(data.leaseUntil), idempotent: data.idempotent };
   }
 
+  async beginExecution(accountId, deviceId, commandId, leaseToken) {
+    for (const value of [accountId, deviceId, commandId, leaseToken]) {
+      if (typeof value !== "string" || !UUID.test(value)) return { execute: false, alreadyVerified: false, ambiguous: false };
+    }
+    const data = rpcData(await this.client.rpc("begin_hey_device_command_execution", {
+      p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken,
+    }), "execution reservation");
+    if (!data || typeof data !== "object" || typeof data.execute !== "boolean"
+      || typeof data.alreadyVerified !== "boolean" || typeof data.ambiguous !== "boolean"
+      || [data.execute, data.alreadyVerified, data.ambiguous].filter(Boolean).length > 1) {
+      throw new Error("Supabase device command execution response was malformed.");
+    }
+    return { execute: data.execute, alreadyVerified: data.alreadyVerified, ambiguous: data.ambiguous };
+  }
+
+  async completeExecution(accountId, deviceId, commandId, leaseToken) {
+    for (const value of [accountId, deviceId, commandId, leaseToken]) {
+      if (typeof value !== "string" || !UUID.test(value)) return false;
+    }
+    const data = rpcData(await this.client.rpc("complete_hey_device_command_execution", {
+      p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken,
+    }), "execution completion");
+    if (typeof data !== "boolean") throw new Error("Supabase device command completion response was malformed.");
+    return data;
+  }
+
   async acknowledge(accountId, deviceId, commandId, leaseToken) {
     for (const value of [accountId, deviceId, commandId, leaseToken]) {
       if (typeof value !== "string" || !UUID.test(value)) return false;

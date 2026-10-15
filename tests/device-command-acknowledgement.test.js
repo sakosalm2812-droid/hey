@@ -48,3 +48,19 @@ test("ack migration requires a live exact lease for first transition and denies 
   assert.match(sql, /revoke all on function public\.ack_hey_device_command\(uuid, uuid, uuid, uuid\) from public, anon, authenticated/i);
   assert.match(sql, /grant execute on function public\.ack_hey_device_command\(uuid, uuid, uuid, uuid\) to service_role/i);
 });
+
+test("execution receipt migration prevents duplicate execution after restart and requires a verified result before ack", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261015000500_device_command_execution_receipts.sql", import.meta.url), "utf8");
+  assert.match(sql, /execution_state text not null default 'not_started'/i);
+  assert.match(sql, /execution_state = 'executing',[\s\S]*execution_lease_token = p_lease_token/i);
+  assert.match(sql, /if v_command\.execution_state = 'verified'[\s\S]*'alreadyVerified', true/i);
+  assert.match(sql, /if v_command\.execution_state = 'executing'[\s\S]*'ambiguous', true/i);
+  assert.match(sql, /create or replace function public\.complete_hey_device_command_execution[\s\S]*c\.execution_state = 'executing' and c\.execution_lease_token = p_lease_token[\s\S]*execution_state = 'verified'/i);
+  assert.match(sql, /c\.lease_token = p_lease_token and c\.lease_until > clock_timestamp\(\)[\s\S]*c\.execution_state = 'verified'/i);
+  assert.match(sql, /hey_device_command_mandate_is_current/i);
+  assert.match(sql, /d\.status <> 'revoked'/i);
+  assert.match(sql, /p\.status = 'granted'/i);
+  assert.match(sql, /grant execute on function public\.begin_hey_device_command_execution\(uuid, uuid, uuid, uuid\) to service_role/i);
+  assert.match(sql, /grant execute on function public\.complete_hey_device_command_execution\(uuid, uuid, uuid, uuid\) to service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.(?:begin|complete)_hey_device_command_execution\([^;]+\) to [^;]*authenticated/i);
+});

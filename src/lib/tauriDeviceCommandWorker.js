@@ -61,7 +61,7 @@ export function createEdgeDeviceCommandTransport({ endpoint, credential, fetchIm
   if (typeof credential !== "string" || !DEVICE_CREDENTIAL.test(credential)) throw new TypeError("A valid device credential is required.");
   if (typeof fetchImpl !== "function") throw new TypeError("A fetch implementation is required.");
 
-  async function post(body, signal) {
+  async function post(body, signal, allowConflict = false) {
     let response;
     try {
       response = await fetchImpl(url, {
@@ -80,6 +80,7 @@ export function createEdgeDeviceCommandTransport({ endpoint, credential, fetchIm
     }
     let payload;
     try { payload = await response.json(); } catch { throw new Error("Device transport response was invalid."); }
+    if (allowConflict && response.status === 409 && safeRecord(payload) && payload.ok === false) return payload;
     if (!response.ok || !safeRecord(payload) || payload.ok !== true) {
       const error = new Error("Device transport rejected the request.");
       error.status = response.status;
@@ -98,15 +99,24 @@ export function createEdgeDeviceCommandTransport({ endpoint, credential, fetchIm
       return { command, leaseToken: payload.claim.leaseToken };
     },
     async renew(deviceId, commandId, leaseToken, idempotencyKey, leaseMs) {
-      const payload = await post({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey, leaseMs });
+      const payload = await post({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey, leaseMs }, undefined, true);
       return safeRecord(payload.renewal) && payload.renewal.renewed === true;
     },
+    async beginExecution(deviceId, commandId, leaseToken) {
+      const payload = await post({ operation: "begin", deviceId, commandId, leaseToken });
+      if (!safeRecord(payload.reservation)) throw new Error("Device execution reservation was invalid.");
+      return payload.reservation;
+    },
+    async completeExecution(deviceId, commandId, leaseToken) {
+      const payload = await post({ operation: "complete", deviceId, commandId, leaseToken }, undefined, true);
+      return payload.accepted === true;
+    },
     async acknowledge(deviceId, commandId, leaseToken) {
-      const payload = await post({ operation: "ack", deviceId, commandId, leaseToken });
+      const payload = await post({ operation: "ack", deviceId, commandId, leaseToken }, undefined, true);
       return payload.accepted === true;
     },
     async fail(deviceId, commandId, leaseToken) {
-      const payload = await post({ operation: "fail", deviceId, commandId, leaseToken });
+      const payload = await post({ operation: "fail", deviceId, commandId, leaseToken }, undefined, true);
       return payload.accepted === true;
     },
   });
@@ -147,7 +157,8 @@ export function createDeviceCommandWorker({
   makeIdempotencyKey = () => globalThis.crypto.randomUUID(),
 } = {}) {
   if (!validUuid(deviceId) || !transport || typeof transport.claim !== "function"
-    || typeof transport.renew !== "function" || typeof transport.acknowledge !== "function"
+    || typeof transport.renew !== "function" || typeof transport.beginExecution !== "function"
+    || typeof transport.completeExecution !== "function" || typeof transport.acknowledge !== "function"
     || typeof transport.fail !== "function" || !adapter || typeof adapter.execute !== "function"
     || !Array.isArray(adapter.capabilities)) {
     throw new TypeError("A device id, command transport, and local adapter are required.");
@@ -162,7 +173,6 @@ export function createDeviceCommandWorker({
   let activeRunPromise = null;
   let pollController = null;
   let activeCommand = null;
-  const completed = new Map();
   const wakeWaiters = new Set();
 
   function status(state) {
@@ -173,22 +183,7 @@ export function createDeviceCommandWorker({
     const { command, leaseToken } = claim;
     const action = command.envelope.action;
     const capability = SUPPORTED_ACTIONS[action];
-    const fingerprint = JSON.stringify(command.envelope);
     activeCommand = command.commandId;
-    const prior = completed.get(command.commandId);
-    if (prior && prior !== fingerprint) {
-      status("replay_conflict");
-      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire and retry safely. */ }
-      activeCommand = null;
-      return;
-    }
-    if (prior === fingerprint) {
-      status("acknowledging_replay");
-      const accepted = await transport.acknowledge(deviceId, command.commandId, leaseToken);
-      status(accepted ? "acknowledged" : "ack_rejected");
-      activeCommand = null;
-      return;
-    }
     if (stopping) {
       try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire and retry safely. */ }
       activeCommand = null;
@@ -201,16 +196,39 @@ export function createDeviceCommandWorker({
       return;
     }
 
+    const reservation = await transport.beginExecution(deviceId, command.commandId, leaseToken);
+    if (!safeRecord(reservation) || typeof reservation.execute !== "boolean"
+      || typeof reservation.alreadyVerified !== "boolean" || typeof reservation.ambiguous !== "boolean"
+      || [reservation.execute, reservation.alreadyVerified, reservation.ambiguous].filter(Boolean).length > 1) {
+      status("execution_reservation_invalid");
+      return;
+    }
+    if (reservation.alreadyVerified) {
+      status("acknowledging_verified_replay");
+      const accepted = await transport.acknowledge(deviceId, command.commandId, leaseToken);
+      status(accepted ? "acknowledged" : "ack_rejected");
+      return;
+    }
+    if (reservation.ambiguous) {
+      status("execution_ambiguous");
+      let retried = false;
+      try { retried = await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire and retry safely. */ }
+      status(retried ? "retry_scheduled_fail_closed" : "failure_rejected");
+      return;
+    }
+    if (!reservation.execute) {
+      status("execution_reservation_rejected");
+      return;
+    }
+
     let renewalInFlight = false;
-    let leaseLost = false;
     const timer = setInterval(async () => {
       if (renewalInFlight || stopping) return;
       renewalInFlight = true;
       try {
         const key = makeIdempotencyKey();
         if (typeof key !== "string" || !key.trim() || key.length > 128) throw new Error("Invalid renewal key.");
-        const renewed = await transport.renew(deviceId, command.commandId, leaseToken, key, leaseMs);
-        if (!renewed) leaseLost = true;
+        await transport.renew(deviceId, command.commandId, leaseToken, key, leaseMs);
       } catch { /* The current lease remains authoritative until the server says otherwise. */ }
       finally { renewalInFlight = false; }
     }, Math.max(500, Math.floor(leaseMs / 3)));
@@ -235,9 +253,13 @@ export function createDeviceCommandWorker({
       return;
     }
 
-    completed.set(command.commandId, fingerprint);
-    while (completed.size > 500) completed.delete(completed.keys().next().value);
-    status(leaseLost ? "execution_verified_lease_uncertain" : "execution_verified");
+    const completed = await transport.completeExecution(deviceId, command.commandId, leaseToken);
+    if (!completed) {
+      status("execution_completion_rejected");
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire and future attempts fail closed. */ }
+      return;
+    }
+    status("execution_verified");
     const accepted = await transport.acknowledge(deviceId, command.commandId, leaseToken);
     status(accepted ? "acknowledged" : "ack_rejected");
     activeCommand = null;
