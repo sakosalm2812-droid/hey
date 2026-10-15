@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 import AppearanceControl from "../Theme/AppearanceControl.jsx";
+import PwaInstall from "../PwaInstall.jsx";
 import styles from "./Navbar.module.css";
 
 const links = [
@@ -47,6 +48,7 @@ export default function Navbar() {
 
         <div className={styles.action}>
           <AppearanceControl />
+          <PwaInstall compact />
           <motion.button type="button" className={styles.cta} onClick={() => navigate("/signup")} whileHover={{ y: -2 }} whileTap={{ scale: .97 }}>
             Enter HEY <ArrowUpRight size={15} />
           </motion.button>
@@ -61,6 +63,7 @@ export default function Navbar() {
         {menuOpen && (
           <motion.div className={styles.mobileMenu} initial={{ opacity: 0, y: -10, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10, scale: .98 }}>
             <AppearanceControl />
+            <PwaInstall compact />
             <nav aria-label="Mobile public navigation">
               {links.map((link) => <NavLink key={link.path} to={link.path} onClick={closeMenu} className={({ isActive }) => isActive ? styles.mobileActive : styles.mobileLink}>{link.name}</NavLink>)}
             </nav>

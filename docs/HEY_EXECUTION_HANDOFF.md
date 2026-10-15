@@ -1,5 +1,33 @@
 # HEY Execution Handoff
 
+## Live continuation override — 2026-10-15 (America/Los_Angeles)
+
+This section supersedes stale checkpoint summaries below. Coordinator checkout: `C:\Users\DELL\Documents\Codex\2026-10-14\hey-emergency-continuation-resume-execution-the\work\hey`, branch `codex/resume-emergency-2026-10-14`, source base `4eb61ea6b96756fed101b36c19eddd4c8f984b6c`. The last pre-continuation full suite at this source base was 515/515 (per immediately preceding task state). Current uncommitted changes add PWA install guidance/manifest behavior and maskable icon, safe post-login redirect validation, Source A/B/C recovery index and complete task-specific specialist briefs. Current run: `npm test` 517/517; `npm run build` passed (sitemap skipped without `SITE_URL`; existing `contextManager.js` mixed-import warning); changed-file ESLint passed after fixing a control-character-regex finding; focused PWA/auth redirect tests 6/6; `git diff --check` passed. Browser proof at `http://127.0.0.1:5173/download`: clicked Install HEY and visibly toggled browser-specific instructions. Real `beforeinstallprompt`, installed standalone runtime, sign-in callback, external services, native installer/device are UNVERIFIED.
+
+Source provenance: Source A `HEY_FINAL_ABSOLUTE_SOURCE_OF_TRUTH_COMBINED (1).md`, 8,429,711 characters, SHA-256 `E617DFE4CA2E9C1DD753B53D3002C9E694BBB1582728D1AEF725D92F11E2B82D`; Source B `HEY_WORK_MODE_MASTER_BUILD_PROGRAM (3).txt`, 932,280 characters, SHA-256 `3C48112DF44CB77ED97E04787097F34D376AB05E5ECD99C59DDB6B7DB3AAE401`; Source C directive, 27,949 characters, SHA-256 `77E11123BE403B0881AAD527D781973842DAE712710339429DBA619DB3496617`. Task-specific briefs live in `docs/requirements/specialists/`; Source C full directive and shared Source A foundation are copied into `docs/requirements/`. The separate historical 4,210-item ledger was not attached and is explicitly not HEY's feature target.
+
+All 11 existing specialist Codex chats were restarted concurrently and told to read their complete task-specific brief plus shared foundation and Source C, confirm exact received sections/accessibility, then implement on their existing branch. Their local Codex task IDs, branch refs, and last known remote SHAs at restart:
+
+| Worker | Active slice | Branch | Codex task | Remote SHA at restart |
+|---:|---|---|---|---|
+| 01 | Frontend Director | `codex/next-01-frontend-director` | `01a14073-33bf-7403-940b-871cd0de9ebc` | `e701fb91` |
+| 02 | Onboarding and Spaces | `codex/next-02-onboarding-spaces` | `01a14073-9827-7f42-bf35-4eb2faee522d` | `c75a1966` |
+| 03 | Universal Tool Library | `codex/next-03-tool-library` | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `9955d821` |
+| 04 | Edge and Everywhere | `codex/next-04-edge-everywhere` | `01a14073-c424-70e2-9773-630d488b24ae` | `4891e51f` |
+| 05 | Gesture Control | `codex/next-05-gesture-control` | `01a14073-de07-7a90-b8bb-08faadea17bc` | `87fdf291` |
+| 06 | Flow Dictation | `codex/next-06-flow-dictation` | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `5811d07f` |
+| 07 | VoiceOS Control | `codex/next-07-voiceos-control` | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `91deee55` |
+| 08 | Teacher Experience | `codex/next-08-teacher-experience` | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `321a6c67` |
+| 09 | HEY One Models | `codex/next-09-hey-one-models` | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `8119cd1a` |
+| 10 | Ultrasparse research | `codex/next-10-ultrasparse-research` | `01a14074-6e4f-79e2-805f-30ce26dab60e` | no matching published branch ref; worker instructed to recover its active checkout/head |
+| 11 | Fusion Models | `codex/next-11-fusion-models` | `01a14074-9f63-7672-9965-154a8394ffca` | `72582c5f` |
+
+First resumed source receipts: worker 02 confirmed all required brief/foundation/directive files were accessible and enumerated A/B/C coverage; worker 04 reported clean branch `4891e51` with 11 commits ahead/11 behind its tracking branch and is checking the explicit graph before edits; worker 05 read the full brief and is inspecting Gesture Studio; worker 07 confirmed the scoped brief and is aligning its current change; worker 09 confirmed full A/B/C scope and is preserving its provider branch. Others were active reading/reconciling at the last status snapshot. Ask workers for exact current HEAD/dirty status before integration; do not replace stronger existing implementations. No direct local worker shell checkout was found in the current workspace roots, so their own task reports are required for uncommitted state.
+
+GitHub API inspection found three open draft PRs: #1 Steps 15–18 (`codex/par-steps-15-18`, head `1a95a149`), #2 Steps 02–04 (`codex/par-steps-02-04`, head `2ae50e3d`), and #3 Steps 12–14 (`codex/par-steps-12-14`, head `7e45e1df`), each targeting `codex/production-readiness-2026-10-13` at `97a4f385`. They are not merged into the current coordinator branch and must be reviewed against the integrated code before any adoption. The GitHub branches listing also includes inactive historical `codex/par-steps-*` and `codex/resume-steps-*` refs; no reset/force-push is authorized.
+
+Uncommitted coordinator work is described above and not yet committed at this override's creation. Exact next actions: finish one coordinator checkpoint with the updated Source hashes, current worker/source status and capability deltas; then compare incoming worker diffs against current contracts, integrate nonconflicting useful changes one at a time, run relevant adversarial/full checks, verify real UI behavior, and record new SHAs and blockers here before stopping.
+
 ## Current coordinator checkpoint — 2026-10-15
 
 - Repository: `sakosalm2812-droid/hey`; branch `codex/resume-emergency-2026-10-14`; latest verified source HEAD `5f09406`. Integrated source commits: Chat 01 `495af05` → `8642c40`; 02 `e80ab09` → `b08b46a`; 03 `78670e4` → `5bc6a70`; 04 `c9f7572` → `bb2e94c`; 05 `391d003` → `6a6864e`; 06 `3e5b6cc` → `89f82bc`; 07 `a4aa6a6` → `5989620`; 08 `badd19d` → `56515dd`; 10 `c04a0b3` → `a1310e6`; Chat 09 commits `9b0c6ff`, `5755cdb`, and repair `ba32b66` → coordinator `295461a`, `17a56dc`, `a330a1d`; Chat 11 grant-revocation behavior was adapted into `5755cdb` and integrated at `17a56dc`. Timeout-test fixture stabilization is `5f09406`. Earlier Fusion worker pair `7b632c2` + `3a5cfe8` remains integrated as `7d08492` + `3f30d4a`. The rejected first trial is retained in history as coordinator commits `dc15b1b`, `e529adb` and revert commits `28dfece`, `90c1a91`; final corrected changes follow those reverts.

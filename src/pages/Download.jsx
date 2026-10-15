@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { RELEASE_SURFACES, RELEASE_STATUS } from "../core/platformMatrix.js";
 import styles from "./Landing.module.css";
+import PwaInstall from "../components/PwaInstall.jsx";
 
 const platformIcon = { Browser: Globe2, Desktop: Monitor, Mobile: Smartphone };
 
@@ -22,6 +23,7 @@ export default function Download() {
           This page shows the verified state of each target.
         </p>
         <div className={styles.ctaRow}>
+          <PwaInstall />
           <button className="hey-landing-cta" onClick={() => navigate("/signup")}>
             Get started free
           </button>

@@ -4,7 +4,7 @@ const CACHE = {
   runtime: `${VERSION}-runtime`,
 };
 
-const SHELL_ASSETS = ["/", "/index.html", "/favicon.svg", "/site.webmanifest"];
+const SHELL_ASSETS = ["/", "/index.html", "/favicon.svg", "/pwa-maskable.svg", "/site.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

@@ -1,0 +1,11 @@
+.hey-pwa-install { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.hey-pwa-install-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 14px; border: 1px solid color-mix(in srgb, var(--accent-primary) 55%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--accent-primary) 15%, transparent); color: var(--text-primary); font: inherit; font-weight: 600; cursor: pointer; }
+.hey-pwa-install-button:hover { background: color-mix(in srgb, var(--accent-primary) 24%, transparent); }
+.hey-pwa-install-button:focus-visible { outline: 3px solid var(--accent-primary); outline-offset: 3px; }
+.hey-pwa-install-compact .hey-pwa-install-button { min-height: 34px; padding: 7px 10px; font-size: 12px; }
+.hey-pwa-platform-label { color: var(--text-secondary); font-size: 13px; }
+.hey-pwa-instructions { flex-basis: 100%; padding: 16px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-raised, var(--bg-secondary)); color: var(--text-primary); }
+.hey-pwa-instructions h3 { margin: 0 0 8px; font-size: 16px; }
+.hey-pwa-instructions ol { padding-left: 22px; }
+.hey-pwa-instructions li { margin: 5px 0; }
+.hey-pwa-instructions p, .hey-pwa-status { color: var(--text-secondary); font-size: 13px; }
