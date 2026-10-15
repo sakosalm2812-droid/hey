@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { getHEYChatError, isSameHEYAccount, withFusionRequestOptIn } from "../src/lib/heyAI.js";
+import { checkHEYAIReadiness, getHEYChatError, isSameHEYAccount, listHEYConversations, withFusionRequestOptIn } from "../src/lib/heyAI.js";
 
 test("ordinary chat omits Fusion and explicit opt-in sends only the supported true field", () => {
   const ordinary = withFusionRequestOptIn({ message: "hello", mode: "research", fusion: true });
@@ -25,6 +25,26 @@ test("responses from an account that is no longer signed in are rejected", () =>
   assert.equal(isSameHEYAccount({ user: { id: "account-a" } }, null), false);
 });
 
+test("HEY AI readiness reflects the real health endpoint and distinguishes missing configuration", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ status: "ready" }), { status: 200 });
+    assert.equal((await checkHEYAIReadiness()).status, "ready");
+
+    globalThis.fetch = async () => new Response(JSON.stringify({ status: "not_ready" }), { status: 503 });
+    assert.equal((await checkHEYAIReadiness()).status, "not_configured");
+
+    globalThis.fetch = async () => { throw new TypeError("offline"); };
+    assert.equal((await checkHEYAIReadiness()).status, "unavailable");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat conversation loading does not treat a missing Supabase session as an empty account", async () => {
+  await assert.rejects(listHEYConversations(), /Supabase session is unavailable/i);
+});
+
 test("chat UI exposes Fusion as a per-request checkbox and fences requests on unmount", async () => {
   const [input, page, client] = await Promise.all([
     readFile(new URL("../src/components/chat/ChatInput.jsx", import.meta.url), "utf8"),
@@ -38,4 +58,8 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
   assert.match(page, /fusion: requestedFusion/);
   assert.match(client, /const execution = fusion \? null : await executeRequest/);
   assert.match(client, /withFusionRequestOptIn\([\s\S]*?\}, fusion\)\)/);
+  assert.match(page, /aria-label="Service readiness"/);
+  assert.match(page, /provider reachability is confirmed when you send a message/);
+  assert.match(page, /Supabase could not load your conversations/);
+  assert.match(client, /HEY AI could not be reached/);
 });
