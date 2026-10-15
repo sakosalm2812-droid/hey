@@ -48,6 +48,8 @@ import {
   getTool,
   listTools,
   listToolCatalog,
+  searchToolCatalog,
+  runToolLibraryEntry,
   executeTool,
 } from "./toolRegistry.js";
 
@@ -516,6 +518,8 @@ import {
       get: getTool,
       all: listTools,
       catalog: listToolCatalog,
+      search: searchToolCatalog,
+      run: runToolLibraryEntry,
       execute: executeTool,
     },
 

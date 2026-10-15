@@ -1,5 +1,5 @@
 import { recordAudit } from "./auditLog.js";
-import { executeWithPermission, authorizeExecution } from "./permissionManager.js";
+import { executeWithPermission, authorizeExecution, hasPermission } from "./permissionManager.js";
 import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
 
 const tools = new Map();
@@ -157,6 +157,8 @@ export function listToolCatalog({ platform = "web", adapter = null } = {}) {
 
     return Object.freeze({
       name: tool.name,
+      description: typeof tool.metadata.description === "string" ? tool.metadata.description : "",
+      category: typeof tool.metadata.category === "string" ? tool.metadata.category : "general",
       status,
       available: status === CAPABILITY_STATUS.supported,
       platform,
@@ -169,6 +171,64 @@ export function listToolCatalog({ platform = "web", adapter = null } = {}) {
       lifecycle: "registered",
     });
   });
+}
+
+/** Search the handler-free Tool Library catalog. Search never executes tools. */
+export function searchToolCatalog(query = "", options = {}) {
+  if (typeof query !== "string") throw new TypeError("Tool Library search query must be a string.");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const category = typeof options.category === "string" ? options.category.trim().toLocaleLowerCase() : "";
+  return listToolCatalog(options).filter((tool) => {
+    const matchesCategory = !category || tool.category.toLocaleLowerCase() === category;
+    if (!matchesCategory) return false;
+    if (!normalizedQuery) return true;
+    return `${tool.name} ${tool.description} ${tool.category}`.toLocaleLowerCase().includes(normalizedQuery);
+  });
+}
+
+/**
+ * Run a discovered tool through the existing permission and execution engine.
+ * Catalog support is checked again at the action boundary to avoid trusting a
+ * stale UI result, a tool handler alone, or caller-supplied permission claims.
+ */
+export async function runToolLibraryEntry(name, input, context = {}) {
+  const tool = tools.get(name);
+  const requestId = context.requestId || crypto.randomUUID();
+  const fail = (error, status = "unavailable") => ({
+    success: false,
+    result: null,
+    error,
+    status,
+    metadata: { requestId, source: "tool_library" },
+  });
+  if (!tool) return fail(`Tool not found: ${name}`, "not_found");
+
+  const declaredCapabilities = tool.metadata.capabilities;
+  const permission = tool.metadata.permission || tool.metadata.permissions?.[0];
+  if (!Array.isArray(declaredCapabilities) || declaredCapabilities.length === 0) {
+    return fail("Tool has no registered capability and cannot be run from the Tool Library.");
+  }
+  if (typeof permission !== "string" || !permission.trim()) {
+    return fail("Tool has no account permission requirement and cannot be run from the Tool Library.");
+  }
+
+  const catalogEntry = listToolCatalog({ platform: context.platform || "web", adapter: context.adapter || null })
+    .find((entry) => entry.name === name);
+  if (!catalogEntry || catalogEntry.status !== CAPABILITY_STATUS.supported) {
+    const status = catalogEntry?.status || CAPABILITY_STATUS.unsupported;
+    const capabilityError = catalogEntry?.capabilities.find((item) => item.status !== CAPABILITY_STATUS.supported)?.error;
+    return fail(capabilityError || `Tool ${name} is ${status} on ${context.platform || "web"}.`, status);
+  }
+
+  const user = context.user || context.session?.user || context.account || null;
+  const accountId = user?.id || user?.userId || user?.accountId || null;
+  if (!accountId || !hasPermission(permission, "account", accountId)) {
+    return fail(`Missing canonical account permission: ${permission}.`, "denied");
+  }
+
+  // The single execution path owns identity, account permission, entitlement,
+  // confirmation, audit, and handler invocation checks.
+  return executeTool(name, input, { ...context, permissionScope: "account" });
 }
 
 export async function executeTool(name, input, context = {}) {
@@ -309,5 +369,7 @@ export default {
   getTool,
   listTools,
   listToolCatalog,
+  searchToolCatalog,
+  runToolLibraryEntry,
   executeTool,
 };
