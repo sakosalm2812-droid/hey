@@ -526,6 +526,9 @@ export class MissionCenter {
     if (checkpointStore) {
       const persisted = await checkpointStore.load(accountId, id);
       if (!persisted) return { restored: false, reason: "checkpoint_missing" };
+      if (!Number.isSafeInteger(persisted.revision) || persisted.revision < 1 || !persisted.checkpoint || typeof persisted.checkpoint !== "object") {
+        return { restored: false, reason: "checkpoint_store_response_malformed" };
+      }
       checkpoint = persisted.checkpoint;
       storedRevision = persisted.revision;
     }

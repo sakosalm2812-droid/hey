@@ -275,6 +275,18 @@ test("configured durable checkpoint storage fails closed on save conflicts and n
   assert.equal(verifierCalls, 0);
 });
 
+test("durable checkpoint restore rejects malformed revision metadata before evidence verification", async () => {
+  let verifierCalls = 0;
+  const center = new MissionCenter({
+    storage: new MemoryStore(),
+    checkpointStore: { async load() { return { revision: "1", checkpoint: {} }; } },
+    evidenceService: { async verifyEnvelope() { verifierCalls += 1; return { valid: true }; } },
+  });
+  const mission = center.createMission("Reject malformed checkpoint store metadata.");
+  assert.deepEqual(await center.restoreCheckpoint(mission.id, { accountId: "acct" }), { restored: false, reason: "checkpoint_store_response_malformed" });
+  assert.equal(verifierCalls, 0);
+});
+
 test("queued and paused missions cancel without claiming cancellation while work is active", () => {
   const center = new MissionCenter({ storage: new MemoryStore() });
   const mission = center.createMission("Cancel a queued mission.");
