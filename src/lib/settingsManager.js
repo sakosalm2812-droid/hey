@@ -9,7 +9,7 @@ export async function getSettings(userId) {
 
   if (error) {
     console.error('Failed to load settings:', error);
-    return {};
+    throw error;
   }
 
   return data?.settings || {};

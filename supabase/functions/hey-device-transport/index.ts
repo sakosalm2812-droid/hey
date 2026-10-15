@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SupabaseDeviceCommandQueueStore } from "../../../src/core/supabaseDeviceCommandQueueStore.js";
 import { readBoundedJson } from "../hey/requestSafety.js";
-import { handleDeviceTransport, issueDeviceCredential } from "./dispatch.js";
+import { handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, revokeOwnedDeviceTransport } from "./dispatch.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
@@ -36,6 +36,22 @@ Deno.serve(async (request: Request) => {
     const { data: userData, error: authError } = await userClient.auth.getUser();
     const accountId = userData?.user?.id;
     const serviceClient = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+
+    const accountRequest = normalizeAccountDeviceRequest(parsed.value);
+    if (accountRequest?.operation === "revoke") {
+      if (authError || !accountId) return json(401, { ok: false, reason: "An authenticated account is required." });
+      const result = await revokeOwnedDeviceTransport({
+        authenticatedAccountId: accountId,
+        deviceId: accountRequest.deviceId,
+        revokeDevice: async (userId: string, deviceId: string) => {
+          const { data, error } = await serviceClient.rpc("revoke_hey_device_transport", { p_account_id: userId, p_device_id: deviceId });
+          if (error) throw new Error("Device revocation failed.");
+          return data === true;
+        },
+      });
+      return json(result.status, result);
+    }
+
     const queue = new SupabaseDeviceCommandQueueStore(serviceClient, { trustedServer: true });
     const deviceCredentials = {
       async rotate(userId: string, deviceId: string, secretHash: string) {
@@ -51,12 +67,11 @@ Deno.serve(async (request: Request) => {
       },
     };
 
-    if (parsed.value?.operation === "rotate") {
+    if (accountRequest?.operation === "rotate") {
       if (authError || !accountId) return json(401, { ok: false, reason: "An authenticated account is required." });
-      if (Object.keys(parsed.value).some((key) => !["operation", "deviceId"].includes(key))) return json(400, { ok: false, reason: "Device credential request is invalid." });
-      const { data: device, error } = await serviceClient.from("hey_devices").select("id,user_id,status").eq("id", parsed.value.deviceId).maybeSingle();
+      const { data: device, error } = await serviceClient.from("hey_devices").select("id,user_id,status").eq("id", accountRequest.deviceId).maybeSingle();
       if (error) return json(503, { ok: false, reason: "Device ownership lookup is unavailable." });
-      const result = await issueDeviceCredential({ authenticatedAccountId: accountId, deviceId: parsed.value.deviceId, loadDevice: async () => device, credentialStore: deviceCredentials });
+      const result = await issueDeviceCredential({ authenticatedAccountId: accountId, deviceId: accountRequest.deviceId, loadDevice: async () => device, credentialStore: deviceCredentials });
       return json(result.ok ? 200 : result.reason.includes("unavailable for this account") ? 403 : 503, result);
     }
 

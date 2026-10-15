@@ -53,6 +53,7 @@ import {
   startToolLibraryEntry,
   stopToolLibraryEntry,
   getToolLifecycleContract,
+  toolLibraryPreferenceStore,
   executeTool,
 } from "./toolRegistry.js";
 
@@ -95,10 +96,11 @@ import { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS } from "./
 import { createMission, getMission, getAllMissions, getActiveMissions, getMissionsByState, getMissionsByProject, updateMission, setMissionState, startMission, pauseMission, resumeMission, cancelMission, retryMission, updateMissionStep, createMissionCheckpoint, restoreMissionCheckpoint, getMissionProgress, getMissionReplay, deleteMission, subscribeToMissions, MISSION_STATES, STEP_STATES } from "./missionCenter.js";
 import { parseNaturalCommand } from "./commandParser.js";
 import { understandVoiceCommand } from "./voiceCommandUnderstanding.js";
+import { createDictationEditSession } from "../lib/dictationEditProposals.js";
 import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
 import { defaultTutorials } from "./tutorialCatalog.js";
 import { workspaceEngine, createWidget, getWidget, getAllWidgets, getWidgetsByFamily, getActiveWidgets, updateWidget, setWidgetState, moveWidget, resizeWidget, bringWidgetToFront, sendWidgetToBack, pinWidget, groupWidgets, ungroupWidgets, dockWidget, undockWidget, closeWidget, deleteWidget, handleSemanticDrop, saveLayout, loadLayout, getLayouts, deleteLayout, handleMonitorChange, subscribeToWorkspace, WIDGET_STATES, WIDGET_FAMILIES, DRAG_TYPES, SNAP_MODES } from "./workspaceEngine.js";
-import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
+import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
 import { createProjectDNA, getProjectDNA, updateProjectDNA, deleteProjectDNA, listProjectDNAs, checkProjectConsistency, exportProjectDNA, importProjectDNA, setProjectLock, getProjectLocks, removeProjectLock, DNA_FIELDS, DRIFT_TYPES, RULE_PRECEDENCE, LOCK_TYPES as DNA_LOCK_TYPES } from "./projectDNA.js";
 import {
   createPinpointContract,
@@ -157,7 +159,16 @@ import { createLiveSession, startLiveSession, addLiveSource, switchLiveSource, r
 import { createDynamicIsland, getDynamicIsland, getDefaultDynamicIsland, listDynamicIslands, updateDynamicIslandSettings, addIslandActivity, updateIslandActivity, removeIslandActivity, dismissIslandActivity, pinIslandActivity, unpinIslandActivity, setIslandState, toggleIslandExpanded, handleIslandInteraction, addIslandModule, removeIslandModule, updateIslandModule, enableIslandModule, disableIslandModule, getVisibleIslandActivities, cleanupExpiredIslandActivities, completeIslandActivity, errorIslandActivity, destroyDynamicIsland, ISLAND_STATES, ACTIVITY_TYPES } from "./dynamicIsland.js";
 import { startBackgroundHelper, stopBackgroundHelper, pauseBackgroundHelper, resumeBackgroundHelper, getBackgroundHelperState, isBackgroundCapabilityEnabled, enableBackgroundCapability, disableBackgroundCapability, runBackgroundTask, cancelBackgroundTask, handleBackgroundCloseBehavior, HELPER_STATES, BACKGROUND_CAPABILITIES } from "./backgroundHelper.js";
 import { validateForgeArtifact, createForgePreview } from "./forgeEngine.js";
-import { buildTeacherLessonArtifact, verifyTeacherLessonArtifact, saveTeacherLessonArtifact, exportTeacherLessonMarkdown } from "./teacherExperience.js";
+import {
+  buildTeacherLessonArtifact,
+  verifyTeacherLessonArtifact,
+  saveTeacherLessonArtifact,
+  exportTeacherLessonMarkdown,
+  buildTeacherAssessmentArtifact,
+  verifyTeacherAssessmentArtifact,
+  saveTeacherAssessmentArtifact,
+  exportTeacherAssessmentMarkdown,
+} from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
 import { getDeviceId, getDeviceName, renameDevice, startFabric, listPeers, requestHandoff, getHandoffBundle, clearHandoffBundle, acceptHandoff, producePairCode, registerPairCode, getPairCode } from "./deviceFabric.js";
@@ -231,10 +242,10 @@ import { getMemoryNeighborhood, upsertMemoryNode, searchMemoryGraph, clearMemory
 import { createWorkflow, runWorkflow } from "./workflowEngine.js";
 import { createSkill, listSkills, getSkill, updateSkill, runSkill } from "./skillEngine.js";
 import { createMorningBriefing } from "./briefingEngine.js";
-import { registerProvider, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
+import { registerProvider, attachEvaluationReport, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
 import { selectModel, createProviderPlan } from "./providerRouter.js";
 import { FUSION_MODES, runProviderFusion } from "./providerFusion.js";
-import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
+import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, verifyEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
 import { 
   initializeComputerControl, 
   executeComputerControl, 
@@ -509,6 +520,7 @@ import {
       states: VOICE_STATES,
       createState: createVoiceState,
       understandCommand: understandVoiceCommand,
+      createDictationEditSession,
     },
 
     vision: {
@@ -529,6 +541,7 @@ import {
       stop: stopToolLibraryEntry,
       lifecycle: getToolLifecycleContract,
       execute: executeTool,
+      preferences: toolLibraryPreferenceStore,
     },
 
     tasks: {
@@ -653,6 +666,7 @@ import {
 
     providers: {
       register: registerProvider,
+      attachEvaluationReport,
       unregister: unregisterProvider,
       get: getProvider,
       all: listProviders,
@@ -667,6 +681,7 @@ import {
     modelPlatform: {
       createModelRecord,
       createEvaluationReport,
+      verifyEvaluationReport,
       createAdapterManifest,
       createAdapterServingTarget,
       createInferenceRequest,
@@ -822,8 +837,12 @@ import {
       previewNaturalLanguageCreation: previewNaturalLanguageSpaceCreation,
       confirmNaturalLanguageCreation: confirmNaturalLanguageSpaceCreation,
       getPrivateSpaces,
+      getLayoutPreferences: getSpaceLayoutPreferences,
+      updateLayoutPreferences: updateSpaceLayoutPreferences,
       subscribe: subscribeToPrivateSpaces,
       contractVersion: SPACE_CREATION_CONTRACT_VERSION,
+      storageContractVersion: SPACE_STORAGE_CONTRACT_VERSION,
+      layoutPreferencesContractVersion: SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION,
       limits: SPACE_CREATION_LIMITS,
     },
 
@@ -855,6 +874,10 @@ import {
       verifyLessonArtifact: verifyTeacherLessonArtifact,
       saveLessonArtifact: saveTeacherLessonArtifact,
       exportLessonMarkdown: exportTeacherLessonMarkdown,
+      buildAssessmentArtifact: buildTeacherAssessmentArtifact,
+      verifyAssessmentArtifact: verifyTeacherAssessmentArtifact,
+      saveAssessmentArtifact: saveTeacherAssessmentArtifact,
+      exportAssessmentMarkdown: exportTeacherAssessmentMarkdown,
     },
 
     live: {
@@ -988,8 +1011,8 @@ import {
 export const events = HEY.events;
 export const onboarding = HEY.onboarding;
 export const spaces = HEY.spaces;
-export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
+export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
 export { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS };
-export { understandVoiceCommand };
+export { understandVoiceCommand, createDictationEditSession };
 
 export default HEY;
