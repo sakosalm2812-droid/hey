@@ -182,6 +182,11 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function getAuthToken(request: Request) {
   const header = request.headers.get("Authorization") || "";
   return header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -606,6 +611,7 @@ Deno.serve(async (request) => {
   if (fusionRequested) {
     const fusion = await runFusionChatRequest({
       requested: true,
+      requestId: payload.requestId,
       accountId: user.id,
       entitlements: profile.entitlements,
       attempts: getProviderAttempts(),
@@ -635,13 +641,18 @@ Deno.serve(async (request) => {
       const error = fusion.status === "denied" ? "Your account is not permitted to use model fusion."
         : fusion.status === "conflict" || fusion.status === "inconclusive" ? "The providers did not independently confirm a safe answer."
         : fusion.status === "cancelled" ? "The fusion request was cancelled."
-        : fusion.status === "invalid_request" ? "The fusion request exceeds the supported context limits."
+        : fusion.status === "invalid_request" ? fusion.reason === "fusion_request_id_invalid"
+          ? "The fusion request could not be bound safely."
+          : "The fusion request exceeds the supported context limits."
         : fusion.status === "verification_unavailable" ? "The independent provider check could not be completed, so no answer was delivered."
         : fusion.status === "time_budget_exhausted" ? "The model verification exceeded its time limit, so no answer was delivered."
         : fusion.status === "budget_exhausted" ? "The model verification exceeded its configured cost budget, so no answer was delivered."
         : fusion.status === "provider_contract_invalid" ? "A provider returned invalid verification evidence, so no answer was delivered."
         : "Model fusion is unavailable until its provider permissions and pricing are configured.";
       return jsonResponse({ error }, status);
+    }
+    if (fusion.provenance?.status !== "verified" || fusion.provenance.checker?.confirmed !== true) {
+      return jsonResponse({ error: "The providers could not independently confirm an answer. No answer was delivered." }, 409);
     }
 
     // Revalidate the authenticated identity after all upstream calls and before storing or delivering output.
@@ -654,7 +665,12 @@ Deno.serve(async (request) => {
     providerMetadata = {
       provider: fusion.providers.map((provider) => provider.providerId).join(","),
       model: fusion.providers.map((provider) => provider.modelId).join(","),
-      fusion: { independentlyChecked: true, confidence: fusion.confidence },
+      fusion: {
+        status: "verified",
+        independentlyChecked: true,
+        confidence: fusion.confidence,
+        provenance: fusion.provenance,
+      },
     };
   } else {
     let providerResult;
@@ -672,6 +688,11 @@ Deno.serve(async (request) => {
   const answer = sources.length
     ? `${response}\n\nSources:\n${sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
     : response;
+
+  if (fusionRequested) {
+    const fusionMetadata = providerMetadata.fusion as Record<string, unknown>;
+    providerMetadata.fusion = { ...fusionMetadata, responseSha256: await sha256Hex(answer) };
+  }
 
   const metadata = {
     ...providerMetadata,

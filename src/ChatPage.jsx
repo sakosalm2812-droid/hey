@@ -214,12 +214,14 @@ function ChatWorkspace() {
     activeRequestControllerRef.current = controller;
 
     try {
+      let fusionVerification = null;
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
         confirmed,
         fusion: requestedFusion,
         signal: controller.signal,
+        onFusionVerification: (verification) => { fusionVerification = verification; },
         onExecutionResult: (execution, originalMessage) => {
           if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
           else setPendingExecution(null);
@@ -227,7 +229,11 @@ function ChatWorkspace() {
       });
       if (controller.signal.aborted) return;
 
-      setMessages((current) => [...current, { role: "hey", text: response }]);
+      setMessages((current) => [...current, {
+        role: "hey",
+        text: response,
+        ...(fusionVerification ? { verification: fusionVerification } : {}),
+      }]);
       await refreshConversations();
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -470,6 +476,7 @@ function ChatWorkspace() {
                     onPin={() => pinMessage(item.text)}
                     pinned={pinnedMessages.includes(item.text)}
                     copied={copiedMessage === item.text}
+                    verification={item.verification}
                   >
                     {item.text}
                   </ChatMessage>
