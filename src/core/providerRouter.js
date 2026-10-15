@@ -55,14 +55,14 @@ function profileRejection(model, { policy, privacyMode, budgetUsd }) {
   return null;
 }
 
-export function selectModel({ intent = "conversation", capability, preferredProvider, excludedProviders = [], profile, privacyMode = "allow_cloud", budgetUsd } = {}) {
-  registerConfiguredProviders();
+export function selectModelFromSnapshot(models, { intent = "conversation", capability, preferredProvider, excludedProviders = [], profile, privacyMode = "allow_cloud", budgetUsd } = {}) {
   if (!new Set(["allow_cloud", "local_only", "no_cloud"]).has(privacyMode)) throw new TypeError("Unknown model privacy mode.");
   if (budgetUsd !== undefined && (typeof budgetUsd !== "number" || !Number.isFinite(budgetUsd) || budgetUsd < 0)) throw new TypeError("Model budget must be finite and non-negative.");
   if (profile !== undefined && !Object.hasOwn(INFERENCE_PROFILES, profile)) throw new TypeError("Unknown inference profile.");
   const profilePolicy = profile ? INFERENCE_PROFILES[profile] : null;
   const requestedCapability = capability || taskCapabilities[intent] || PROVIDER_CAPABILITIES.chat;
-  const candidates = listModels({ capability: requestedCapability })
+  const candidates = (Array.isArray(models) ? models : [])
+    .filter((model) => !Array.isArray(model.capabilities) || model.capabilities.includes(requestedCapability))
     .filter((model) => !excludedProviders.includes(model.providerId))
     .filter((model) => !profileRejection(model, { policy: profilePolicy, privacyMode, budgetUsd }))
     .sort((left, right) => {
@@ -85,8 +85,16 @@ export function selectModel({ intent = "conversation", capability, preferredProv
   };
 }
 
-export function createProviderPlan(options = {}) {
-  const selection = selectModel(options);
+export function selectModel(options = {}) {
+  registerConfiguredProviders();
+  const requestedCapability = options.capability || taskCapabilities[options.intent || "conversation"] || PROVIDER_CAPABILITIES.chat;
+  return selectModelFromSnapshot(listModels({ capability: requestedCapability }), options);
+}
+
+export function createProviderPlan(options = {}, providerModels) {
+  const selection = Array.isArray(providerModels)
+    ? selectModelFromSnapshot(providerModels, options)
+    : selectModel(options);
   return {
     ...selection,
     attempts: [selection.selected, ...selection.fallbacks].filter(Boolean).map((model) => ({

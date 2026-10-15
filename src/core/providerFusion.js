@@ -1,4 +1,4 @@
-import { createProviderPlan, selectModel } from "./providerRouter.js";
+import { createProviderPlan, selectModel, selectModelFromSnapshot } from "./providerRouter.js";
 
 export const FUSION_MODES = Object.freeze({
   AUTO: "auto",
@@ -143,6 +143,7 @@ export async function runProviderFusion({
   accountScope,
   sensitive = false,
   permissions = [],
+  providerModels,
   requireIndependentCheck = false,
   synthesize,
   signal,
@@ -186,8 +187,10 @@ export async function runProviderFusion({
   // Use the canonical selector to keep capability and preference semantics aligned
   // with normal HEY routing; then apply the extra fusion/privacy eligibility rules.
   const basePlan = mode === FUSION_MODES.MANUAL
-    ? { ...selectModel({ intent, preferredProvider: manualProvider }), attempts: [] }
-    : createProviderPlan({ intent });
+    ? { ...(Array.isArray(providerModels)
+      ? selectModelFromSnapshot(providerModels, { intent, preferredProvider: manualProvider })
+      : selectModel({ intent, preferredProvider: manualProvider })), attempts: [] }
+    : createProviderPlan({ intent }, providerModels);
   const candidates = eligibleModels(mode, basePlan.selected ? [basePlan.selected, ...basePlan.fallbacks] : [], {
     manualProvider,
     permissions,

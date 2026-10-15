@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
+import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
@@ -599,23 +600,65 @@ Deno.serve(async (request) => {
     { role: "user", content: message },
   ];
 
-  let providerResult;
-  try {
+  const fusionRequested = payload.fusion === true || payload.modelMode === "fusion" || payload.mode === "fusion";
+  let providerMetadata: Record<string, unknown>;
+  let response: string;
+  if (fusionRequested) {
+    const fusion = await runFusionChatRequest({
+      requested: true,
+      accountId: user.id,
+      entitlements: profile.entitlements,
+      attempts: getProviderAttempts(),
+      pricingConfig: parseFusionPricingConfig(Deno.env.get("HEY_FUSION_PRICING_JSON") || ""),
+      messages,
+      signal: request.signal,
+      isCurrent: () => !request.signal.aborted && user.id.length > 0,
+    });
+    if (fusion.status !== "complete") {
+      const status = fusion.status === "denied" ? 403
+        : fusion.status === "conflict" || fusion.status === "inconclusive" ? 409
+        : fusion.status === "cancelled" ? 499
+        : fusion.status === "invalid_request" ? 400
+        : 503;
+      const error = fusion.status === "denied" ? "Your account is not permitted to use model fusion."
+        : fusion.status === "conflict" || fusion.status === "inconclusive" ? "The providers did not independently confirm a safe answer."
+        : fusion.status === "cancelled" ? "The fusion request was cancelled."
+        : fusion.status === "invalid_request" ? "The fusion request exceeds the supported context limits."
+        : "Model fusion is unavailable until its provider permissions and pricing are configured.";
+      return jsonResponse({ error }, status);
+    }
+
+    // Revalidate the authenticated identity after all upstream calls and before storing or delivering output.
+    if (request.signal.aborted) return jsonResponse({ error: "The fusion request was cancelled." }, 499);
+    const { data: { user: verifiedUser }, error: verificationError } = await supabase.auth.getUser(token);
+    if (request.signal.aborted) return jsonResponse({ error: "The fusion request was cancelled." }, 499);
+    if (verificationError || verifiedUser?.id !== user.id) return jsonResponse({ error: "Authentication required" }, 401);
+
+    response = fusion.answer;
+    providerMetadata = {
+      provider: fusion.providers.map((provider) => provider.providerId).join(","),
+      model: fusion.providers.map((provider) => provider.modelId).join(","),
+      fusion: { independentlyChecked: true, confidence: fusion.confidence },
+    };
+  } else {
+    let providerResult;
+    try {
       providerResult = await callProvider(messages, 1200);
-  } catch (error) {
-    console.error("HEY provider error", error);
-    return jsonResponse({ error: "HEY could not reach an AI provider" }, 502);
+    } catch (error) {
+      console.error("HEY provider error", error);
+      return jsonResponse({ error: "HEY could not reach an AI provider" }, 502);
+    }
+    response = extractProviderText(providerResult.data);
+    if (!response) return jsonResponse({ error: "HEY received an empty response" }, 502);
+    providerMetadata = { model: providerResult.model, provider: providerResult.providerId };
   }
 
-  const response = extractProviderText(providerResult.data);
-  if (!response) return jsonResponse({ error: "HEY received an empty response" }, 502);
   const answer = sources.length
     ? `${response}\n\nSources:\n${sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
     : response;
 
   const metadata = {
-    model: providerResult.model,
-    provider: providerResult.providerId,
+    ...providerMetadata,
     intent: payload.intent || null,
     responseStyle: payload.responseStyle || null,
     agent: payload.agent || null,
@@ -643,5 +686,5 @@ Deno.serve(async (request) => {
     console.error("Conversation update error", conversationUpdateError);
   }
 
-  return jsonResponse({ response: answer, conversationId, model: providerResult.model, provider: providerResult.providerId, sources, tools: sources.length ? ["web_search"] : [] });
+  return jsonResponse({ response: answer, conversationId, ...providerMetadata, sources, tools: sources.length ? ["web_search"] : [] });
 });
