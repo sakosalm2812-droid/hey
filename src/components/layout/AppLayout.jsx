@@ -41,6 +41,7 @@ import { springs } from "../../lib/heyMotion";
 import DynamicIsland from "./DynamicIsland";
 import BlockBackground from "../BlockBackground";
 import { CommandPalette } from "../CommandPalette";
+import { getMobileNavigationAccessibility } from "./mobileNavigationState.js";
 
 const sidebarNavItems = [
   { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, roles: ['user', 'admin'] },
@@ -86,6 +87,25 @@ export default function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const themeRef = useRef(null);
   const sidebarRef = useRef(null);
+  const menuToggleRef = useRef(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(() =>
+    window.matchMedia("(max-width: 1024px)").matches
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 1024px)");
+    const updateViewport = (event) => setIsMobileViewport(event.matches);
+    setIsMobileViewport(mediaQuery.matches);
+    mediaQuery.addEventListener("change", updateViewport);
+    return () => mediaQuery.removeEventListener("change", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return undefined;
+    const firstLink = sidebarRef.current?.querySelector("a[href]");
+    firstLink?.focus();
+    return undefined;
+  }, [mobileSidebarOpen]);
 
   const {
     themeId,
@@ -102,7 +122,10 @@ export default function AppLayout() {
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         setThemeOpen(false);
-        setMobileSidebarOpen(false);
+        if (mobileSidebarOpen) {
+          setMobileSidebarOpen(false);
+          menuToggleRef.current?.focus();
+        }
         setCommandPaletteOpen(false);
       }
       if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
@@ -111,7 +134,7 @@ export default function AppLayout() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key === 'j') {
         event.preventDefault();
-        setMobileSidebarOpen(!mobileSidebarOpen);
+        setMobileSidebarOpen((open) => !open);
       }
     };
     const outsideClick = (event) => {
@@ -141,6 +164,10 @@ export default function AppLayout() {
   const handleCommandPaletteOpen = useCallback(() => {
     setCommandPaletteOpen(true);
   }, []);
+  const mobileNavigationAccessibility = getMobileNavigationAccessibility(
+    isMobileViewport,
+    mobileSidebarOpen
+  );
 
   return (
     <div className="hey-app-shell">
@@ -149,9 +176,12 @@ export default function AppLayout() {
       {/* SIDEBAR */}
       <aside
         ref={sidebarRef}
+        id="hey-app-navigation"
         className={`hey-sidebar ${sidebarCollapsed ? 'hey-sidebar--collapsed' : ''} ${mobileSidebarOpen ? 'hey-sidebar--mobile-open' : ''}`}
         style={{ width: sidebarCollapsed ? 68 : 244 }}
         aria-label="Main navigation"
+        aria-hidden={mobileNavigationAccessibility.ariaHidden}
+        inert={mobileNavigationAccessibility.inert}
       >
         <div className="hey-sidebar__header">
           <NavLink
@@ -312,11 +342,13 @@ export default function AppLayout() {
       {/* TOP BAR */}
       <header className="hey-topbar">
         <button
+          ref={menuToggleRef}
           type="button"
           className="hey-topbar__menu-toggle"
           onClick={() => setMobileSidebarOpen(true)}
           aria-label="Open navigation"
           aria-expanded={mobileSidebarOpen}
+          aria-controls="hey-app-navigation"
         >
           <Menu size={22} />
         </button>
