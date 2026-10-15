@@ -42,6 +42,22 @@ After adding per-call output-equivalence checks on 2026-10-15, two rechecks on t
 
 The rechecks had visibly variable tails; treat them as local observations, not stable service-level performance. Output validation runs after each timed interval and can still affect later samples through host scheduling and runtime state.
 
+## Expert-count scaling experiment
+
+Reproduce with `node scripts/benchmark-ultrasparse-router.mjs`. The harness additionally builds deterministic synthetic catalogs with eight distinct terms per expert and queries that match exactly two experts. It compares a full linear catalog scan with a prebuilt inverted candidate index. Catalog construction and candidate-index preparation are timed and reported separately; both are excluded from per-selection latency. Call `prepareIndexed()` before latency-sensitive use; otherwise the first indexed selection pays that setup cost. The harness estimates the number of selections needed to amortize setup at the observed p50 saving. Each measured output is compared with linear output after stopping the timer. The fixture and queries have independent SHA-256 fingerprints, using UTF-8 bytes of `JSON.stringify(value)` as the versioned canonical form.
+
+Observed on Windows 10.0.26200 x64, Node v24.21.0 / V8 13.6.233.17-node.53, Intel Core i7-1185G7, 8 logical CPUs, one full invocation:
+
+| Experts | Samples/selector | Linear p50/p95 μs | Indexed candidates p50/p95 μs | Catalog construction μs | Index preparation μs | Estimated break-even selections |
+|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 15,000 | 5.8 / 12.6 | 2.9 / 6.6 | 1,039.9 | 217.1 | 434 |
+| 20 | 15,000 | 16.3 / 33.8 | 3.3 / 7.1 | 229.6 | 64.0 | 23 |
+| 100 | 15,000 | 75.1 / 160.8 | 3.3 / 8.0 | 2,144.3 | 346.2 | 35 |
+| 500 | 3,000 | 349.9 / 687.1 | 3.4 / 10.1 | 5,558.6 | 2,122.4 | 23 |
+| 2,000 | 750 | 1,324.3 / 2,380.3 | 4.7 / 15.2 | 13,165.1 | 4,293.2 | 14 |
+
+This measurement shows the full scan cost growing with catalog size while candidate accumulation touches only matching experts. It supports using the indexed candidate path at 20 or more experts when catalogs are expected to be reused enough to amortize setup; smaller catalogs retain the linear path. The 5-expert path estimates 434 selections to amortize index setup at this p50; the 20–2,000 expert paths estimate 14–35 selections. In this full run, the benchmark reported `subMillisecondTargetVerified: true`: every per-trial p95 for the fixed selectors and adaptive synthetic paths was below 1,000 μs (maximum adaptive per-trial p95: 15.8 μs). The linear reference scan alone exceeded 1 ms p95 at 2,000 experts; the verified status applies to the selected adaptive path, not that reference scan. This is only in-process lexical selection for this workload and machine. End-to-end verification remains false; model loading, network, prefill, decode, inference, and application work are excluded. The figures are one host invocation, with visible tail variation in the linear path.
+
 ## Limits
 
 This is a small synthetic lexical-selector microbenchmark on one CPU host. It does not establish routing quality, inference speed, model/expert loading cost, network latency, prefill/decode latency, memory use of model weights, energy use, GPU performance, or end-to-end task latency. Results are local observations and should be remeasured on the target runtime and workload before considering a default change.

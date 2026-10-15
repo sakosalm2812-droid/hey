@@ -87,6 +87,30 @@ test("unknown or malformed declared capabilities remain unsupported in discovery
   }
 });
 
+test("catalog availability denies a tool whose capability dependency is missing", () => {
+  const name = "test.tool_library.missing_dependency";
+  const capability = "test.tool_library.missing_dependency_capability";
+  registerCapability({
+    id: capability,
+    name: "Capability with an unavailable prerequisite",
+    supportedPlatforms: ["web"],
+    platformSupport: { web: CAPABILITY_STATUS.supported },
+    dependencies: ["test.tool_library.not_registered_prerequisite"],
+  });
+  try {
+    registerTool(name, async () => ({ success: true }), {
+      capabilities: [capability],
+      permission: "filesystem.read",
+    });
+    const entry = listToolCatalog({ platform: "web" }).find((tool) => tool.name === name);
+    assert.equal(entry.status, CAPABILITY_STATUS.unsupported);
+    assert.equal(entry.available, false);
+    assert.match(entry.capabilities[0].error, /missing dependency/);
+  } finally {
+    unregisterTool(name);
+  }
+});
+
 test("catalog discovery is account-independent and cannot be steered by caller permission claims", () => {
   const name = "test.tool_library.account_neutral";
   registerCapability({
