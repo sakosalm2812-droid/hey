@@ -14,6 +14,33 @@ function boundedText(value, label, maximum = 256) {
   return value.trim();
 }
 
+function mandateScope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("A verified device command mandate scope is required.");
+  const keys = Reflect.ownKeys(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (keys.length !== 3 || keys.some((key) => !["mandateIds", "expiresAt", "revocationEpoch"].includes(key)
+    || !descriptors[key]?.enumerable || !Object.hasOwn(descriptors[key], "value"))) throw new TypeError("Device command mandate scope is malformed.");
+  const mandateIds = descriptors.mandateIds.value;
+  const expiresAt = descriptors.expiresAt.value;
+  const revocationEpoch = descriptors.revocationEpoch.value;
+  if (!Array.isArray(mandateIds) || Object.getPrototypeOf(mandateIds) !== Array.prototype || mandateIds.length < 1 || mandateIds.length > 5) {
+    throw new TypeError("Device command mandate scope is malformed.");
+  }
+  const mandateKeys = Reflect.ownKeys(mandateIds);
+  const mandateDescriptors = Object.getOwnPropertyDescriptors(mandateIds);
+  if (mandateKeys.length !== mandateIds.length + 1 || !mandateKeys.includes("length")) throw new TypeError("Device command mandate scope is malformed.");
+  const ids = Array.from({ length: mandateIds.length }, (_, index) => {
+    const descriptor = mandateDescriptors[String(index)];
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError("Device command mandate scope is malformed.");
+    return descriptor.value;
+  });
+  if (ids.some((id) => typeof id !== "string" || !UUID.test(id))
+    || new Set(ids).size !== ids.length
+    || typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt)) || new Date(Date.parse(expiresAt)).toISOString() !== expiresAt
+    || !Number.isSafeInteger(revocationEpoch) || revocationEpoch < 0) throw new TypeError("Device command mandate scope is malformed.");
+  return { mandateIds: ids, expiresAt, revocationEpoch };
+}
+
 function cloneJson(value, ancestors = new WeakSet(), depth = 0, nodes = { count: 0 }) {
   nodes.count += 1;
   if (depth > 32 || nodes.count > 10_000) throw new RangeError("Device command input exceeds supported complexity.");
@@ -88,15 +115,19 @@ export class SupabaseDeviceCommandQueueStore {
     Object.defineProperty(this, "testOnly", { value: false, enumerable: true });
   }
 
-  async enqueue(accountId, deviceId, idempotencyKey, envelope) {
+  async enqueue(accountId, deviceId, idempotencyKey, envelope, authority) {
+    const mandate = mandateScope(authority);
     const params = {
       p_account_id: requiredUuid(accountId, "accountId"),
       p_device_id: requiredUuid(deviceId, "deviceId"),
       p_idempotency_key: boundedText(idempotencyKey, "Command idempotency key"),
       p_envelope: normalizeEnvelope(envelope),
+      p_mandate_ids: mandate.mandateIds,
+      p_mandate_expires_at: mandate.expiresAt,
+      p_mandate_revocation_epoch: mandate.revocationEpoch,
     };
     if (params.p_idempotency_key.length > 256) throw new RangeError("Command idempotency key exceeds 256 characters.");
-    const data = rpcData(await this.client.rpc("enqueue_hey_device_command", params), "enqueue");
+    const data = rpcData(await this.client.rpc("enqueue_hey_device_command_authorized", params), "enqueue");
     if (!data || typeof data !== "object" || typeof data.created !== "boolean") throw new Error("Supabase device command response was malformed.");
     return { created: data.created, command: commandFromRow(data.command) };
   }
@@ -107,6 +138,24 @@ export class SupabaseDeviceCommandQueueStore {
     if (data === null) return null;
     if (!data || typeof data !== "object" || !UUID.test(data.leaseToken)) throw new Error("Supabase device command lease response was malformed.");
     return { command: commandFromRow(data.command), leaseToken: data.leaseToken };
+  }
+
+  async renewLease(accountId, deviceId, commandId, leaseToken, idempotencyKey, leaseMs = 30_000) {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS) throw new RangeError("Device command lease must be between 1 ms and 5 minutes.");
+    const data = rpcData(await this.client.rpc("renew_hey_device_command_lease", {
+      p_account_id: requiredUuid(accountId, "accountId"),
+      p_device_id: requiredUuid(deviceId, "deviceId"),
+      p_command_id: requiredUuid(commandId, "commandId"),
+      p_lease_token: requiredUuid(leaseToken, "leaseToken"),
+      p_idempotency_key: boundedText(idempotencyKey, "Lease renewal idempotency key", 128),
+      p_lease_ms: leaseMs,
+    }), "lease renewal");
+    if (!data || typeof data !== "object" || typeof data.renewed !== "boolean") throw new Error("Supabase device command renewal response was malformed.");
+    if (!data.renewed) return { renewed: false, leaseUntil: null, idempotent: false };
+    if (typeof data.leaseUntil !== "string" || !Number.isFinite(Date.parse(data.leaseUntil)) || typeof data.idempotent !== "boolean") {
+      throw new Error("Supabase device command renewal response was malformed.");
+    }
+    return { renewed: true, leaseUntil: Date.parse(data.leaseUntil), idempotent: data.idempotent };
   }
 
   async acknowledge(accountId, deviceId, commandId, leaseToken) {

@@ -8,6 +8,9 @@ const accountId = "2e4a81a4-2da8-4ae0-bfd6-719484a37795";
 const deviceId = "67337f11-57da-4c23-a41f-fc19d1995b61";
 const commandId = "6cc95d2f-b37c-4d99-a6d6-3c59eb9126fb";
 const leaseToken = "1b8473f4-b50d-4a04-9834-7e5b446c07b4";
+const mandateId = "8c9a52d8-3774-4cc1-a59b-5c19ab4e1230";
+const authority = { mandateIds: [mandateId], expiresAt: "2026-10-15T10:01:00.000Z", revocationEpoch: 2 };
+const renewal = { renewed: true, leaseUntil: "2026-10-15T10:00:30.000Z", idempotent: false };
 const envelope = { version: 1, action: "computer.open_url", resource: "https://example.com", input: { url: "https://example.com" } };
 const row = { commandId, deviceId, envelope, state: "pending", attempts: 1, createdAt: "2026-10-15T10:00:00.000Z", lastError: null };
 
@@ -21,20 +24,25 @@ test("device queue adapter binds account/device scope and exports trusted-server
   assert.throws(() => new SupabaseDeviceCommandQueueStore(null, { trustedServer: true }), /configured/);
   assert.equal(core.devices.SupabaseDeviceCommandQueueStore, SupabaseDeviceCommandQueueStore);
   const { client, calls } = fakeClient({
-    enqueue_hey_device_command: { data: { created: true, command: row }, error: null },
+    enqueue_hey_device_command_authorized: { data: { created: true, command: row }, error: null },
     claim_hey_device_command: { data: { command: row, leaseToken }, error: null },
+    renew_hey_device_command_lease: { data: renewal, error: null },
     ack_hey_device_command: { data: true, error: null },
     fail_hey_device_command: { data: true, error: null },
   });
   const store = new SupabaseDeviceCommandQueueStore(client, { trustedServer: true });
   const expected = { commandId: row.commandId, deviceId: row.deviceId, envelope, state: "pending", attempts: 1, createdAt: Date.parse(row.createdAt) };
-  assert.deepEqual(await store.enqueue(accountId, deviceId, "request-1", envelope), { created: true, command: expected });
+  assert.deepEqual(await store.enqueue(accountId, deviceId, "request-1", envelope, authority), { created: true, command: expected });
   assert.deepEqual(await store.claimNext(accountId, deviceId, 5_000), { command: expected, leaseToken });
+  assert.deepEqual(await store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 5_000), {
+    renewed: true, leaseUntil: Date.parse(renewal.leaseUntil), idempotent: false,
+  });
   assert.equal(await store.acknowledge(accountId, deviceId, commandId, leaseToken), true);
   assert.equal(await store.recordFailure(accountId, deviceId, commandId, leaseToken), true);
   assert.deepEqual(calls, [
-    { name: "enqueue_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_idempotency_key: "request-1", p_envelope: envelope } },
+    { name: "enqueue_hey_device_command_authorized", params: { p_account_id: accountId, p_device_id: deviceId, p_idempotency_key: "request-1", p_envelope: envelope, p_mandate_ids: [mandateId], p_mandate_expires_at: authority.expiresAt, p_mandate_revocation_epoch: 2 } },
     { name: "claim_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_lease_ms: 5_000 } },
+    { name: "renew_hey_device_command_lease", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_idempotency_key: "renew-1", p_lease_ms: 5_000 } },
     { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
     { name: "fail_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
   ]);
@@ -42,23 +50,31 @@ test("device queue adapter binds account/device scope and exports trusted-server
 
 test("queue rejects malformed identifiers, envelopes, accessors, oversized payloads and RPC responses safely", async () => {
   const { client } = fakeClient({
-    enqueue_hey_device_command: { data: null, error: { message: "private account payload" } },
+    enqueue_hey_device_command_authorized: { data: null, error: { message: "private account payload" } },
     claim_hey_device_command: { data: { command: row, leaseToken: "bad" }, error: null },
+    renew_hey_device_command_lease: { data: { renewed: true, leaseUntil: "bad", idempotent: false }, error: null },
     ack_hey_device_command: { data: "true", error: null },
     fail_hey_device_command: { data: { ok: true }, error: null },
   });
   const store = new SupabaseDeviceCommandQueueStore(client, { trustedServer: true });
-  await assert.rejects(store.enqueue("other-account", deviceId, "key", envelope), /UUID/);
-  await assert.rejects(store.enqueue(accountId, deviceId, "key", { ...envelope, version: 2 }), /envelope/);
-  await assert.rejects(store.enqueue(accountId, deviceId, "key", { ...envelope, input: { blob: "x".repeat(66_000) } }), /64 KiB/);
+  await assert.rejects(store.enqueue("other-account", deviceId, "key", envelope, authority), /UUID/);
+  await assert.rejects(store.enqueue(accountId, deviceId, "key", { ...envelope, version: 2 }, authority), /envelope/);
+  await assert.rejects(store.enqueue(accountId, deviceId, "key", { ...envelope, input: { blob: "x".repeat(66_000) } }, authority), /64 KiB/);
   let getterCalls = 0;
   const hostile = { ...envelope, input: {} };
   Object.defineProperty(hostile.input, "secret", { enumerable: true, get() { getterCalls += 1; return "private"; } });
-  await assert.rejects(store.enqueue(accountId, deviceId, "key", hostile), /accessors/);
+  await assert.rejects(store.enqueue(accountId, deviceId, "key", hostile, authority), /accessors/);
+  assert.equal(getterCalls, 0);
+  await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope), /mandate scope/);
+  const hostileAuthority = { ...authority, mandateIds: [mandateId] };
+  Object.defineProperty(hostileAuthority.mandateIds, "0", { enumerable: true, get() { getterCalls += 1; return mandateId; } });
+  await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope, hostileAuthority), /mandate scope/);
   assert.equal(getterCalls, 0);
   await assert.rejects(store.claimNext(accountId, deviceId, 300_001), /5 minutes/);
-  await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope), (error) => error.message === "Supabase device command enqueue failed.");
+  await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope, authority), (error) => error.message === "Supabase device command enqueue failed.");
   await assert.rejects(store.claimNext(accountId, deviceId), /malformed/);
+  await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1"), /malformed/);
+  await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 300_001), /5 minutes/);
   await assert.rejects(store.acknowledge(accountId, deviceId, commandId, leaseToken), /malformed/);
   await assert.rejects(store.recordFailure(accountId, deviceId, commandId, leaseToken), /malformed/);
   assert.equal(await store.acknowledge(accountId, "not-a-uuid", commandId, leaseToken), false);
@@ -103,6 +119,22 @@ test("queue migration fences replay, cross-account access, stale leases and revo
   assert.match(sql, /endpoint must authenticate/i);
   assert.match(sql, /the account, verify the applicable mandate, and authorize the target device/i);
   assert.doesNotMatch(sql, /p_error|error_message|exception_message/i);
+});
+
+test("mandate lease migration keeps renewal idempotency bounded and revocation-aware", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261015000400_device_command_lease_renewal.sql", import.meta.url), "utf8");
+  assert.match(sql, /mandate_ids uuid\[\] not null default array\[\]::uuid\[\]/i);
+  assert.match(sql, /mandate_expires_at timestamptz/i);
+  assert.match(sql, /hey_device_command_mandate_is_current/i);
+  assert.match(sql, /m\.revocation_epoch = p_revocation_epoch/i);
+  assert.match(sql, /revoked_at is null/i);
+  assert.match(sql, /state = 'cancelled', lease_token = null, lease_until = null/i);
+  assert.match(sql, /create or replace function public\.renew_hey_device_command_lease[\s\S]*v_command\.lease_token is distinct from p_lease_token[\s\S]*v_command\.lease_until <= clock_timestamp\(\)/i);
+  assert.match(sql, /primary key \(account_id, device_id, command_id, lease_token, idempotency_key\)/i);
+  assert.match(sql, /lease_renewals >= 5/i);
+  assert.match(sql, /p_lease_ms not between 1 and 300000/i);
+  assert.match(sql, /grant execute on function public\.renew_hey_device_command_lease\(uuid, uuid, uuid, uuid, text, integer\) to service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.renew_hey_device_command_lease\([^;]+\) to [^;]*authenticated/i);
 });
 
 test("retry migration uses bounded backoff, terminal attempts, live scoped leases and service-role-only RPCs", async () => {

@@ -92,6 +92,27 @@ export function isProviderEnabled(providerId) {
   return Boolean(provider && provider.enabled === true);
 }
 
+export function isRegisteredModelSnapshot(snapshot) {
+  const providerId = ownDataValue(snapshot, "providerId");
+  const modelId = ownDataValue(snapshot, "id");
+  if (typeof providerId !== "string" || typeof modelId !== "string" || !isProviderEnabled(providerId)) return false;
+  const provider = providers.get(providerId);
+  const model = provider.models.find((candidate) => ownDataValue(candidate, "id") === modelId);
+  if (!model) return false;
+  const expectedCapabilities = ownDataValue(model, "capabilities") || provider.capabilities;
+  const snapshotCapabilities = ownDataValue(snapshot, "capabilities");
+  return ownDataValue(snapshot, "revision") === ownDataValue(model, "revision")
+    && ownDataValue(snapshot, "weightSha256") === ownDataValue(model, "weightSha256")
+    && ownDataValue(snapshot, "local") === ownDataValue(model, "local")
+    && ownDataValue(snapshot, "priority") === ownDataValue(model, "priority")
+    && ownDataValue(snapshot, "evaluationReport") === ownDataValue(model, "evaluationReport")
+    && ownDataValue(snapshot, "routingEvidence") === ownDataValue(model, "routingEvidence")
+    && ownDataValue(snapshot, "providerName") === provider.name
+    && Array.isArray(snapshotCapabilities) && Array.isArray(expectedCapabilities)
+    && snapshotCapabilities.length === expectedCapabilities.length
+    && snapshotCapabilities.every((capability, index) => capability === expectedCapabilities[index]);
+}
+
 export function listProviders({ enabledOnly = false } = {}) {
   return Array.from(providers.values()).filter((provider) => !enabledOnly || provider.enabled);
 }
@@ -117,6 +138,7 @@ export default {
   unregisterProvider,
   getProvider,
   isProviderEnabled,
+  isRegisteredModelSnapshot,
   listProviders,
   listModels,
   clearProviders,

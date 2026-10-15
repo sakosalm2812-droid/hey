@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
+import { spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
 
 const page = await readFile(new URL("../src/SpacesPage.jsx", import.meta.url), "utf8");
 const accountHelpers = await readFile(new URL("../src/spacePageAccount.js", import.meta.url), "utf8");
@@ -29,7 +29,7 @@ test("Space creation reviews exact private effects and requires an explicit conf
   assert.match(page, /result\.space\.accountScope !== `account:\$\{accountId\}`/);
   assert.match(accountHelpers, /space\?\.accountScope === `account:\$\{accountId\}`/);
   assert.match(page, /Confirm and create/);
-  assert.doesNotMatch(page, /accountScope\s*:/);
+  assert.doesNotMatch(page, /previewNaturalLanguageCreation\(\{[^}]*accountScope\s*:/);
 });
 
 test("pending confirmation is invalidated on account switch and cannot confirm for a different signed-in user", () => {
@@ -57,4 +57,31 @@ test("account switch invalidates stale page previews and filters listed Spaces t
   assert.deepEqual(spacesForAccount(mixed, "account-b").map((space) => space.id), ["b"]);
   assert.deepEqual(spacesForAccount(mixed, ""), []);
   assert.deepEqual(spacesForAccount(null, "account-a"), []);
+});
+
+test("Space tool membership is account fenced, revision checked, and separate from execution permission", () => {
+  const snapshot = {
+    success: true,
+    accountScope: "account:account-a",
+    spaceId: "space-a",
+    revision: 3,
+    toolIds: ["calendar"],
+  };
+  assert.equal(spaceMembershipMatchesAccount(snapshot, "account-a", "account:account-a", "space-a"), true);
+  assert.equal(spaceMembershipMatchesAccount(snapshot, "account-b", "account:account-b", "space-a"), false);
+  assert.equal(spaceMembershipMatchesAccount(snapshot, "account-a", "account:account-b", "space-a"), false);
+  assert.equal(spaceMembershipMatchesAccount({ ...snapshot, spaceId: "space-b" }, "account-a", "account:account-a", "space-a"), false);
+  assert.equal(spaceMembershipMatchesAccount({ ...snapshot, revision: -1 }, "account-a", "account:account-a", "space-a"), false);
+  assert.equal(spaceMembershipMatchesAccount({ ...snapshot, toolIds: null }, "account-a", "account:account-a", "space-a"), false);
+
+  assert.match(page, /HEY\.tools\.catalog\(\{ platform: "web" \}\)/);
+  assert.match(page, /HEY\.spaces\.getLayoutPreferences\(space\.id\)/);
+  assert.match(page, /HEY\.spaces\.setToolMembership\(\{/);
+  assert.match(page, /expectedRevision: currentLayout\.revision/);
+  assert.match(page, /spaceMembershipMatchesAccount\(result\.current, accountId, getAccountScope\(\), space\.id\)/);
+  assert.match(page, /Tool membership organizes this Space\. It does not grant permission or make a tool executable\./);
+  assert.match(page, /<fieldset className="spaces-page__tool-category"/);
+  assert.match(page, /category = tool\.category \|\| "general"/);
+  assert.match(page, /aria-expanded=\{expanded\}/);
+  assert.match(page, /Registered tools could not be loaded\./);
 });
