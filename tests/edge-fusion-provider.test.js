@@ -22,10 +22,11 @@ const messages = [
 ];
 
 function providerPayload(providerId, value, confidence = 0.9) {
+  const text = `The answer is ${value}.`;
   const answer = JSON.stringify({
-    text: `The answer is ${value}.`,
+    text,
     confidence,
-    evidence: [{ claimId: "fixture-answer", statement: `The answer is ${value}.`, value, source: "fixture://evidence" }],
+    evidence: [{ claimId: "answer", statement: "Exact response text returned by this provider.", value: text, source: "fixture://evidence" }],
   });
   return providerId === "gemini"
     ? { candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }
@@ -136,7 +137,10 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
     const fetchImpl = async (url) => {
       const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
       calls.push(providerId);
-      const evidence = makeEvidence(providerId);
+      const evidence = [
+        { claimId: "answer", statement: "Exact response text returned by this provider.", value: "The providers disagree.", source: null },
+        ...makeEvidence(providerId),
+      ];
       const answer = JSON.stringify({ text: "The providers disagree.", confidence: 0.9, evidence });
       return providerId === "gemini"
         ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }), { status: 200 })
@@ -147,7 +151,7 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
   };
 
   await t.test("duplicate claim ids produce one independent conflict", async () => {
-    const { calls, result } = await runWithEvidence((providerId) => Array.from({ length: 32 }, () => ({
+    const { calls, result } = await runWithEvidence((providerId) => Array.from({ length: 31 }, () => ({
       claimId: "same-claim",
       statement: "The providers returned different values.",
       value: providerId === "openai" ? "alpha" : "beta",
@@ -161,7 +165,7 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
   });
 
   await t.test("more than the report cap is flagged and truncated", async () => {
-    const { result } = await runWithEvidence((providerId) => Array.from({ length: 32 }, (_, index) => ({
+    const { result } = await runWithEvidence((providerId) => Array.from({ length: 31 }, (_, index) => ({
       claimId: `claim-${index}`,
       statement: `Claim ${index} differs between providers.`,
       value: providerId === "openai" ? index : index + 100,
@@ -173,6 +177,29 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
     assert.equal(result.conflictsTruncated, true);
     assert.equal(result.evidence.length, 64);
   });
+});
+
+test("Fusion withholds the candidate when verifier evidence does not bind to its response", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
+    calls.push(providerId);
+    const text = "The answer is 42.";
+    const evidence = [{
+      claimId: "answer",
+      statement: "Exact response text returned by this provider.",
+      value: providerId === "gemini" ? "The answer is 43." : text,
+      source: null,
+    }];
+    const answer = JSON.stringify({ text, confidence: 0.9, evidence });
+    return providerId === "gemini"
+      ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }), { status: 200 })
+      : new Response(JSON.stringify({ choices: [{ message: { content: answer } }], usage: { prompt_tokens: 50, completion_tokens: 20 } }), { status: 200 });
+  };
+  const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.deepEqual(result, { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" });
+  assert.equal(calls.length, 2);
+  assert.equal("answer" in result, false);
 });
 
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {
