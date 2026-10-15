@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
 import { selectModel, createProviderPlan } from "../src/core/providerRouter.js";
 import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createModelRecord, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
+import { HEY } from "../src/core/index.js";
+
+test("HEY exposes the validated model serving target contract", () => {
+  assert.equal(HEY.modelPlatform.createAdapterServingTarget, createAdapterServingTarget);
+});
 
 const HASH = "a".repeat(64);
 const VALID_MODEL = {

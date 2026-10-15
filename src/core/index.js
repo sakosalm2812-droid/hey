@@ -227,7 +227,7 @@ import { createMorningBriefing } from "./briefingEngine.js";
 import { registerProvider, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
 import { selectModel, createProviderPlan } from "./providerRouter.js";
 import { FUSION_MODES, runProviderFusion } from "./providerFusion.js";
-import { createModelRecord, createAdapterManifest, createInferenceRequest, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
+import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
 import { 
   initializeComputerControl, 
   executeComputerControl, 
@@ -653,6 +653,7 @@ import {
     modelPlatform: {
       createModelRecord,
       createAdapterManifest,
+      createAdapterServingTarget,
       createInferenceRequest,
       profiles: INFERENCE_PROFILES,
       openCandidates: OPEN_MODEL_CANDIDATES,
