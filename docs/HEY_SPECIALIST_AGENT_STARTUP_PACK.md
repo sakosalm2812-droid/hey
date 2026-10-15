@@ -27,7 +27,7 @@ All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`.
 | 07 | `codex/specialist-07-voiceos-control` | `work/hey-specialists/07-voiceos-control` | Complete `/root/specialist_voiceos_control`; worker `272e931`, integrated `3b28402`, coordinator hardening `539d9c1` |
 | 08 | `codex/specialist-08-teacher-experience` | `work/hey-specialists/08-teacher-experience` | Complete `/root/specialist_teacher_experience`; worker `7d225b3`, integrated `597a8ee` |
 | 09 | `codex/specialist-09-hey-one-models` | `work/hey-specialists/09-hey-one-models` | Complete `/root/specialist_hey_one_models`; worker `e95bd15` and follow-up `7124051`, integrated `1b4f2a4` and `6a75531` |
-| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | Complete `/root/specialist_ultrasparse_research`; worker `95dcb59` and follow-up `49bc181`, integrated `0226c9a` and `37b9cdc` |
+| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | Active follow-up `/root/specialist_ultrasparse_research`; latest completed commit `49bc181`, integrated as `37b9cdc`; now comparing an indexed selector with the existing baseline |
 | 11 | `codex/specialist-11-fusion-models` | `work/hey-specialists/11-fusion-models` | Complete `/root/specialist_fusion_models`; worker `90005af` and attack fix `12a0bc2`, integrated `358d549` and `f73d65d` |
 
 ## Ready-to-paste startup prompts
