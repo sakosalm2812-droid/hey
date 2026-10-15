@@ -245,6 +245,7 @@ export class GestureEngine {
     this.activeProfileId = null;
     this.frameCanvas = null;
     this.lastFrameAt = 0;
+    this.pendingGesture = null;
     this.detectionTimeoutMs = detectionTimeoutMs;
     this.detectionEpoch = 0;
     this.gestureCooldowns = new Map();
@@ -685,6 +686,7 @@ export class GestureEngine {
     }
     const profile = this.profiles.get(profileId);
     if (!profile) return { success: false, error: "Profile not found", code: "profile_not_found" };
+    if (this.recognitionState === GESTURE_STATES.ERROR) this.recognitionState = GESTURE_STATES.INACTIVE;
     if (this.recognitionState !== GESTURE_STATES.INACTIVE) {
       return { success: false, error: "Gesture recognition is already active.", code: "already_active" };
     }
@@ -712,13 +714,16 @@ export class GestureEngine {
     this.recognitionState = GESTURE_STATES.CALIBRATING;
     this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", detector: "initializing" });
 
+    let detectorInitializing = false;
     try {
       if (typeof this.recognitionAdapter.prepare === "function") {
+        detectorInitializing = true;
         const adapterReady = await this.recognitionAdapter.prepare({ signal: abortController.signal, profile });
         if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
           return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
         }
         if (adapterReady === false) throw Object.assign(new Error("Gesture detector could not be initialized."), { code: "gesture_adapter_unavailable" });
+        detectorInitializing = false;
       }
 
       if (getAccountScope() !== startingAccountScope || !this.profiles.has(profileId)) {
@@ -793,7 +798,7 @@ export class GestureEngine {
       }
       let errorCode = "";
       try { errorCode = typeof error?.code === "string" ? error.code : ""; } catch { /* Host errors can be accessor-backed. */ }
-      if (errorCode === "gesture_adapter_unavailable") {
+      if (detectorInitializing || errorCode === "gesture_adapter_unavailable") {
         this.stopRecognition("adapter_initialization_failed");
         this.recognitionState = GESTURE_STATES.ERROR;
         this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: "adapter_unavailable" });
@@ -862,6 +867,11 @@ export class GestureEngine {
             && detectionEpoch === this.detectionEpoch
             && this.recognitionState === GESTURE_STATES.ACTIVE) {
             this.handleGestureDetection(gesture, profile);
+          } else if (!gesture
+            && generation === this.recognitionGeneration
+            && detectionEpoch === this.detectionEpoch
+            && this.recognitionState === GESTURE_STATES.ACTIVE) {
+            this.pendingGesture = null;
           }
         } catch (error) {
           if (!signal.aborted) {
@@ -936,6 +946,21 @@ export class GestureEngine {
   handleGestureDetection(gesture, profile) {
     this.refreshAccountScope();
     if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.activeProfileId !== profile?.id) return;
+    if (!gesture || !Object.hasOwn(GESTURES, gesture.id)
+      || !Number.isFinite(gesture.confidence) || gesture.confidence < profile.confidence || gesture.confidence > 1) {
+      this.pendingGesture = null;
+      return;
+    }
+
+    const now = Date.now();
+    const pending = this.pendingGesture;
+    if (!pending || pending.id !== gesture.id || now - pending.lastAt > 250) {
+      this.pendingGesture = { id: gesture.id, startedAt: now, lastAt: now };
+      return;
+    }
+    pending.lastAt = now;
+    if (now - pending.startedAt < profile.holdMs) return;
+    this.pendingGesture = null;
 
     const cooldownMs = profile.cooldownMs ?? getSetting("gesture.cooldown_ms") ?? 600;
     try {
@@ -954,7 +979,6 @@ export class GestureEngine {
 
     if (!binding) return;
 
-    const now = Date.now();
     const cooldownKey = `${profile.id}:${gesture.id}`;
     if (this.gestureCooldowns.has(cooldownKey)
       && now - this.gestureCooldowns.get(cooldownKey) < cooldownMs) return;
@@ -1018,6 +1042,7 @@ export class GestureEngine {
     this.recognitionGeneration += 1;
     this.detectionEpoch += 1;
     this.gestureCooldowns.clear();
+    this.pendingGesture = null;
     this.recognitionAbortController?.abort(reason);
     this.recognitionAbortController = null;
     this.recognitionState = GESTURE_STATES.INACTIVE;
@@ -1056,6 +1081,7 @@ export class GestureEngine {
     if (this.recognitionState !== GESTURE_STATES.ACTIVE) return false;
     this.detectionEpoch += 1;
     this.gestureCooldowns.clear();
+    this.pendingGesture = null;
     this.recognitionState = GESTURE_STATES.PAUSED;
     this.notify("recognition_state_changed", { state: this.recognitionState, profileId: this.activeProfileId, camera: "active", visible: true });
     return true;

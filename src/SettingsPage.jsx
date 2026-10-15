@@ -32,6 +32,7 @@ import {
   getTtsVoices,
   pickVoice,
 } from "./core/heyVoiceSettings.js";
+import GestureControls from "./components/settings/GestureControls.jsx";
 
 const aiSettings = [
   "Long-Term Memory",
@@ -340,6 +341,8 @@ export default function SettingsPage() {
             )}
             {interfaceError && <p className="hey-interface-level-error" role="alert">{interfaceError}</p>}
           </section>
+
+          <GestureControls />
 
           <section className="hey-settings-card">
             <header className="hey-settings-card-header">

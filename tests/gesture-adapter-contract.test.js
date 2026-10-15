@@ -340,6 +340,32 @@ test("local detector preparation is consent-gated and camera stays closed when m
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
 });
 
+test("an unavailable detector can be retried after the user fixes the local runtime", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  let prepares = 0;
+  engine.setRecognitionAdapter({
+    async prepare() {
+      prepares += 1;
+      if (prepares === 1) throw new Error("Local model asset unavailable.");
+      return true;
+    },
+    async detect() { return null; },
+  });
+
+  const failed = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(failed.code, "adapter_unavailable");
+  assert.equal(camera.stopped, 0);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+
+  const retried = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(retried.success, true);
+  assert.equal(prepares, 2);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+  engine.stopRecognition("test_cleanup");
+  assert.equal(camera.stopped, 1);
+});
+
 test("account switch during capability query prevents the later camera request", async () => {
   const { engine, profile } = makeEngine();
   engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });
@@ -483,6 +509,12 @@ test("browser camera journey requires consent, rejects a stale paused frame, the
   const nextFrame = scheduledFrames.shift();
   assert.equal(typeof nextFrame, "function");
   nextFrame();
+  for (let sample = 0; sample < 4; sample += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    const stableFrame = scheduledFrames.shift();
+    assert.equal(typeof stableFrame, "function");
+    stableFrame();
+  }
   for (let attempt = 0; attempt < 50 && actions.length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(actions.length, 1);
   assert.equal(actions[0].binding.id, bindings.id);
@@ -574,31 +606,74 @@ test("detector deadlines reject invalid and unbounded configuration", () => {
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: Infinity }), RangeError);
 });
 
-test("gesture cooldown is bounded, suppresses repeated frames, and resets on pause and stop", () => {
+test("gesture hold and cooldown suppress fleeting and repeated frames, then reset on pause and stop", () => {
   const { engine, profile } = makeEngine();
+  const activeProfile = { ...profile, holdMs: 200 };
   const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const executed = [];
   const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const originalNow = Date.now;
+  let now = 1000;
   engine.recognitionState = GESTURE_STATES.ACTIVE;
   engine.activeProfileId = profile.id;
 
   try {
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    Date.now = () => now;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1100;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
     assert.equal(executed.length, 1);
     assert.equal(engine.gestureCooldowns.size, 1);
 
     assert.equal(engine.pauseRecognition(), true);
     assert.equal(engine.gestureCooldowns.size, 0);
     assert.equal(engine.resumeRecognition(), true);
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    now = 2000;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 2100;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 2200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
     assert.equal(executed.length, 2);
 
     engine.stopRecognition("test_cleanup");
     assert.equal(engine.gestureCooldowns.size, 0);
     assert.equal(binding.enabled, true);
   } finally {
+    Date.now = originalNow;
+    unsubscribe();
+    engine.stopRecognition("test_cleanup");
+  }
+});
+
+test("low-confidence or interrupted frames reset the gesture hold before action", () => {
+  const { engine, profile } = makeEngine();
+  const activeProfile = { ...profile, holdMs: 200 };
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.activeProfileId = profile.id;
+  const executed = [];
+  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const originalNow = Date.now;
+  let now = 1000;
+  Date.now = () => now;
+  try {
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1100;
+    engine.handleGestureDetection({ id: "G01", confidence: 0.5 }, activeProfile);
+    now = 1200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1300;
+    engine.handleGestureDetection(null, activeProfile);
+    now = 1400;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1600;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    assert.equal(executed.length, 1);
+  } finally {
+    Date.now = originalNow;
     unsubscribe();
     engine.stopRecognition("test_cleanup");
   }

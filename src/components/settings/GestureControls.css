@@ -1,0 +1,105 @@
+.hey-gesture-card {
+  display: grid;
+  gap: 18px;
+}
+
+.hey-gesture-status,
+.hey-gesture-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hey-gesture-status {
+  color: var(--text-secondary, #a8abb8);
+  font-size: 0.9rem;
+}
+
+.hey-gesture-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.hey-gesture-details > div {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+  background: var(--surface-raised, rgba(255, 255, 255, 0.025));
+}
+
+.hey-gesture-details span,
+.hey-gesture-profile-select span,
+.hey-gesture-consent small {
+  color: var(--text-secondary, #a8abb8);
+  font-size: 0.82rem;
+}
+
+.hey-gesture-profile-select {
+  display: grid;
+  max-width: 360px;
+  gap: 7px;
+}
+
+.hey-gesture-profile-select select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 9px;
+  color: inherit;
+  background: var(--surface-raised, #191a22);
+}
+
+.hey-gesture-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.hey-gesture-consent input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--accent, #a78bfa);
+}
+
+.hey-gesture-consent span {
+  display: grid;
+  gap: 5px;
+}
+
+.hey-gesture-note,
+.hey-gesture-error {
+  margin: 0;
+  color: var(--text-secondary, #a8abb8);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.hey-gesture-error {
+  color: var(--danger, #f87171);
+}
+
+.hey-gesture-setup {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.hey-gesture-setup p {
+  margin: 0;
+  color: var(--text-secondary, #a8abb8);
+}
+
+@media (max-width: 640px) {
+  .hey-gesture-details {
+    grid-template-columns: 1fr;
+  }
+}
