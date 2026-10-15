@@ -8,8 +8,8 @@ globalThis.localStorage = {
 const { GestureEngine, GESTURE_STATES } = await import("../src/core/gestureEngine.js");
 const { subscribe, clearEventListeners } = await import("../src/core/eventBus.js");
 
-function makeEngine() {
-  const engine = new GestureEngine();
+function makeEngine(options) {
+  const engine = new GestureEngine(options);
   const profile = engine.createProfile({ name: "Contract test", confidence: 0.8 });
   return { engine, profile };
 }
@@ -107,6 +107,51 @@ test("supported adapter lifecycle is visible, pausable, revocable, and stopped w
   assert.equal(detectCalls, 0); // Test camera never supplied a ready frame.
   assert(states.some((state) => state.camera === "active" && state.visible === true));
   assert(states.some((state) => state.reason === "permission_revoked"));
+});
+
+test("a detector that exceeds its frame deadline aborts the session and releases the camera", async () => {
+  const { engine, profile } = makeEngine({ detectionTimeoutMs: 15 });
+  const camera = installCamera();
+  camera.video.readyState = 2;
+  globalThis.requestAnimationFrame = () => 1;
+  const previousOffscreenCanvas = globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return {
+        drawImage() {},
+        getImageData() { return { data: new Uint8ClampedArray(4) }; },
+      };
+    }
+  };
+  let adapterSignal;
+  const adapterErrors = [];
+  engine.subscribe((event, value) => { if (event === "recognition_adapter_error") adapterErrors.push(value); });
+  engine.setRecognitionAdapter({
+    detect(_frame, _profile, { signal }) {
+      adapterSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(camera.stopped, 1);
+    assert.equal(adapterSignal.aborted, true);
+    assert.equal(adapterErrors[0]?.code, "adapter_timeout");
+  } finally {
+    engine.stopRecognition("test_cleanup");
+    if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
+});
+
+test("detector deadlines reject invalid and unbounded configuration", () => {
+  assert.throws(() => new GestureEngine({ detectionTimeoutMs: 0 }), RangeError);
+  assert.throws(() => new GestureEngine({ detectionTimeoutMs: 10_001 }), RangeError);
+  assert.throws(() => new GestureEngine({ detectionTimeoutMs: Infinity }), RangeError);
 });
 
 test("browser camera permission revocation stops the session and unregisters its observer", async () => {
@@ -253,6 +298,10 @@ test("adapter output is validated against known gestures and profile confidence"
   controller.abort();
   assert.equal(await engine.detectGesture({}, profile, controller.signal), null);
   assert.equal(adapterCalls, 2);
+
+  const abortedDuringCall = new AbortController();
+  engine.setRecognitionAdapter({ detect() { abortedDuringCall.abort("adapter_cancelled"); return new Promise(() => {}); } });
+  assert.equal(await engine.detectGesture({}, profile, abortedDuringCall.signal), null);
 
   const inFlight = new AbortController();
   let finishDetection;
