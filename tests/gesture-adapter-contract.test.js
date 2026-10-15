@@ -437,6 +437,7 @@ test("supported adapter lifecycle is visible, pausable, revocable, and stopped w
 
 test("browser camera journey requires consent, rejects a stale paused frame, then executes one authorized UI action", async () => {
   const { engine, profile } = makeEngine();
+  engine.updateProfile(profile.id, { holdMs: 200 });
   const bindings = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const scheduledFrames = [];
   const trackListeners = new Map();
