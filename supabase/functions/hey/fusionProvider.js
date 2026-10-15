@@ -176,6 +176,7 @@ export async function runFusionChatRequest({
   messages,
   signal,
   isCurrent = () => true,
+  getCurrentEntitlements,
   fetchImpl = fetch,
 } = {}) {
   if (!requested) return { status: "not_requested" };
@@ -249,6 +250,24 @@ export async function runFusionChatRequest({
     },
   });
   if (result.status !== "complete") return result;
+  if (getCurrentEntitlements !== undefined) {
+    if (typeof getCurrentEntitlements !== "function") return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+    let currentEntitlements;
+    try {
+      currentEntitlements = await getCurrentEntitlements(accountId);
+    } catch {
+      return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+    }
+    if (signal?.aborted || !isCurrent(accountId)) return { status: "cancelled" };
+    if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
+      return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+    }
+    const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
+    if (!currentGrants.has("hey.fusion") || !currentGrants.has("provider.remote") ||
+      result.providers.some((provider) => !currentGrants.has(`provider:${provider.providerId}`))) {
+      return { status: "denied", reason: "fusion_permission_revoked" };
+    }
+  }
   const claims = new Map();
   for (const item of result.evidence) {
     const key = `${item.claimId}:${JSON.stringify(item.value)}`;

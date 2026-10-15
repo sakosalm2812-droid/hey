@@ -613,6 +613,15 @@ Deno.serve(async (request) => {
       messages,
       signal: request.signal,
       isCurrent: () => !request.signal.aborted && user.id.length > 0,
+      getCurrentEntitlements: async () => {
+        const { data: latestProfile, error: latestProfileError } = await supabase
+          .from("profiles")
+          .select("entitlements")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (latestProfileError) throw latestProfileError;
+        return Array.isArray(latestProfile?.entitlements) ? latestProfile.entitlements : [];
+      },
     });
     if (fusion.status !== "complete") {
       const status = fusion.status === "denied" ? 403

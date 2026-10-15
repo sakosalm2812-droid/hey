@@ -189,3 +189,42 @@ test("HTTP cancellation aborts the provider fetch and stale output is not return
   assert.equal(result.status, "cancelled");
   assert.equal(calls, 1);
 });
+
+test("provider grants are revalidated after provider work before a fused answer can be returned", async (t) => {
+  await t.test("revocation of either selected provider denies the answer", async () => {
+    const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+    const result = await runFusionChatRequest({
+      requested: true,
+      accountId: "auth-user-123",
+      entitlements,
+      attempts,
+      pricingConfig: pricing,
+      messages,
+      fetchImpl,
+      getCurrentEntitlements: async (accountId) => {
+        assert.equal(accountId, "auth-user-123");
+        return entitlements.filter((grant) => grant !== "provider:gemini");
+      },
+    });
+    assert.equal(calls.length, 2);
+    assert.deepEqual(result, { status: "denied", reason: "fusion_permission_revoked" });
+    assert.equal("answer" in result, false);
+  });
+
+  await t.test("revalidation outage fails closed after the provider calls", async () => {
+    const { fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+    const result = await runFusionChatRequest({
+      requested: true,
+      accountId: "auth-user-123",
+      entitlements,
+      attempts,
+      pricingConfig: pricing,
+      messages,
+      fetchImpl,
+      getCurrentEntitlements: async () => { throw new Error("private database error"); },
+    });
+    assert.deepEqual(result, { status: "unconfigured", reason: "authorization_revalidation_failed" });
+    assert.equal(JSON.stringify(result).includes("private database error"), false);
+    assert.equal("answer" in result, false);
+  });
+});
