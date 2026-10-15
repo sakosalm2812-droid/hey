@@ -5,10 +5,13 @@ import { getAccountScope, subscribeAccountScope } from "../core/accountScope.js"
 const browserSpeechProviders = new WeakSet();
 const MAX_DICTATION_PHRASES = 64;
 const MAX_DICTATION_VOCABULARY = 32;
+const MAX_DICTATION_REPLACEMENT_LENGTH = 2000;
 
 export function createBrowserSpeechProvider(environment = globalThis) {
-  const Recognition = environment.SpeechRecognition || environment.webkitSpeechRecognition;
-  if (!Recognition) return null;
+  let Recognition;
+  try { Recognition = environment?.SpeechRecognition || environment?.webkitSpeechRecognition; }
+  catch { return null; }
+  if (typeof Recognition !== "function") return null;
 
   const provider = {
     kind: "browser",
@@ -74,10 +77,10 @@ export function stripWakeWord(text) {
   return stripWakePhrase(text);
 }
 
-function hasControlCharacters(value) {
+function hasControlCharacters(value, { allowLineBreaks = false } = {}) {
   return [...value].some((character) => {
     const codePoint = character.codePointAt(0);
-    return codePoint <= 0x1f || codePoint === 0x7f;
+    return codePoint === 0x7f || (codePoint <= 0x1f && !(allowLineBreaks && [0x09, 0x0a, 0x0d].includes(codePoint)));
   });
 }
 
@@ -132,8 +135,8 @@ function normalizeDictationCorrections(input, language = "en-US") {
   const normalized = entries.map((entry) => {
     const { from, to } = readCorrection(entry);
     if (typeof from !== "string" || typeof to !== "string"
-      || !from.trim() || from.length > 80 || to.length > 160
-      || hasControlCharacters(from) || hasControlCharacters(to)) {
+      || !from.trim() || from.length > 80 || to.length > MAX_DICTATION_REPLACEMENT_LENGTH
+      || hasControlCharacters(from) || hasControlCharacters(to, { allowLineBreaks: true })) {
       throw new TypeError("Dictation correction entries must contain short, plain text.");
     }
     const source = from.trim();
@@ -301,6 +304,11 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
  * should disclose that before asking the user to consent.
  */
 export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, onMetrics, corrections = [], vocabulary = [], language = "en-US" } = {}) {
+  // Resolve the native browser provider from the actual runtime when callers
+  // do not supply one. An explicit null still means recognition is unavailable.
+  const activeSpeechProvider = speechProvider === undefined
+    ? createBrowserSpeechProvider(environment)
+    : speechProvider;
   // Validate once when the session is created. The immutable snapshot keeps
   // later caller mutation from changing what an active microphone session emits.
   const sessionLanguage = normalizeSpeechLanguage(language);
@@ -340,7 +348,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     attempt.finished = true;
     const metrics = Object.freeze({
       schemaVersion: 1,
-      provider: !speechProvider ? "unavailable" : browserSpeechProviders.has(speechProvider) ? "browser" : "custom",
+      provider: !activeSpeechProvider ? "unavailable" : browserSpeechProviders.has(activeSpeechProvider) ? "browser" : "custom",
       status,
       startupLatencyMs: elapsed(attempt.startedAt, attempt.providerStartedAt),
       firstTranscriptLatencyMs: elapsed(attempt.providerRequestedAt, attempt.firstTranscriptAt),
@@ -362,7 +370,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     finishAttempt(terminalStatus === "account_changed" ? terminalStatus : active ? terminalStatus : "cancelled");
     attempt = null;
     active = false;
-    try { speechProvider?.stop(recognition); } catch { /* The local session is still stopped. */ }
+    try { activeSpeechProvider?.stop(recognition); } catch { /* The local session is still stopped. */ }
     recognition = null;
     if ([VOICE_STATES.listening, VOICE_STATES.interrupted].includes(state.state)) {
       if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.interrupted);
@@ -401,7 +409,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
       emptyTranscriptCount: 0,
       finished: false,
     };
-    if (!speechProvider) {
+    if (!activeSpeechProvider) {
       finishAttempt("unavailable");
       transition(VOICE_STATES.error, "Speech recognition is unavailable in this runtime.");
       return { success: false, status: VOICE_STATES.error, error: "Speech recognition is unavailable in this runtime." };
@@ -432,7 +440,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     const currentAttempt = attempt;
     currentAttempt.providerRequestedAt = now();
     try {
-      recognition = speechProvider.start({
+      recognition = activeSpeechProvider.start({
         language: sessionLanguage,
         vocabulary: vocabularySnapshot,
         onTranscript: (transcript) => {
