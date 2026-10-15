@@ -175,6 +175,7 @@ import {
   verifyTeacherWorksheetArtifact,
   saveTeacherWorksheetArtifact,
   exportTeacherWorksheetMarkdown,
+  createTeacherLessonWorksheetJourney,
 } from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
@@ -898,6 +899,7 @@ import {
       verifyWorksheetArtifact: verifyTeacherWorksheetArtifact,
       saveWorksheetArtifact: saveTeacherWorksheetArtifact,
       exportWorksheetMarkdown: exportTeacherWorksheetMarkdown,
+      createLessonWorksheetJourney: createTeacherLessonWorksheetJourney,
     },
 
     live: {

@@ -17,7 +17,8 @@ import {
 } from "../src/core/teacherExperience.js";
 import HEY from "../src/core/index.js";
 import { supabaseClient } from "../src/lib/supabase.js";
-import { authorizeTeacherArtifactRead } from "../src/core/teacherArtifactAccess.js";
+import { authorizeTeacherArtifactRead, authorizeTeacherArtifactWrite } from "../src/core/teacherArtifactAccess.js";
+import { artifactEngine } from "../src/core/artifactEngine.js";
 
 supabaseClient.auth.getUser = async () => ({ data: { user: {
   id: "teacher-1",
@@ -65,6 +66,32 @@ const assessmentInput = (overrides = {}) => ({
   ...overrides,
 });
 
+async function withForgePersistence(operation, failureMessage = null) {
+  const originalFrom = supabaseClient.from;
+  const writes = [];
+  supabaseClient.from = (table) => ({
+    upsert(payload) {
+      const write = { table, payload, confirmed: false };
+      writes.push(write);
+      return {
+        select() {
+          write.confirmed = true;
+          return {
+            single: async () => failureMessage
+              ? { data: null, error: { message: failureMessage } }
+              : { data: { id: payload.id, project_id: payload.project_id, metadata: payload.metadata }, error: null },
+          };
+        },
+      };
+    },
+  });
+  try {
+    return await operation(writes);
+  } finally {
+    supabaseClient.from = originalFrom;
+  }
+}
+
 test("teacher workflow creates a scoped, provenance-bearing Forge-compatible export artifact", async () => {
   const artifact = await buildTeacherLessonArtifact(lessonInput());
   assert.equal(artifact.type, "document");
@@ -106,46 +133,80 @@ test("answer-key access denies missing role and account or class claim mismatche
   assert.equal(authorizeTeacherArtifactRead(artifact, { classId: "class-2" }, { id: "teacher-1", app_metadata: claims }), false);
 });
 
+test("student worksheets require a matching authenticated class and cannot be exported by students", () => {
+  const worksheet = {
+    content: { type: "teacher_worksheet", questions: [{ prompt: "Question", points: 1 }] },
+    metadata: { audience: "teacher_only", accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  const student = { id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  assert.equal(authorizeTeacherArtifactRead(worksheet, {}, student), true);
+  assert.equal(authorizeTeacherArtifactRead(worksheet, {}, { ...student, app_metadata: { ...student.app_metadata, hey_class_ids: ["class-2"] } }), false);
+  assert.equal(authorizeTeacherArtifactWrite(worksheet, {}, student), false);
+});
+
+test("teacher lesson content is not readable by student-role or cross-account users", () => {
+  const lesson = {
+    content: { learningObjectives: ["Objective"], activities: [], assessment: { prompt: "Check" }, durationMinutes: 30 },
+    metadata: { accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  const teacher = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  assert.equal(authorizeTeacherArtifactRead(lesson, {}, teacher), true);
+  assert.equal(authorizeTeacherArtifactRead(lesson, {}, { ...teacher, app_metadata: { ...teacher.app_metadata, hey_role: "student" } }), false);
+  assert.equal(authorizeTeacherArtifactRead(lesson, {}, { ...teacher, app_metadata: { ...teacher.app_metadata, hey_account_scope: "account:other" } }), false);
+});
+
 test("canonical artifact reads deny cached answer keys to students", async () => {
-  const artifact = await HEY.artifacts.create({
-    projectId: "school-space", type: "document", title: "Scoped key", content: { questions: [{ teacherAnswer: "4" }] },
+  const artifact = {
+    id: "teacher-key-auth-test", projectId: "school-space", type: "document", title: "Scoped key",
+    content: { questions: [{ teacherAnswer: "4" }] },
     metadata: { workflow: "teacher_assessment", audience: "student", accountScope: "account:teacher-1", classId: "class-1" },
-  });
+  };
+  const worksheet = {
+    id: "teacher-worksheet-auth-test", projectId: "school-space", type: "document", title: "Student sheet",
+    content: { type: "teacher_worksheet", questions: [{ prompt: "Question", points: 1 }] },
+    metadata: { workflow: "teacher_worksheet", audience: "teacher_only", accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  artifactEngine.artifacts.set(artifact.id, artifact);
+  artifactEngine.artifacts.set(worksheet.id, worksheet);
   assert.equal((await HEY.artifacts.get(artifact.id)).id, artifact.id);
   supabaseClient.auth.getUser = async () => ({ data: { user: {
     id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
   } }, error: null });
   assert.equal(await HEY.artifacts.get(artifact.id), null);
+  assert.equal((await HEY.artifacts.get(worksheet.id)).id, worksheet.id);
   supabaseClient.auth.getUser = async () => ({ data: { user: {
     id: "other-teacher", app_metadata: { hey_role: "teacher", hey_account_scope: "account:other", hey_class_ids: ["class-1"] },
   } }, error: null });
   assert.equal(await HEY.artifacts.get(artifact.id), null);
+  assert.equal(await HEY.artifacts.get(worksheet.id), null);
   supabaseClient.auth.getUser = async () => ({ data: { user: {
     id: "other-class-teacher", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-2"] },
   } }, error: null });
   assert.equal(await HEY.artifacts.get(artifact.id), null);
+  assert.equal(await HEY.artifacts.get(worksheet.id), null);
   supabaseClient.auth.getUser = async () => ({ data: { user: {
     id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
   } }, error: null });
+  artifactEngine.artifacts.delete(artifact.id);
+  artifactEngine.artifacts.delete(worksheet.id);
 });
 
 test("verified lessons are stored through the shared Forge artifact contract with scope and review provenance", async () => {
   const lesson = await buildTeacherLessonArtifact(lessonInput());
   let saved;
-  const result = await saveTeacherLessonArtifact(lesson, {
-    accountScope: "account:teacher-1",
-    workspaceId: "school-space",
-    currentAccountScope: "account:teacher-1",
-    currentWorkspaceId: "school-space",
-  }, {
-    createArtifact: async (input) => {
-      saved = input;
-      return { id: "forge-artifact-1", ...input, status: "draft" };
-    },
+  const result = await withForgePersistence(async (writes) => {
+    const savedArtifact = await saveTeacherLessonArtifact(lesson, {
+      accountScope: "account:teacher-1",
+      workspaceId: "school-space",
+      currentAccountScope: "account:teacher-1",
+      currentWorkspaceId: "school-space",
+    });
+    saved = writes[0].payload;
+    return savedArtifact;
   });
 
-  assert.equal(result.id, "forge-artifact-1");
-  assert.equal(saved.projectId, "school-space");
+  assert.ok(result.id);
+  assert.equal(saved.project_id, "school-space");
   assert.equal(saved.type, "document");
   assert.equal(saved.metadata.artifactContract, "hey.teacher.lesson.v1");
   assert.equal(saved.metadata.accountScope, "account:teacher-1");
@@ -157,41 +218,33 @@ test("verified lessons are stored through the shared Forge artifact contract wit
 
 test("shared artifact save rejects scope mismatches, tampering, and hostile context without persisting", async () => {
   const lesson = await buildTeacherLessonArtifact(lessonInput());
-  let createCalls = 0;
-  const createArtifact = async () => { createCalls += 1; };
   const context = {
     accountScope: "account:teacher-1",
     workspaceId: "school-space",
     currentAccountScope: "account:teacher-1",
     currentWorkspaceId: "school-space",
   };
-  await assert.rejects(saveTeacherLessonArtifact(lesson, { ...context, currentAccountScope: "account:other" }, { createArtifact }), /must match the active context/);
-  await assert.rejects(saveTeacherLessonArtifact(lesson, { ...context, workspaceId: "personal-space" }, { createArtifact }), /must match the active context/);
-  await assert.rejects(saveTeacherLessonArtifact({ ...lesson, content: { ...lesson.content, title: "Edited after verification" } }, context, { createArtifact }), /Only a lesson artifact built in the active Teacher runtime/);
+  await assert.rejects(saveTeacherLessonArtifact(lesson, { ...context, currentAccountScope: "account:other" }), /must match the active context/);
+  await assert.rejects(saveTeacherLessonArtifact(lesson, { ...context, workspaceId: "personal-space" }), /must match the active context/);
+  await assert.rejects(saveTeacherLessonArtifact({ ...lesson, content: { ...lesson.content, title: "Edited after verification" } }, context), /Only a lesson artifact built in the active Teacher runtime/);
 
   let getterCalled = false;
   const hostileContext = { ...context };
   Object.defineProperty(hostileContext, "currentWorkspaceId", { enumerable: true, get() { getterCalled = true; return "school-space"; } });
-  await assert.rejects(saveTeacherLessonArtifact(lesson, hostileContext, { createArtifact }), /failed verification/);
+  await assert.rejects(saveTeacherLessonArtifact(lesson, hostileContext), /failed verification/);
   assert.equal(getterCalled, false);
-  assert.equal(createCalls, 0);
-
-  let optionGetterCalled = false;
-  const hostileOptions = {};
-  Object.defineProperty(hostileOptions, "createArtifact", { enumerable: true, get() { optionGetterCalled = true; return createArtifact; } });
-  await assert.rejects(saveTeacherLessonArtifact(lesson, context, hostileOptions), /failed verification/);
-  assert.equal(optionGetterCalled, false);
-  assert.equal(createCalls, 0);
 });
 
 test("shared artifact creation failures are returned to the caller", async () => {
   const lesson = await buildTeacherLessonArtifact(lessonInput());
-  await assert.rejects(saveTeacherLessonArtifact(lesson, {
-    accountScope: "account:teacher-1",
-    workspaceId: "school-space",
-    currentAccountScope: "account:teacher-1",
-    currentWorkspaceId: "school-space",
-  }, { createArtifact: async () => { throw new Error("artifact service unavailable"); } }), /artifact service unavailable/);
+  await withForgePersistence(async () => {
+    await assert.rejects(saveTeacherLessonArtifact(lesson, {
+      accountScope: "account:teacher-1",
+      workspaceId: "school-space",
+      currentAccountScope: "account:teacher-1",
+      currentWorkspaceId: "school-space",
+    }), /Forge did not confirm durable artifact persistence/);
+  }, "artifact service unavailable");
 });
 
 test("Teacher assessment artifacts derive from a scoped lesson and save/export through shared contracts", async () => {
@@ -209,17 +262,18 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
   assert.equal(assessment.content.questions[0].objective, lesson.content.learningObjectives[0]);
 
   let saved;
-  await saveTeacherAssessmentArtifact(assessment, teacherContext(), {
-    createArtifact: async (input) => { saved = input; return { id: "assessment-forge-1", ...input, status: "draft" }; },
+  await withForgePersistence(async (writes) => {
+    await saveTeacherAssessmentArtifact(assessment, teacherContext());
+    saved = writes[0].payload;
   });
-  assert.equal(saved.projectId, "school-space");
+  assert.equal(saved.project_id, "school-space");
   assert.equal(saved.metadata.artifactContract, "hey.teacher.assessment.v1");
   assert.equal(saved.metadata.audience, "teacher_only");
   assert.deepEqual(saved.tags, ["teacher", "assessment", "answer-key"]);
   assert.equal(saved.metadata.safety.teacherReviewRequiredBeforeUse, true);
-  await assert.rejects(saveTeacherAssessmentArtifact(assessment, teacherContext(), {
-    createArtifact: async () => { throw new Error("Forge assessment store unavailable"); },
-  }), /Forge assessment store unavailable/);
+  await withForgePersistence(async () => {
+    await assert.rejects(saveTeacherAssessmentArtifact(assessment, teacherContext()), /Forge did not confirm durable artifact persistence/);
+  }, "Forge assessment store unavailable");
 
   const exported = await exportTeacherAssessmentMarkdown(assessment, {
     accountScope: "account:teacher-1",
@@ -247,8 +301,9 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
   assert.deepEqual(Object.keys(worksheet.content.questions[0]).sort(), ["points", "prompt"]);
   assert.doesNotMatch(JSON.stringify(worksheet), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
   let savedWorksheet;
-  await saveTeacherWorksheetArtifact(worksheet, teacherContext(), {
-    createArtifact: async (input) => { savedWorksheet = input; return { id: "worksheet-forge-1", ...input }; },
+  await withForgePersistence(async (writes) => {
+    await saveTeacherWorksheetArtifact(worksheet, teacherContext());
+    savedWorksheet = writes[0].payload;
   });
   assert.equal(savedWorksheet.metadata.artifactContract, "hey.teacher.worksheet.v1");
   assert.equal(savedWorksheet.metadata.audience, "student");
@@ -260,12 +315,10 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
   assert.match(worksheetExport.content, /Where does 1\/4 belong/);
   assert.doesNotMatch(worksheetExport.content, /One quarter is one of four equal parts|Learner places 1\/4|Success criteria|Answer:/);
   assert.match(worksheetExport.content, /Curriculum alignment and factual claims: not independently verified/);
-  await assert.rejects(saveTeacherWorksheetArtifact(worksheet, { ...teacherContext(), currentAccountScope: "account:other" }, {
-    createArtifact: async () => { throw new Error("must not persist across accounts"); },
-  }), /must match the active context/);
-  await assert.rejects(saveTeacherWorksheetArtifact(worksheet, teacherContext(), {
-    createArtifact: async () => { throw new Error("worksheet Forge store unavailable"); },
-  }), /worksheet Forge store unavailable/);
+  await assert.rejects(saveTeacherWorksheetArtifact(worksheet, { ...teacherContext(), currentAccountScope: "account:other" }), /must match the active context/);
+  await withForgePersistence(async () => {
+    await assert.rejects(saveTeacherWorksheetArtifact(worksheet, teacherContext()), /Forge did not confirm durable artifact persistence/);
+  }, "worksheet Forge store unavailable");
   const forgedWorksheet = { ...worksheet, content: { ...worksheet.content, questions: [{
     ...worksheet.content.questions[0], teacherAnswer: "hidden key",
   }] } };
@@ -275,6 +328,28 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
   await assert.rejects(exportTeacherWorksheetMarkdown(forgedWorksheet, {
     accountScope: "account:teacher-1", workspaceId: "school-space",
   }), /Only a worksheet artifact built in the active Teacher runtime/);
+});
+
+test("complete lesson journey routes distinct teacher and student artifacts through save requests", async () => {
+  let forgeWrites;
+  const journey = await withForgePersistence(async (writes) => {
+    const result = await HEY.teacher.createLessonWorksheetJourney({
+      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+    });
+    forgeWrites = writes;
+    return result;
+  });
+
+  assert.equal(forgeWrites.length, 3);
+  assert.deepEqual(forgeWrites.map((write) => write.payload.project_id), ["school-space", "school-space", "school-space"]);
+  assert.deepEqual(forgeWrites.map((write) => write.payload.metadata.accountScope), Array(3).fill("account:teacher-1"));
+  assert.deepEqual(forgeWrites.map((write) => write.payload.metadata.classId), Array(3).fill("class-1"));
+  assert.equal(journey.saved.teacherArtifact.metadata.audience, "teacher_only");
+  assert.equal(journey.saved.studentArtifact.metadata.audience, "student");
+  assert.notEqual(journey.saved.teacherArtifact.id, journey.saved.studentArtifact.id);
+  assert.match(JSON.stringify(journey.saved.teacherArtifact.content), /teacherAnswer/);
+  assert.doesNotMatch(JSON.stringify(journey.saved.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
+  assert.ok(forgeWrites.every((write) => write.table === "hey_artifacts" && write.confirmed));
 });
 
 test("assessment inputs reject student data, accessors, unsafe markup, and objectives outside the lesson", async () => {
@@ -373,7 +448,7 @@ test("assessment scope, source integrity, and sensitive-topic review gates fail 
   const forgedVerification = await verifyTeacherAssessmentArtifact(forged, { accountScope: "account:teacher-1", workspaceId: "school-space" });
   assert.equal(forgedVerification.valid, false);
   assert.equal(forgedVerification.checks.trustedTeacherRuntime, false);
-  await assert.rejects(saveTeacherAssessmentArtifact(forged, teacherContext(), { createArtifact: async () => { throw new Error("must not persist"); } }), /Only an assessment artifact built in the active Teacher runtime/);
+  await assert.rejects(saveTeacherAssessmentArtifact(forged, teacherContext()), /Only an assessment artifact built in the active Teacher runtime/);
   await assert.rejects(exportTeacherAssessmentMarkdown(forged, { accountScope: "account:teacher-1", workspaceId: "school-space" }), /Only an assessment artifact built in the active Teacher runtime/);
 });
 
