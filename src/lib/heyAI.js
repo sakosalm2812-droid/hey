@@ -56,6 +56,9 @@ export async function getHEYProviderCatalog({ signal } = {}) {
   const details = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(details.error || "Configured models could not be loaded.");
   if (!Array.isArray(details.providers)) throw new Error("The model catalog response is invalid.");
+  if (!Array.isArray(details.profiles) || !details.profiles.every((profile) =>
+    profile && ["automatic", "lower_cost"].includes(profile.id) && typeof profile.label === "string"
+  )) throw new Error("The model profile catalog response is invalid.");
   return details;
 }
 
@@ -75,10 +78,16 @@ export function getHEYChatError(response, details = {}, fusion = false) {
   if (details.code === "provider_request_unavailable") return "The selected provider could not complete this request. Choose another configured model or Automatic.";
   if (details.code === "provider_unavailable") return "No AI provider is configured for HEY yet.";
   if (details.code === "provider_budget_exhausted") return "This request exceeds the configured model budget. Shorten it or choose another model.";
+  if (details.code === "provider_entitlement_required") return "Your account does not have access to this remote provider.";
+  if (details.code === "provider_profile_invalid") return "That routing profile is unavailable. Refresh the model list and try again.";
+  if (details.code === "account_permissions_unavailable") return "HEY could not verify your provider access. Try again shortly.";
+  if (details.code === "provider_rate_limited") return `The selected provider is rate limited. Try again in ${Math.max(1, Math.min(3600, Number(details.retryAfterSeconds) || 1))} seconds.`;
+  if (details.code === "provider_credentials_rejected") return "HEY's configured provider credential was rejected. Check the server configuration.";
+  if (details.code === "provider_access_rejected") return "The provider denied access to this model. Check the provider account and model permissions.";
   if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
   if (fusion && response.status === 409) return "The providers could not independently confirm an answer. No answer was delivered.";
   if (fusion && response.status === 503) return "Model fusion is unavailable because its provider permissions or pricing are not configured.";
-  if (response.status === 429) return "HEY is receiving too many requests. Wait a moment and try again.";
+  if (response.status === 429) return `HEY is receiving too many requests. Try again in about ${Math.max(1, Math.min(60, Number(details.retryAfterSeconds) || 60))} seconds.`;
   if (response.status >= 500) return fusion
     ? "Model fusion is unavailable right now. No answer was delivered."
     : "HEY could not reach its AI provider. Check the server configuration and try again.";
@@ -144,7 +153,7 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onProviderMetadata, confirmed = false, fusion = false, providerSelection = null, signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onProviderMetadata, confirmed = false, fusion = false, providerSelection = null, providerProfile = "automatic", signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
@@ -188,6 +197,8 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         providerId: providerSelection.providerId,
         modelId: providerSelection.modelId,
       };
+    } else if (!fusion && providerProfile !== "automatic") {
+      requestBody.routingProfile = providerProfile;
     }
 
     const response = await fetchWithRetry(getHEYApiUrl(), {

@@ -9,6 +9,7 @@ const PROVIDER_SELECTION_KEYS = ["providerId", "modelId"];
 const MAX_CHAT_BUDGET_USD = 0.25;
 const MAX_PROVIDER_RATE_USD_PER_MILLION = 1_000;
 const MAX_CHAT_INPUT_TOKEN_CEILING = 32_000;
+const ROUTING_PROFILES = Object.freeze(["automatic", "lower_cost"]);
 
 function isRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -23,6 +24,10 @@ function readCanonicalText(value, maxLength) {
     return code <= 31 || code === 127;
   })) return null;
   return value;
+}
+
+function hasServerCredential(value) {
+  return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
 export function parseProviderSelection(value) {
@@ -41,6 +46,58 @@ export function parseProviderSelection(value) {
   const modelId = readCanonicalText(modelDescriptor.value, 128);
   if (!providerId || !modelId) return { status: "invalid" };
   return { status: "selected", providerId, modelId };
+}
+
+export function parseRoutingProfile(value) {
+  if (value === undefined || value === null) return { status: "automatic", profile: "automatic" };
+  return typeof value === "string" && ROUTING_PROFILES.includes(value)
+    ? { status: "valid", profile: value }
+    : { status: "invalid" };
+}
+
+export function normalizeProviderEntitlements(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+  const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
+  const keys = Reflect.ownKeys(value);
+  if (!Number.isSafeInteger(length) || length > 100 || keys.length !== length + 1) return null;
+  const grants = [];
+  const seen = new Set();
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value") || typeof descriptor.value !== "string" ||
+      !descriptor.value.trim() || descriptor.value !== descriptor.value.trim() || descriptor.value.length > 128 ||
+      Array.from(descriptor.value).some((character) => character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127)) return null;
+    const grant = descriptor.value.toLowerCase();
+    if (seen.has(grant)) return null;
+    seen.add(grant);
+    grants.push(grant);
+  }
+  return Object.freeze(grants);
+}
+
+export function isProviderEntitled(entitlements, providerId) {
+  const grants = normalizeProviderEntitlements(entitlements);
+  return Boolean(grants && grants.includes("provider.remote") && grants.includes(`provider:${providerId}`));
+}
+
+export function filterEntitledProviderAttempts(attempts, entitlements) {
+  const grants = normalizeProviderEntitlements(entitlements);
+  if (!grants || !grants.includes("provider.remote") || !Array.isArray(attempts)) return [];
+  return attempts.filter((attempt) => grants.includes(`provider:${attempt.id}`));
+}
+
+export function orderProviderAttemptsForProfile(attempts, pricingConfig, profile = "automatic") {
+  if (!Array.isArray(attempts) || !ROUTING_PROFILES.includes(profile)) return [];
+  if (profile === "automatic") return [...attempts];
+  const rates = new Map((pricingConfig?.providers || []).map((item) => [
+    `${item.providerId}\u001f${item.modelId}`,
+    item.inputUsdPerMillion + item.outputUsdPerMillion,
+  ]));
+  return [...attempts].sort((left, right) => {
+    const leftRate = rates.get(`${left.id}\u001f${left.model}`) ?? Number.POSITIVE_INFINITY;
+    const rightRate = rates.get(`${right.id}\u001f${right.model}`) ?? Number.POSITIVE_INFINITY;
+    return leftRate - rightRate;
+  });
 }
 
 export function parseChatPricingConfig(raw) {
@@ -82,7 +139,7 @@ export function listConfiguredProviders(attempts, pricingConfig) {
   return attempts.flatMap((attempt) => {
     const providerId = readCanonicalText(attempt?.id, 64);
     const modelId = readCanonicalText(attempt?.model, 128);
-    if (!providerId || !modelId || typeof attempt?.key !== "string" || !attempt.key) return [];
+    if (!providerId || !modelId || !hasServerCredential(attempt?.key)) return [];
     const pricing = pricingConfig.providers.find((item) => item.providerId === providerId && item.modelId === modelId);
     if (!pricing) return [];
     return [Object.freeze({
@@ -99,7 +156,7 @@ export function resolveProviderSelection(value, attempts, pricingConfig) {
   const selection = parseProviderSelection(value);
   if (selection.status !== "selected") return selection;
   const attempt = Array.isArray(attempts)
-    ? attempts.find((candidate) => candidate?.id === selection.providerId && candidate?.model === selection.modelId && typeof candidate?.key === "string" && candidate.key)
+    ? attempts.find((candidate) => candidate?.id === selection.providerId && candidate?.model === selection.modelId && hasServerCredential(candidate?.key))
     : null;
   const pricing = Array.isArray(pricingConfig?.providers)
     ? pricingConfig.providers.find((candidate) => candidate.providerId === selection.providerId && candidate.modelId === selection.modelId)
@@ -147,6 +204,11 @@ export function calculateProviderUsageCost(providerId, data, pricing, plan) {
 
 export default {
   parseProviderSelection,
+  parseRoutingProfile,
+  normalizeProviderEntitlements,
+  isProviderEntitled,
+  filterEntitledProviderAttempts,
+  orderProviderAttemptsForProfile,
   parseChatPricingConfig,
   listConfiguredProviders,
   resolveProviderSelection,

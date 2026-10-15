@@ -17,6 +17,8 @@ export default function ChatInput({
   providerCatalog = { status: "loading", providers: [], budgetUsd: null },
   providerSelection = null,
   setProviderSelection,
+  providerProfile = "automatic",
+  setProviderProfile,
 }) {
   const { t } = useLocale();
   const { user } = useAuth();
@@ -57,11 +59,24 @@ export default function ChatInput({
   return (
     <div className="hey-chat-composer">
       <label className="hey-chat-model-select">
+        <span>Routing profile</span>
+        <select
+          aria-label="Choose a routing profile"
+          value={providerProfile}
+          disabled={disabled || fusionEnabled || providerCatalog.status !== "configured"}
+          onChange={(event) => setProviderProfile?.(event.target.value)}
+        >
+          {(providerCatalog.profiles || []).map((profile) => (
+            <option key={profile.id} value={profile.id}>{profile.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="hey-chat-model-select">
         <span>Model</span>
         <select
           aria-label="Choose a configured model"
           value={selectedProviderValue}
-          disabled={disabled || fusionEnabled || providerCatalog.status === "loading"}
+          disabled={disabled || fusionEnabled || providerCatalog.status !== "configured" || providerProfile !== "automatic"}
           onChange={(event) => {
             const provider = providerCatalog.providers.find((item) => `${item.providerId}\u001f${item.modelId}` === event.target.value);
             setProviderSelection?.(provider ? { providerId: provider.providerId, modelId: provider.modelId } : null);
@@ -82,8 +97,12 @@ export default function ChatInput({
             ? "Loading configured models…"
             : providerCatalog.status === "error"
               ? "The model list is unavailable. Automatic routing remains selected."
+            : providerCatalog.status === "permission_required"
+              ? "Your account is not entitled to use remote chat providers."
               : providerCatalog.providers.length === 0
-                ? "No chat models with server keys and prices are configured."
+                ? "No chat models with a server key, price, and account entitlement are configured."
+                : providerProfile === "lower_cost"
+                  ? "Lower cost ranks entitled models by configured input plus output token rates; it does not rank quality or speed."
                 : `The HEY server enforces a $${providerCatalog.budgetUsd} total request cap.`}
       </span>
       <label className="hey-chat-fusion-opt-in">

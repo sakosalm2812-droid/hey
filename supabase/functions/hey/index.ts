@@ -5,6 +5,11 @@ import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider
 import {
   listConfiguredProviders,
   parseChatPricingConfig,
+  parseRoutingProfile,
+  filterEntitledProviderAttempts,
+  isProviderEntitled,
+  normalizeProviderEntitlements,
+  orderProviderAttemptsForProfile,
   resolveProviderSelection,
 } from "./providerCatalog.js";
 import { callConfiguredProvider } from "./providerDispatch.js";
@@ -81,7 +86,9 @@ function getProviderAttempts() {
     { id: "openrouter", key: Deno.env.get("OPENROUTER_API_KEY"), model: Deno.env.get("OPENROUTER_MODEL") || "qwen/qwen3-next-80b-a3b-instruct:free" },
     { id: "gemini", key: Deno.env.get("GEMINI_API_KEY"), model: Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash" },
     { id: "groq", key: Deno.env.get("GROQ_API_KEY"), model: Deno.env.get("GROQ_MODEL") || "llama-3.3-70b-versatile" },
-  ].filter((provider): provider is ProviderAttempt => Boolean(provider.key));
+  ].filter((provider): provider is ProviderAttempt =>
+    typeof provider.key === "string" && provider.key.length > 0 && provider.key === provider.key.trim()
+  );
   const preferred = Deno.env.get("HEY_PROVIDER");
   return preferred
     ? [...configured.filter((provider) => provider.id === preferred), ...configured.filter((provider) => provider.id !== preferred)]
@@ -144,10 +151,10 @@ async function searchWeb(query: string): Promise<SearchResult[]> {
   return [];
 }
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json", ...headers },
   });
 }
 
@@ -225,15 +232,25 @@ Deno.serve(async (request) => {
     });
     const { data: { user }, error: userError } = await authClient.auth.getUser(token);
     if (userError || !user) return jsonResponse({ error: "Authentication required" }, 401);
+    const { data: profile, error: profileError } = await authClient
+      .from("profiles")
+      .select("entitlements")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileError || !profile) return jsonResponse({ error: "Your account permissions could not be verified", code: "account_permissions_unavailable" }, 503);
     const providerPricing = parseChatPricingConfig(Deno.env.get("HEY_CHAT_PRICING_JSON") || "");
-    const providers = listConfiguredProviders(getProviderAttempts(), providerPricing);
+    const entitlements = normalizeProviderEntitlements(profile.entitlements);
+    const remoteAllowed = Boolean(entitlements?.includes("provider.remote"));
+    const permittedAttempts = filterEntitledProviderAttempts(getProviderAttempts(), entitlements);
+    const providers = listConfiguredProviders(permittedAttempts, providerPricing);
     return jsonResponse({
       providers,
+      profiles: [{ id: "automatic", label: "Automatic" }, { id: "lower_cost", label: "Lower cost" }],
       defaultProvider: providers.some((provider) => provider.providerId === Deno.env.get("HEY_PROVIDER"))
         ? Deno.env.get("HEY_PROVIDER")
         : null,
-      state: providers.length ? "configured" : "unavailable",
-      budgetUsd: providerPricing?.budgetUsd ?? null,
+      state: !remoteAllowed ? "permission_required" : providers.length ? "configured" : "unavailable",
+      budgetUsd: remoteAllowed ? providerPricing?.budgetUsd ?? null : null,
     });
   }
 
@@ -267,7 +284,11 @@ Deno.serve(async (request) => {
     console.error("Shared rate limit check failed", rateLimitError);
     return jsonResponse({ error: "Request protection is temporarily unavailable" }, 503);
   }
-  if (!withinRateLimit) return jsonResponse({ error: "Too many requests" }, 429);
+  if (!withinRateLimit) return jsonResponse({
+    error: "Too many requests",
+    code: "rate_limited",
+    retryAfterSeconds: 60,
+  }, 429, { "Retry-After": "60" });
 
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
@@ -295,6 +316,10 @@ Deno.serve(async (request) => {
   const requestId = validRequestId(payload.requestId);
   const providerAttempts = getProviderAttempts();
   const chatPricingConfig = parseChatPricingConfig(Deno.env.get("HEY_CHAT_PRICING_JSON") || "");
+  const requestedProfile = parseRoutingProfile(payload.routingProfile);
+  if (requestedProfile.status === "invalid") {
+    return jsonResponse({ error: "The selected routing profile is invalid", code: "provider_profile_invalid" }, 400);
+  }
   const providerSelection = resolveProviderSelection(payload.providerSelection, providerAttempts, chatPricingConfig);
   if (providerSelection.status === "invalid") {
     return jsonResponse({ error: "The selected provider and model are invalid", code: "provider_selection_invalid" }, 400);
@@ -303,8 +328,23 @@ Deno.serve(async (request) => {
   if (fusionRequested && providerSelection.status === "selected") {
     return jsonResponse({ error: "Choose either a specific model or Fusion for this request", code: "provider_selection_conflict" }, 400);
   }
+  if (fusionRequested && requestedProfile.profile !== "automatic") {
+    return jsonResponse({ error: "Choose either Fusion or an automatic routing profile", code: "provider_selection_conflict" }, 400);
+  }
   if (providerSelection.status === "unavailable") {
     return jsonResponse({ error: "That provider model is no longer configured. Refresh the model list and choose another option.", code: "provider_model_unavailable" }, 503);
+  }
+  if (providerSelection.status === "selected" && requestedProfile.profile !== "automatic") {
+    return jsonResponse({ error: "Choose either a specific model or an automatic routing profile", code: "provider_selection_conflict" }, 400);
+  }
+
+  const accountEntitlements = normalizeProviderEntitlements(profile.entitlements);
+  const entitledAttempts = filterEntitledProviderAttempts(providerAttempts, accountEntitlements);
+  if (payload.operation == null && !accountEntitlements?.includes("provider.remote")) {
+    return jsonResponse({ error: "Your account is not entitled to use remote chat providers", code: "provider_entitlement_required" }, 403);
+  }
+  if (providerSelection.status === "selected" && !isProviderEntitled(profile.entitlements, providerSelection.attempt.id)) {
+    return jsonResponse({ error: "Your account is not entitled to use this provider", code: "provider_entitlement_required" }, 403);
   }
 
   if (payload.operation === "vision") {
@@ -669,11 +709,11 @@ Deno.serve(async (request) => {
   } else {
     let providerResult;
     try {
-      const pricedAttempts = providerAttempts.filter((attempt) => chatPricingConfig?.providers.some((item) =>
+      const pricedAttempts = orderProviderAttemptsForProfile(entitledAttempts.filter((attempt) => chatPricingConfig?.providers.some((item) =>
         item.providerId === attempt.id && item.modelId === attempt.model
-      ));
+      )), chatPricingConfig, requestedProfile.profile);
       if (!chatPricingConfig || !pricedAttempts.length) {
-        return jsonResponse({ error: "No provider with valid pricing is configured for HEY", code: "provider_unavailable" }, 503);
+        return jsonResponse({ error: "No provider with a server key, valid price, and account entitlement is configured for HEY", code: "provider_unavailable" }, 503);
       }
       providerResult = await callConfiguredProvider({
         messages,
@@ -682,6 +722,18 @@ Deno.serve(async (request) => {
         pricingConfig: chatPricingConfig,
         selected: providerSelection.status === "selected" ? providerSelection : undefined,
         signal: request.signal,
+        authorizeProvider: async ({ providerId, signal }) => {
+          if (signal?.aborted) throw new DOMException("The provider request was cancelled.", "AbortError");
+          let latestProfileQuery = supabase.from("profiles").select("entitlements").eq("id", user.id);
+          if (signal) latestProfileQuery = latestProfileQuery.abortSignal(signal);
+          const { data: latestProfile, error: latestProfileError } = await latestProfileQuery.maybeSingle();
+          if (latestProfileError || !latestProfile) {
+            throw Object.assign(new Error("Account provider permission could not be revalidated"), { providerAuthorizationUnavailable: true });
+          }
+          const currentEntitlements = normalizeProviderEntitlements(latestProfile.entitlements);
+          if (!currentEntitlements) throw Object.assign(new Error("Account provider permission could not be revalidated"), { providerAuthorizationUnavailable: true });
+          return isProviderEntitled(currentEntitlements, providerId);
+        },
         appUrl: Deno.env.get("APP_URL") || "http://localhost:5173",
       });
     } catch (error) {
@@ -691,6 +743,25 @@ Deno.serve(async (request) => {
       if (error?.providerBudgetExhausted) {
         return jsonResponse({ error: "This request exceeds the configured model budget. Shorten it or choose another model.", code: "provider_budget_exhausted" }, 409);
       }
+      if (error?.providerEntitlementDenied) {
+        return jsonResponse({ error: "Your account is not entitled to use this provider", code: "provider_entitlement_required" }, 403);
+      }
+      if (error?.providerAuthorizationUnavailable) {
+        return jsonResponse({ error: "Your provider access could not be revalidated; no answer was delivered", code: "account_permissions_unavailable" }, 503);
+      }
+      if (error?.providerRateLimited) {
+        const retryAfterSeconds = Math.max(1, Math.min(3600, Number(error.retryAfterSeconds) || 1));
+        return jsonResponse({ error: "The provider is temporarily rate limited. Try again shortly.", code: "provider_rate_limited", retryAfterSeconds }, 429, { "Retry-After": String(retryAfterSeconds) });
+      }
+      if (error?.providerHttpStatus === 401) {
+        return jsonResponse({ error: "The configured provider credential was rejected. HEY administrators need to check the server credential.", code: "provider_credentials_rejected" }, 503);
+      }
+      if (error?.providerHttpStatus === 403) {
+        return jsonResponse({ error: "The configured provider denied access. HEY administrators need to check the provider account and model permissions.", code: "provider_access_rejected" }, 503);
+      }
+      if (error?.providerHttpStatus === 404) {
+        return jsonResponse({ error: "The configured provider model is unavailable. HEY administrators need to check the server model setting.", code: "provider_model_unavailable" }, 503);
+      }
       console.error("HEY provider error", error);
       return providerSelection.status === "selected"
         ? jsonResponse({ error: "The selected provider could not complete this request. Choose another configured model or Automatic.", code: "provider_request_unavailable" }, 503)
@@ -698,6 +769,10 @@ Deno.serve(async (request) => {
     }
     response = extractProviderText(providerResult.data);
     if (!response) return jsonResponse({ error: "HEY received an empty response" }, 502);
+    if (request.signal.aborted) return jsonResponse({ error: "The provider request was cancelled", code: "request_cancelled" }, 499);
+    const { data: { user: verifiedUser }, error: verificationError } = await supabase.auth.getUser(token);
+    if (request.signal.aborted) return jsonResponse({ error: "The provider request was cancelled", code: "request_cancelled" }, 499);
+    if (verificationError || verifiedUser?.id !== user.id) return jsonResponse({ error: "Authentication required" }, 401);
     providerMetadata = { model: providerResult.model, provider: providerResult.providerId, costUsd: providerResult.costUsd };
   }
 

@@ -59,8 +59,9 @@ function ChatWorkspace() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
-  const [providerCatalog, setProviderCatalog] = useState({ status: "loading", providers: [], budgetUsd: null });
+  const [providerCatalog, setProviderCatalog] = useState({ status: "loading", providers: [], profiles: [], budgetUsd: null });
   const [providerSelection, setProviderSelection] = useState(null);
+  const [providerProfile, setProviderProfile] = useState("automatic");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatError, setChatError] = useState("");
   const [conversationsLoading, setConversationsLoading] = useState(true);
@@ -77,22 +78,24 @@ function ChatWorkspace() {
     const controller = new AbortController();
     let active = true;
     if (!user?.id) {
-      setProviderCatalog({ status: "unavailable", providers: [], budgetUsd: null });
+      setProviderCatalog({ status: "unavailable", providers: [], profiles: [], budgetUsd: null });
       setProviderSelection(null);
+      setProviderProfile("automatic");
       return () => controller.abort();
     }
-    setProviderCatalog({ status: "loading", providers: [], budgetUsd: null });
+    setProviderCatalog({ status: "loading", providers: [], profiles: [], budgetUsd: null });
     getHEYProviderCatalog({ signal: controller.signal }).then((catalog) => {
       if (!active) return;
       const providers = catalog.providers.filter((provider) =>
         provider && typeof provider.providerId === "string" && typeof provider.modelId === "string" && provider.state === "configured"
       );
-      setProviderCatalog({ status: providers.length ? "configured" : "unavailable", providers, budgetUsd: catalog.budgetUsd });
+      const profiles = catalog.profiles.filter((profile) => ["automatic", "lower_cost"].includes(profile.id));
+      setProviderCatalog({ status: catalog.state === "permission_required" ? "permission_required" : providers.length ? "configured" : "unavailable", providers, profiles, budgetUsd: catalog.budgetUsd });
       setProviderSelection((current) => current && providers.some((provider) =>
         provider.providerId === current.providerId && provider.modelId === current.modelId
       ) ? current : null);
     }).catch(() => {
-      if (active && !controller.signal.aborted) setProviderCatalog({ status: "error", providers: [], budgetUsd: null });
+      if (active && !controller.signal.aborted) setProviderCatalog({ status: "error", providers: [], profiles: [], budgetUsd: null });
     });
     return () => {
       active = false;
@@ -252,6 +255,7 @@ function ChatWorkspace() {
         confirmed,
         fusion: requestedFusion,
         providerSelection: requestedFusion ? null : providerSelection,
+        providerProfile: requestedFusion ? "automatic" : providerProfile,
         signal: controller.signal,
         onExecutionResult: (execution, originalMessage) => {
           if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
@@ -542,7 +546,15 @@ function ChatWorkspace() {
                 }}
                 providerCatalog={providerCatalog}
                 providerSelection={providerSelection}
-                setProviderSelection={setProviderSelection}
+                setProviderSelection={(selection) => {
+                  setProviderSelection(selection);
+                  if (selection) setProviderProfile("automatic");
+                }}
+                providerProfile={providerProfile}
+                setProviderProfile={(nextProfile) => {
+                  setProviderProfile(nextProfile);
+                  if (nextProfile !== "automatic") setProviderSelection(null);
+                }}
                 onVoiceCall={toggleVoiceCall}
                 onDictationInsert={insertDictationTranscript}
               />
