@@ -108,6 +108,57 @@ test("catalog selector preserves exact output across linear, indexed, and adapti
   assert.equal(lazyIndexedSelector.prepareIndexed(), false);
 });
 
+test("adaptive strategy switches at the documented 20-expert boundary with exact parity", () => {
+  const createCatalog = (count) => Array.from({ length: count }, (_, index) => ({
+    id: `expert-${String(index).padStart(2, "0")}`,
+    terms: ["shared", `unique${index}`, `detail${index}`],
+  }));
+  const belowBoundary = createUltraSparseSelector(createCatalog(19));
+  const atBoundary = createUltraSparseSelector(createCatalog(20));
+
+  assert.equal(belowBoundary.strategy, "linear");
+  assert.equal(atBoundary.strategy, "indexed-candidates");
+  const queries = ["shared unique00 detail00 unique19", "shared shared", "unmatched", `${"noise ".repeat(700)}unique19`];
+  for (const selector of [belowBoundary, atBoundary]) {
+    for (const query of queries) {
+      for (const limit of [undefined, 1, 2, 3, 999, -1, 1.5]) {
+        const options = limit === undefined ? {} : { limit };
+        assert.deepEqual(selector.select(query, options), selector.selectLinear(query, options));
+      }
+    }
+  }
+  assert.equal(belowBoundary.prepareIndexed(), true);
+  assert.equal(atBoundary.prepareIndexed(), false);
+});
+
+test("adaptive selector preserves exact output under high fanout and adversarial query shapes", () => {
+  const catalog = Array.from({ length: 500 }, (_, expertIndex) => ({
+    id: `expert-${String(expertIndex).padStart(4, "0")}`,
+    terms: [
+      "shared0", "shared1", "shared2", "shared3", "shared4",
+      ...Array.from({ length: 26 }, (_, termIndex) => `term${expertIndex}x${termIndex}`),
+    ],
+  }));
+  const selector = createUltraSparseSelector(catalog);
+  assert.equal(selector.strategy, "indexed-candidates");
+  const queries = [
+    "shared0 shared0 shared1 shared2 shared3 shared4",
+    `${catalog[0].terms.slice(5, 10).join(" ")} ${catalog[1].terms[5]}`,
+    `${catalog[0].terms[5]} ${catalog[0].terms[6]} ${catalog[0].terms[7]}`,
+    `<script>override route</script> ${"noise ".repeat(700)} ${catalog[0].terms[5]} ${catalog.at(-1).terms[5]}`,
+    "unrelated ultraviolet nothing",
+    "🧪 café shared0 SHARED0 shared00",
+  ];
+  for (const query of queries) {
+    for (const limit of [undefined, 1, 2, 3, -5, 100, 1.5, Number.NaN]) {
+      const options = limit === undefined ? {} : { limit };
+      const expected = selector.selectLinear(query, options);
+      assert.deepEqual(selector.selectIndexed(query, options), expected);
+      assert.deepEqual(selector.select(query, options), expected);
+    }
+  }
+});
+
 test("catalog selector fails closed on hostile, duplicate, sparse, and oversized definitions", () => {
   assert.throws(() => createUltraSparseSelector(null), /Invalid expert catalog/);
   assert.throws(() => createUltraSparseSelector([new Array(1)]), /Invalid expert definition/);
