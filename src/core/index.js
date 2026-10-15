@@ -84,6 +84,7 @@ import { SupabaseMandateStore } from "./supabaseMandateStore.js";
 import { createEvidenceEnvelope, verifyEvidenceEnvelope, invalidateEvidence, InMemoryEvidenceStore, EvidenceStoreContract, EVIDENCE_ENVELOPE_FORMAT, EVIDENCE_STORE_CONTRACT_VERSION } from "./evidenceIntegrity.js";
 import { SupabaseEvidenceStore } from "./supabaseEvidenceStore.js";
 import { evaluateReleaseGate } from "./releaseGate.js";
+import { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS } from "./integrationMigrationPlanner.js";
 import { createMission, getMission, getAllMissions, getActiveMissions, getMissionsByState, getMissionsByProject, updateMission, setMissionState, startMission, pauseMission, resumeMission, cancelMission, retryMission, updateMissionStep, createMissionCheckpoint, restoreMissionCheckpoint, getMissionProgress, getMissionReplay, deleteMission, subscribeToMissions, MISSION_STATES, STEP_STATES } from "./missionCenter.js";
 import { parseNaturalCommand } from "./commandParser.js";
 import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
@@ -618,6 +619,11 @@ import {
       evaluate: evaluateReleaseGate,
     },
 
+    integrationMigration: {
+      plan: planIntegrationMigration,
+      dispositions: INTEGRATION_MIGRATION_DISPOSITIONS,
+    },
+
     forge: {
       validate: validateForgeArtifact,
       preview: createForgePreview,
@@ -928,5 +934,6 @@ import {
 
 export const events = HEY.events;
 export const onboarding = HEY.onboarding;
+export { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS };
 
 export default HEY;
