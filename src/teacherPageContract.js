@@ -58,6 +58,17 @@ export function teacherJourneyPersistenceMatches(journey, { accountScope, worksp
     && !hasTeacherAnswerKeyField(saved.studentArtifact.content);
 }
 
+export function teacherJourneyMatchesPreview(preview, journey) {
+  return PERSISTENCE_CONTRACTS.every(([key]) => {
+    const before = preview?.[key];
+    const after = journey?.[key];
+    return before && after
+      && JSON.stringify(before.content) === JSON.stringify(after.content)
+      && before.metadata?.safety?.reviewRequired === after.metadata?.safety?.reviewRequired
+      && JSON.stringify(before.metadata?.safety?.reviewReasons || []) === JSON.stringify(after.metadata?.safety?.reviewReasons || []);
+  });
+}
+
 export function teacherExportsAreComplete(exportsByAudience) {
   const expected = [
     ["lesson", "lesson-plan.md"],

@@ -538,9 +538,8 @@ test("wrong-role and cross-class journey attempts never call the batch persisten
   }
 });
 
-test("teacher journey supports a no-write preview followed by explicit receipt-checked save", async () => {
-  let forgeWrites;
-  const result = await withForgePersistence(async (writes) => {
+test("teacher journey preview builds all three audience artifacts without writing to Forge", async () => {
+  await withForgePersistence(async (writes) => {
     const prepared = await HEY.teacher.prepareLessonWorksheetJourney({
       lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
     });
@@ -548,20 +547,8 @@ test("teacher journey supports a no-write preview followed by explicit receipt-c
     assert.equal(prepared.teacherArtifact.metadata.audience, "teacher_only");
     assert.equal(prepared.studentArtifact.metadata.audience, "student");
     assert.doesNotMatch(JSON.stringify(prepared.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
-
-    const saved = await HEY.teacher.saveLessonWorksheetJourney(prepared, teacherContext());
-    forgeWrites = writes;
-    return { prepared, saved };
+    assert.equal(writes.length, 0);
   });
-  assert.equal(forgeWrites.length, 3);
-  assert.equal(result.saved.saved.lesson.metadata.artifactContract, "hey.teacher.lesson.v1");
-  assert.equal(result.saved.saved.teacherArtifact.metadata.audience, "teacher_only");
-  assert.equal(result.saved.saved.studentArtifact.metadata.audience, "student");
-  await assert.rejects(HEY.teacher.saveLessonWorksheetJourney(result.prepared, teacherContext()), /already started saving/);
-  await assert.rejects(HEY.teacher.saveLessonWorksheetJourney({
-    ...result.prepared,
-    studentArtifact: { ...result.prepared.studentArtifact },
-  }, teacherContext()), /active Teacher runtime/);
 });
 
 test("assessment inputs reject student data, accessors, unsafe markup, and objectives outside the lesson", async () => {

@@ -6,7 +6,7 @@ import { getAccountScope } from "./core/accountScope.js";
 import { useAuth } from "./AuthContext.jsx";
 import { isSupabaseConfigured, supabaseClient } from "./lib/supabase.js";
 import { listRecords } from "./lib/heyRecords.js";
-import { hasTeacherAnswerKeyField, teacherExportsAreComplete, teacherJourneyPersistenceMatches, teacherPreparedJourneyMatches } from "./teacherPageContract.js";
+import { hasTeacherAnswerKeyField, teacherExportsAreComplete, teacherJourneyMatchesPreview, teacherJourneyPersistenceMatches, teacherPreparedJourneyMatches } from "./teacherPageContract.js";
 import "./TeacherPage.css";
 
 const GRADE_BANDS = ["pre-k", "kindergarten", "1-2", "3-5", "6-8", "9-12", "adult", "mixed"];
@@ -124,7 +124,7 @@ export default function TeacherPage() {
         setWorkspaceId(availableProjects[0]?.id || "");
         setAccess({
           status: "ready",
-          message: `Teacher account and authorized classes verified; ${availableProjects.length} existing project${availableProjects.length === 1 ? "" : "s"} loaded. Each Forge save is checked separately.`,
+          message: `Teacher account and authorized classes verified; ${availableProjects.length} existing project${availableProjects.length === 1 ? "" : "s"} loaded. Journey saves use one atomic Forge transaction.`,
         });
       } catch (loadError) {
         if (!cancelled && accountRef.current === accountId) {
@@ -235,8 +235,9 @@ export default function TeacherPage() {
         lesson,
         assessment,
         context: { ...context, journeyCreatedAt: new Date().toISOString() },
-        journeyId: crypto.randomUUID(),
+        journeyId: globalThis.crypto?.randomUUID?.(),
       };
+      if (!journeySaveRequest.journeyId) throw new Error("This browser cannot create a recoverable save ID. Use an updated browser and retry.");
       const journey = await HEY.teacher.prepareLessonWorksheetJourney({ lesson, assessment, context });
       if (accountRef.current !== accountId || getAccountScope() !== accountScope) {
         throw new Error("Your account changed while the preview was being prepared. It was discarded.");
@@ -263,7 +264,7 @@ export default function TeacherPage() {
   }
 
   async function savePreparedJourney() {
-    if (!preparedJourney || !journeySaveRequest || !journeyContext || !["preview", "partial-error"].includes(status) || saveInFlightRef.current) return;
+    if (!preparedJourney || !journeySaveRequest || !journeyContext || !["preview", "recovery-error"].includes(status) || saveInFlightRef.current) return;
     saveInFlightRef.current = true;
     setStatus("saving");
     setError("");
@@ -286,15 +287,22 @@ export default function TeacherPage() {
       if (!teacherJourneyPersistenceMatches(journey, journeyContext)) {
         throw new Error("Forge did not return matching persistence confirmations for all three artifacts.");
       }
+      if (!teacherJourneyMatchesPreview(preparedJourney, journey)) {
+        setStatus("recovery-error");
+        setJourneySaveRequest(null);
+        setError("Forge atomically saved the journey, but the returned lesson set differed from the preview. Review the saved artifacts in Forge before exporting.");
+        return;
+      }
       setPersistenceConfirmed(true);
       setSavedJourney(journey);
       setPreparedJourney(null);
+      setJourneySaveRequest(null);
       if (safetyReasons.length) setStatus("review");
       else setStatus("saved");
     } catch (saveError) {
       if (accountRef.current === accountId) {
         if (saveStarted) {
-          setStatus("partial-error");
+          setStatus("recovery-error");
           setError(`Forge did not confirm the atomic save. The same journey can be retried safely using its stable recovery IDs. ${saveError.message || ""}`.trim());
         } else {
           setStatus("preview");
@@ -323,7 +331,7 @@ export default function TeacherPage() {
   function discardPreview() {
     if (status !== "preview") return;
     setPreparedJourney(null);
-      setJourneySaveRequest(null);
+    setJourneySaveRequest(null);
     setJourneyContext(null);
     setSafetyReasons([]);
     setStatus("idle");
@@ -363,7 +371,7 @@ export default function TeacherPage() {
 
   const visibleExports = outputAccountId === accountId && access.status === "ready" ? exportsByAudience : null;
   const pageBusy = status === "preparing" || status === "saving" || status === "exporting";
-  const formLocked = pageBusy || ["preview", "review", "saved", "complete", "partial-error", "export-error"].includes(status);
+  const formLocked = pageBusy || ["preview", "review", "saved", "complete", "recovery-error", "export-error"].includes(status);
 
   return (
     <main className="teacher-page" aria-labelledby="teacher-page-title">
@@ -373,7 +381,7 @@ export default function TeacherPage() {
       </header>
 
       {status === "preparing" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Building a local preview. Nothing is being saved.</p>}
-      {status === "saving" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Saving three artifacts and checking Forge receipts…</p>}
+      {status === "saving" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Saving the three-artifact batch in one Forge transaction…</p>}
       {status === "exporting" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Checking teacher and student exports…</p>}
 
       {access.status === "checking" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> {access.message}</p>}
@@ -477,8 +485,8 @@ export default function TeacherPage() {
           )}
 
           {status === "export-error" && savedJourney && <div className="teacher-page__submit-row"><button type="button" className="teacher-page__primary" onClick={() => { setStatus(safetyReasons.length ? "review" : "saved"); setError(""); }}><RotateCw size={16} aria-hidden="true" /> Retry exports</button></div>}
-            {status === "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p><button type="button" className="teacher-page__secondary" onClick={savePreparedJourney} disabled={pageBusy}>Retry the same journey save</button><Link to="/forge">Open Forge to inspect the selected project</Link></div>}
-          {error && status !== "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p></div>}
+            {status === "recovery-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p>{journeySaveRequest && <button type="button" className="teacher-page__secondary" onClick={savePreparedJourney} disabled={pageBusy}>Retry the same journey save</button>}<Link to="/forge">Open Forge to inspect the selected project</Link></div>}
+          {error && status !== "recovery-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p></div>}
           {status === "saved" && persistenceConfirmed && <p className="teacher-page__success" role="status"><Check size={16} aria-hidden="true" /> Forge confirmed the lesson, teacher answer key, and student worksheet.</p>}
           {status === "complete" && persistenceConfirmed && <p className="teacher-page__success" role="status"><Check size={16} aria-hidden="true" /> Forge confirmed the lesson, teacher answer key, and student worksheet.</p>}
         </>

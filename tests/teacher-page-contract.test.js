@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { hasTeacherAnswerKeyField, studentExportHasTeacherKeyMarker, teacherExportsAreComplete, teacherJourneyPersistenceMatches, teacherPreparedJourneyMatches } from "../src/teacherPageContract.js";
+import { hasTeacherAnswerKeyField, studentExportHasTeacherKeyMarker, teacherExportsAreComplete, teacherJourneyMatchesPreview, teacherJourneyPersistenceMatches, teacherPreparedJourneyMatches } from "../src/teacherPageContract.js";
 
 const [page, routes, appNavigation, legacyNavigation] = await Promise.all([
   readFile(new URL("../src/TeacherPage.jsx", import.meta.url), "utf8"),
@@ -32,13 +32,15 @@ test("Teacher route and navigation reach a fresh server-claim guarded workflow",
   assert.match(page, /supabaseClient\.auth\.getUser\(\)/);
   assert.match(page, /isSupabaseConfigured/);
   assert.match(page, /service-unavailable/);
-  assert.match(page, /Each Forge save is checked separately/);
+  assert.match(page, /Journey saves use one atomic Forge transaction/);
   assert.match(page, /claims\.hey_role !== "teacher"/);
   assert.match(page, /claims\.hey_account_scope !== accountScope/);
   assert.match(page, /claims\.hey_class_ids/);
   assert.match(page, /listRecords\(teacher\.userId, "project"\)/);
   assert.match(page, /HEY\.teacher\.prepareLessonWorksheetJourney/);
-  assert.match(page, /HEY\.teacher\.saveLessonWorksheetJourney/);
+  assert.match(page, /HEY\.teacher\.createLessonWorksheetJourney\(journeySaveRequest\)/);
+  assert.match(page, /Retry the same journey save/);
+  assert.match(page, /teacherJourneyMatchesPreview/);
   assert.match(page, /saveInFlightRef\.current/);
   assert.match(page, /Save all three to Forge/);
   assert.match(page, /Build lesson preview/);
@@ -72,6 +74,20 @@ test("Forge output appears only after three matching persistence receipts and co
   assert.match(page, /teacherJourneyPersistenceMatches\(journey, journeyContext\)/);
   assert.match(page, /teacherExportsAreComplete\(allExports\)/);
   assert.match(page, /outputAccountId === accountId && access.status === "ready"/);
+});
+
+test("atomic save must return the same content and safety review state that the teacher previewed", () => {
+  const preview = preparedJourney();
+  const saved = preparedJourney();
+  for (const key of ["lesson", "teacherArtifact", "studentArtifact"]) {
+    preview[key].content = { details: [key] };
+    saved[key].content = { details: [key] };
+    preview[key].metadata.safety = { reviewRequired: false, reviewReasons: [] };
+    saved[key].metadata.safety = { reviewRequired: false, reviewReasons: [] };
+  }
+  assert.equal(teacherJourneyMatchesPreview(preview, saved), true);
+  saved.teacherArtifact.content.details.push("changed after preview");
+  assert.equal(teacherJourneyMatchesPreview(preview, saved), false);
 });
 
 test("unsaved previews are bound to the active account, project, and class and reject private-key leakage", () => {
