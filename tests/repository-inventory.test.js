@@ -17,7 +17,9 @@ async function withRepository(run) {
     git(["config", "user.name", "Inventory Test"]);
     git(["config", "user.email", "inventory@example.invalid"]);
     writeFileSync(path.join(root, "tracked.txt"), "original bytes\n");
-    git(["add", "tracked.txt"]);
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "fixture", dependencies: { alpha: "^1.0.0" } }));
+    writeFileSync(path.join(root, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": { dependencies: { alpha: "^1.0.0" } } } }));
+    git(["add", "tracked.txt", "package.json", "package-lock.json"]);
     git(["commit", "--quiet", "-m", "fixture"]);
     await run(root, git);
   } finally {
@@ -37,13 +39,15 @@ test("repository discovery maps tracked, dirty, and untracked names to a dry-run
 
     assert.deepEqual(after, before);
     assert.deepEqual(readFileSync(path.join(root, "tracked.txt")), original);
-    assert.deepEqual(inventory.repository.map(({ name }) => name), ["tracked.txt", "untracked.txt"]);
+    assert.deepEqual(inventory.repository.map(({ name }) => name), ["package-lock.json", "package.json", "tracked.txt", "untracked.txt"]);
     assert.deepEqual(inventory.repositoryState, { dirty: true, untracked: true });
     assert.deepEqual(result.repositoryState, { dirty: true, untracked: true, preservationRequired: true, stateKnown: true });
     assert.equal(result.mode, "dry_run");
-    assert.equal(result.inventoryCounts.repository, 2);
+    assert.equal(result.inventoryCounts.repository, 4);
     assert.equal(result.inventoryCounts.packages, 0);
     assert.ok(result.dispositions.every(({ disposition }) => disposition === "Preserve"));
+    assert.equal(result.evidence.entries.find(({ category }) => category === "package_manifest").gitState, "clean");
+    assert.equal(result.evidence.manifestLockDiff[0].status, "direct_declarations_match_exactly_by_name_scope_and_specifier");
   });
 });
 

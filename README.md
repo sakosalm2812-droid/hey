@@ -105,6 +105,15 @@ Sensitive operations remain behind the existing permission and audit layers;
 the verified execution loop stops after three attempts and never treats an
 unverified result as success.
 
+## Repository evidence inventory
+
+Run `node scripts/repository-inventory.mjs` for a read-only dry-run plan and
+bounded metadata report over supported package manifests, JSON contract
+candidates, dependencies, and migration paths. The command preserves the
+working tree and does not execute migrations or package scripts. See
+[`docs/REPOSITORY_INVENTORY.md`](docs/REPOSITORY_INVENTORY.md) for the evidence
+scope and limits.
+
 ## Checks
 
 ```text

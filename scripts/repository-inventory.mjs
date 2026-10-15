@@ -3,6 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { planIntegrationMigration } from "../src/core/integrationMigrationPlanner.js";
+import { buildRepositoryEvidenceReport } from "./repository-evidence.mjs";
 
 const MAX_REPOSITORY_FILES = 20_000;
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
@@ -175,6 +176,7 @@ export function discoverRepositoryInventory({ cwd = process.cwd(), gitExecutable
 
   return {
     repositoryRoot,
+    status,
     inventory: {
       repository,
       packages: [],
@@ -189,7 +191,13 @@ export function discoverRepositoryInventory({ cwd = process.cwd(), gitExecutable
 
 export async function planRepositoryInventory(options) {
   const discovered = discoverRepositoryInventory(options);
-  return { ...await planIntegrationMigration({ inventory: discovered.inventory }), repositoryRoot: discovered.repositoryRoot };
+  const plan = await planIntegrationMigration({ inventory: discovered.inventory });
+  const evidence = buildRepositoryEvidenceReport({
+    repositoryRoot: discovered.repositoryRoot,
+    files: discovered.inventory.repository.map(({ name }) => name),
+    status: discovered.status,
+  });
+  return { ...plan, repositoryRoot: discovered.repositoryRoot, evidence };
 }
 
 const thisFile = fileURLToPath(import.meta.url);
