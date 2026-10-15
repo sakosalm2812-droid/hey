@@ -53,7 +53,10 @@ function generateSampleId() {
 }
 
 export class GestureEngine {
-  constructor() {
+  constructor({ detectionTimeoutMs = 1500 } = {}) {
+    if (!Number.isSafeInteger(detectionTimeoutMs) || detectionTimeoutMs < 1 || detectionTimeoutMs > 10_000) {
+      throw new RangeError("Gesture detection timeout must be between 1 and 10000 milliseconds.");
+    }
     this.profiles = new Map();
     this.bindings = new Map();
     this.customGestures = new Map();
@@ -69,6 +72,7 @@ export class GestureEngine {
     this.activeProfileId = null;
     this.frameCanvas = null;
     this.lastFrameAt = 0;
+    this.detectionTimeoutMs = detectionTimeoutMs;
     this.listeners = new Set();
     this.load();
   }
@@ -395,7 +399,11 @@ export class GestureEngine {
           }
         } catch (error) {
           if (!signal.aborted) {
-            this.notify("recognition_adapter_error", { profileId, error: error?.message || "Gesture adapter failed." });
+            this.notify("recognition_adapter_error", {
+              profileId,
+              code: error?.code || "adapter_error",
+              error: error?.message || "Gesture adapter failed.",
+            });
             this.stopRecognition("adapter_error");
           }
           return;
@@ -424,7 +432,29 @@ export class GestureEngine {
     if (!context) return null;
     context.drawImage(video, 0, 0, 640, 480);
     const frame = context.getImageData(0, 0, 640, 480);
-    const result = await this.recognitionAdapter.detect(frame, profile, { signal, maxFrameSize: { width: 640, height: 480 } });
+    let timeoutId;
+    let abortHandler;
+    let result;
+    try {
+      result = await Promise.race([
+        Promise.resolve(this.recognitionAdapter.detect(frame, profile, { signal, maxFrameSize: { width: 640, height: 480 } })),
+        new Promise((resolve) => {
+          abortHandler = () => resolve(null);
+          signal?.addEventListener?.("abort", abortHandler, { once: true });
+          if (signal?.aborted) abortHandler();
+        }),
+        new Promise((_, reject) => {
+          timeoutId = globalThis.setTimeout(() => {
+            const error = new Error("Gesture detector did not respond before the frame deadline.");
+            error.code = "adapter_timeout";
+            reject(error);
+          }, this.detectionTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId);
+      if (abortHandler) signal?.removeEventListener?.("abort", abortHandler);
+    }
     if (signal?.aborted || !result || typeof result !== "object" || Array.isArray(result)) return null;
     const prototype = Object.getPrototypeOf(result);
     const id = Object.getOwnPropertyDescriptor(result, "id");
