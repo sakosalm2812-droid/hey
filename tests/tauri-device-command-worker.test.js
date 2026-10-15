@@ -99,6 +99,9 @@ test("worker executes supported local capabilities and acknowledges only verifie
   });
   assert.deepEqual(await worker.runOnce(), { state: "processed", commandId });
   assert.deepEqual(executions, [{ capability: "browser.open_url", input: command.envelope.input, action: "computer.open_url", commandId }]);
+  const renewIndex = transport.calls.findIndex(([operation]) => operation === "renew");
+  const beginIndex = transport.calls.findIndex(([operation]) => operation === "begin");
+  assert.equal(renewIndex + 1, beginIndex);
   assert.equal(transport.calls.at(-1)[0], "ack");
   assert.equal(transport.calls.at(-2)[0], "complete");
 
@@ -184,14 +187,15 @@ test("worker rejects a stale or revoked lease before local execution", async () 
   assert.equal(transport.calls.some(([operation]) => operation === "ack" || operation === "fail"), false);
 });
 
-test("worker does not reach the adapter when the lease is lost after its execution reservation", async () => {
+test("worker renews a live lease directly before reservation and skips reservation when renewal fails", async () => {
   const transport = transportWith({ claims: [{ command, leaseToken }], renewed: false });
   let executions = 0;
   const worker = createDeviceCommandWorker({ deviceId, transport, adapter: { ...adapter, async execute() { executions += 1; return { success: true, verified: true }; } } });
   await worker.runOnce();
   assert.equal(executions, 0);
-  assert.equal(transport.calls.some(([operation]) => operation === "begin"), true);
+  assert.equal(transport.calls.some(([operation]) => operation === "begin"), false);
   assert.equal(transport.calls.some(([operation]) => operation === "ack"), false);
+  assert.equal(transport.calls.at(-2)[0], "renew");
   assert.equal(transport.calls.at(-1)[0], "fail");
 });
 

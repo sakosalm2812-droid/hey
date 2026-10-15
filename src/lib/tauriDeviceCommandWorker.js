@@ -196,9 +196,27 @@ export function createDeviceCommandWorker({
       return;
     }
 
+    if (stopping) {
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
+    status("lease_preflight");
+    const preflightKey = makeIdempotencyKey();
+    if (typeof preflightKey !== "string" || !preflightKey.trim() || preflightKey.length > 128) {
+      status("lease_preflight_rejected");
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
+    const leaseReady = await transport.renew(deviceId, command.commandId, leaseToken, preflightKey, leaseMs);
+    if (!leaseReady || stopping) {
+      status("lease_preflight_rejected");
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
     const reservation = await transport.beginExecution(deviceId, command.commandId, leaseToken);
     if (!safeRecord(reservation) || typeof reservation.execute !== "boolean"
-      || typeof reservation.alreadyVerified !== "boolean" || typeof reservation.ambiguous !== "boolean"
+      || typeof reservation.alreadyVerified !== "boolean"
+      || typeof reservation.ambiguous !== "boolean"
       || [reservation.execute, reservation.alreadyVerified, reservation.ambiguous].filter(Boolean).length > 1) {
       status("execution_reservation_invalid");
       return;
@@ -218,23 +236,6 @@ export function createDeviceCommandWorker({
     }
     if (!reservation.execute) {
       status("execution_reservation_rejected");
-      return;
-    }
-    if (stopping) {
-      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
-      return;
-    }
-    status("lease_preflight");
-    const preflightKey = makeIdempotencyKey();
-    if (typeof preflightKey !== "string" || !preflightKey.trim() || preflightKey.length > 128) {
-      status("lease_preflight_rejected");
-      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
-      return;
-    }
-    const leaseReady = await transport.renew(deviceId, command.commandId, leaseToken, preflightKey, leaseMs);
-    if (!leaseReady || stopping) {
-      status("lease_preflight_rejected");
-      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
       return;
     }
 
