@@ -17,7 +17,7 @@ All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`.
 
 | Chat | Branch | Local worktree | State |
 |---:|---|---|---|
-| 01 | `codex/specialist-01-frontend-director` | `work/hey-specialists/01-frontend-director` | Active follow-up `/root/specialist_frontend_director`; latest commit `61edfaa`, uncommitted dictation UI and test files in this worktree |
+| 01 | `codex/specialist-01-frontend-director` | `work/hey-specialists/01-frontend-director` | First-wave complete, worker `2c9387d`, integrated at `90aec5e` |
 | 02 | `codex/specialist-02-spaces-onboarding` | `work/hey-specialists/02-spaces-onboarding` | Complete, commit `0f7cd74`, integrated at `79fffcd` |
 | 03 | `codex/specialist-03-tool-library` | `work/hey-specialists/03-tool-library` | Complete, commit `f7ef830`, integrated at `22b8c4c`; coordinator hardening `7834e96` |
 | 04 | `codex/specialist-04-edge-everywhere` | `work/hey-specialists/04-edge-everywhere` | Complete, commit `a5eed49`, integrated at `75470b4` |
@@ -26,8 +26,18 @@ All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`.
 | 07 | `codex/specialist-07-voiceos-control` | `work/hey-specialists/07-voiceos-control` | Complete `/root/specialist_voiceos_control`; worker `272e931`, integrated `3b28402`, coordinator hardening `539d9c1` |
 | 08 | `codex/specialist-08-teacher-experience` | `work/hey-specialists/08-teacher-experience` | Complete `/root/specialist_teacher_experience`; worker `7d225b3`, integrated `597a8ee` |
 | 09 | `codex/specialist-09-hey-one-models` | `work/hey-specialists/09-hey-one-models` | Complete `/root/specialist_hey_one_models`; worker `e95bd15` and follow-up `7124051`, integrated `1b4f2a4` and `6a75531` |
-| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | Active follow-up `/root/specialist_ultrasparse_research`; latest completed commit `49bc181`, integrated as `37b9cdc`; now comparing an indexed selector with the existing baseline |
-| 11 | `codex/specialist-11-fusion-models` | `work/hey-specialists/11-fusion-models` | Complete `/root/specialist_fusion_models`; worker `90005af` and attack fix `12a0bc2`, integrated `358d549` and `f73d65d` |
+| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | First-wave complete, worker `63b7e51`, integrated at `05d01d4` |
+| 11 | `codex/specialist-11-fusion-models` | `work/hey-specialists/11-fusion-models` | First-wave complete through authenticated Edge integration `830fc4f`, integrated at `357ddf1` |
+
+## Additional mission continuation workers
+
+These follow-up branches use the latest verified coordinator tree plus documentation checkpoint `eeffea1`; each was launched with GPT-6 Luna / High through collaboration agents. They are local and have not been pushed. They are not standalone Codex chat IDs.
+
+| Chat | Task reference | Branch | Local worktree | Starting SHA | Initial slice |
+|---:|---|---|---|---|---|
+| 01 | `/root/additional_01_frontend` | `codex/additional-01-frontend-director` | `work/hey-specialists/additional-01-frontend-director` | `eeffea1` | Explicit Fusion request control and honest denial/unconfigured states; ordinary chat stays default |
+| 02 | `/root/additional_02_spaces` | `codex/additional-02-spaces-onboarding` | `work/hey-specialists/additional-02-spaces-onboarding` | `eeffea1` | Account-safe natural-language Space preview/confirmation core contract |
+| 07 | `/root/additional_07_voiceos` | `codex/additional-07-voiceos-control` | `work/hey-specialists/additional-07-voiceos-control` | `eeffea1` | VoiceOS intent classes and confirmation preview contract; no OS side effects |
 
 ## Ready-to-paste startup prompts
 
