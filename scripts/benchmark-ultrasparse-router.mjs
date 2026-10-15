@@ -9,32 +9,54 @@ const workload = [
   "Plan the project schedule and prioritize the steps.",
   "Compare the study with the reference and write a summary.",
 ];
-const warmup = 2_000;
-const iterations = 50_000;
-const trials = 5;
+const smokeMode = process.argv.includes("--smoke");
+const warmup = smokeMode ? 20 : 2_000;
+const samplesPerTrial = smokeMode ? 50 : 10_000;
+const trials = smokeMode ? 1 : 5;
+const timerOverheadSamples = smokeMode ? 50 : 10_000;
 
-for (let index = 0; index < warmup; index += 1) selectUltraSparseExperts(workload[index % workload.length]);
-const elapsedSamplesNs = [];
-for (let trial = 0; trial < trials; trial += 1) {
-  const started = process.hrtime.bigint();
-  for (let index = 0; index < iterations; index += 1) selectUltraSparseExperts(workload[index % workload.length]);
-  elapsedSamplesNs.push(Number(process.hrtime.bigint() - started));
+function summarize(samplesNs) {
+  const sorted = [...samplesNs].sort((left, right) => left - right);
+  const percentile = (fraction) => sorted[Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)];
+  return {
+    samples: sorted.length,
+    p50Microseconds: percentile(0.50) / 1e3,
+    p95Microseconds: percentile(0.95) / 1e3,
+    p99Microseconds: percentile(0.99) / 1e3,
+  };
 }
-const sortedSamplesNs = [...elapsedSamplesNs].sort((left, right) => left - right);
-const medianNs = sortedSamplesNs[Math.floor(sortedSamplesNs.length / 2)];
+
+const selectionSamplesNs = [];
+for (let trial = 0; trial < trials; trial += 1) {
+  for (let index = 0; index < warmup; index += 1) selectUltraSparseExperts(workload[index % workload.length]);
+  for (let index = 0; index < samplesPerTrial; index += 1) {
+    const started = process.hrtime.bigint();
+    selectUltraSparseExperts(workload[(trial * samplesPerTrial + index) % workload.length]);
+    selectionSamplesNs.push(Number(process.hrtime.bigint() - started));
+  }
+}
+
+const emptyPairSamplesNs = [];
+for (let index = 0; index < timerOverheadSamples; index += 1) {
+  const started = process.hrtime.bigint();
+  emptyPairSamplesNs.push(Number(process.hrtime.bigint() - started));
+}
+
 const report = {
   benchmark: "HEY lexical ultrasparse routing prototype",
-  iterations,
-  warmup,
+  mode: smokeMode ? "smoke" : "benchmark",
+  samplesPerTrial,
+  warmupPerTrial: warmup,
   trials,
+  timerOverheadSamples,
   workloadCount: workload.length,
   workloadBytes: workload.reduce((sum, item) => sum + Buffer.byteLength(item), 0),
   selectionOnly: true,
   modelLoadingIncluded: false,
   inferenceIncluded: false,
-  medianTrialElapsedMs: medianNs / 1e6,
-  medianSelectionMicroseconds: medianNs / iterations / 1e3,
-  trialSelectionMicroseconds: elapsedSamplesNs.map((sample) => sample / iterations / 1e3),
+  perOperationSelectionLatency: summarize(selectionSamplesNs),
+  emptyTimerPairLatency: summarize(emptyPairSamplesNs),
+  timingMethod: "Each operation is bracketed by process.hrtime.bigint(); empty timer-pair samples estimate instrumentation overhead and are reported without subtraction.",
   node: process.version,
   platform: `${process.platform}-${process.arch}`,
   cpu: os.cpus()[0]?.model || "unknown",

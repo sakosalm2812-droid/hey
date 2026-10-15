@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createUltraSparsePlan, selectUltraSparseExperts } from "../src/core/ultrasparseRouter.js";
 import { clearProviders } from "../src/core/providerRegistry.js";
 
@@ -34,4 +36,20 @@ test("plan uses the canonical provider router and declares that no inference occ
   assert.ok(plan.providerPlan.attempts.length > 0);
   assert.equal(plan.inferencePerformed, false);
   clearProviders();
+});
+
+test("benchmark smoke mode emits bounded latency percentiles and timer overhead", () => {
+  const scriptPath = fileURLToPath(new URL("../scripts/benchmark-ultrasparse-router.mjs", import.meta.url));
+  const output = execFileSync(process.execPath, [scriptPath, "--smoke"], { encoding: "utf8" });
+  const report = JSON.parse(output);
+  assert.equal(report.mode, "smoke");
+  assert.equal(report.selectionOnly, true);
+  assert.equal(report.modelLoadingIncluded, false);
+  assert.equal(report.inferenceIncluded, false);
+  assert.equal(report.perOperationSelectionLatency.samples, 50);
+  assert.equal(report.emptyTimerPairLatency.samples, 50);
+  for (const key of ["p50Microseconds", "p95Microseconds", "p99Microseconds"]) {
+    assert.ok(Number.isFinite(report.perOperationSelectionLatency[key]));
+    assert.ok(Number.isFinite(report.emptyTimerPairLatency[key]));
+  }
 });
