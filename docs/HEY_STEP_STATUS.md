@@ -1,6 +1,6 @@
 # HEY 47-Step Evidence Map
 
-Live continuation delta (2026-10-15): source base `4eb61ea`; current uncommitted PWA install UX and safe post-login redirect changes pass the full Node suite **517/517**, focused PWA/redirect tests **6/6**, changed-file ESLint, `git diff --check`, and production build. Browser inspection verified only the local `/download` entrypoint and manual install guidance toggle. This does not prove the actual browser install event, signed-in redirect callback, account/database/provider/native integration; Steps 02 and 42 remain **In progress**, not complete. Eleven existing specialist chats are active in parallel under task-specific requirements briefs; see the live override and worker table in `HEY_EXECUTION_HANDOFF.md`.
+Live continuation delta (2026-10-15): coordinator source commit `0e26e54`; PWA install UX and safe post-login redirect changes pass the full Node suite **517/517**, focused PWA/redirect tests **6/6**, changed-file ESLint, `git diff --check`, and production build. Browser inspection verified only the local `/download` entrypoint and manual install guidance toggle. This does not prove the actual browser install event, signed-in redirect callback, account/database/provider/native integration; Steps 02 and 42 remain **In progress**, not complete. Eleven existing specialist chats are active in parallel under task-specific requirements briefs; see the live override and worker table in `HEY_EXECUTION_HANDOFF.md`.
 
 Updated: 2026-10-15
 Repository branch: `codex/resume-emergency-2026-10-14`  
