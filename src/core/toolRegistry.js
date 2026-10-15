@@ -113,6 +113,9 @@ export function registerTool(name, handler, metadata = {}) {
   if (!name || typeof handler !== "function") {
     throw new TypeError("A tool name and function are required.");
   }
+  if (tools.has(name)) {
+    throw new Error(`Tool is already registered: ${name}. Unregister it before registering a replacement.`);
+  }
 
   const safeMetadata = cloneMetadata(metadata);
   const lifecycle = safeMetadata.lifecycle;
