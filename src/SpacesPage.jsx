@@ -1,13 +1,173 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw, Search, Wrench, X } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
-import { spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
+import { getAccountScope } from "./core/accountScope.js";
+import { spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import "./SpacesPage.css";
 
 function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Date unavailable" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+function membershipAccountIsCurrent(accountRef, accountId, scope) {
+  return accountRef.current === accountId && getAccountScope() === scope;
+}
+
+function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus, retryTools }) {
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState("");
+  const [membership, setMembership] = useState({ status: "idle", accountId: null, layout: null });
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const requestRef = useRef(0);
+
+  const activeScope = `account:${accountId}`;
+  const currentLayout = membership.status === "ready" && membership.accountId === accountId
+    ? membership.layout
+    : null;
+  const filteredTools = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (!normalizedQuery) return tools;
+    return tools.filter((tool) => `${tool.name} ${tool.description} ${tool.category}`.toLocaleLowerCase().includes(normalizedQuery));
+  }, [query, tools]);
+  const toolGroups = useMemo(() => {
+    const groups = new Map();
+    for (const tool of filteredTools) {
+      const category = tool.category || "general";
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(tool);
+    }
+    return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right));
+  }, [filteredTools]);
+
+  const loadMembership = useCallback(() => {
+    const request = ++requestRef.current;
+    setMembership({ status: "loading", accountId, layout: null });
+    setError("");
+    setNotice("");
+    if (!membershipAccountIsCurrent(accountRef, accountId, activeScope)) {
+      setMembership({ status: "account_required", accountId: null, layout: null });
+      setError("Your account changed. Reopen this Space to load its tools.");
+      return;
+    }
+
+    try {
+      const result = HEY.spaces.getLayoutPreferences(space.id);
+      if (requestRef.current !== request || !membershipAccountIsCurrent(accountRef, accountId, activeScope)) return;
+      if (!spaceMembershipMatchesAccount(result, accountId, getAccountScope(), space.id)) {
+        setMembership({ status: "error", accountId, layout: null });
+        setError(result?.error || "Tools in this Space could not be loaded. Try again.");
+        return;
+      }
+      setMembership({ status: "ready", accountId, layout: result });
+    } catch {
+      if (requestRef.current === request && membershipAccountIsCurrent(accountRef, accountId, activeScope)) {
+        setMembership({ status: "error", accountId, layout: null });
+        setError("Tools in this Space could not be loaded. Try again.");
+      }
+    }
+  }, [accountId, accountRef, activeScope, space.id]);
+
+  function toggleMembership(toolName, member) {
+    if (!currentLayout || !membershipAccountIsCurrent(accountRef, accountId, activeScope)) {
+      setError("Your account changed. Reload this Space before updating membership.");
+      return;
+    }
+    setError("");
+    setNotice("");
+    try {
+      const result = HEY.spaces.setToolMembership({
+        accountScope: activeScope,
+        spaceId: space.id,
+        toolName,
+        member,
+        expectedRevision: currentLayout.revision,
+      });
+      if (!membershipAccountIsCurrent(accountRef, accountId, activeScope)) return;
+      if (!spaceMembershipMatchesAccount(result, accountId, getAccountScope(), space.id)) {
+        if (result?.code === "stale_revision" && spaceMembershipMatchesAccount(result.current, accountId, getAccountScope(), space.id)) {
+          setMembership({ status: "ready", accountId, layout: result.current });
+          setError("This Space changed while you were editing. Its current membership is shown; try again.");
+        } else {
+          setError(result?.error || "Membership could not be updated. Try again.");
+        }
+        return;
+      }
+      setMembership({ status: "ready", accountId, layout: result });
+      if (result.changed) setNotice(member ? "Tool added to this Space." : "Tool removed from this Space.");
+    } catch {
+      if (membershipAccountIsCurrent(accountRef, accountId, activeScope)) setError("Membership could not be updated. Try again.");
+    }
+  }
+
+  const controlId = `space-tools-${encodeURIComponent(space.id)}`;
+  const searchId = `${controlId}-search`;
+  const membershipLoading = membership.status === "loading" && membership.accountId === accountId;
+  const membershipError = membership.status === "error" || membership.status === "account_required";
+
+  return (
+    <div className="spaces-page__membership">
+      <button
+        type="button"
+        className="spaces-page__membership-toggle"
+        aria-expanded={expanded}
+        aria-controls={controlId}
+        onClick={() => {
+          const nextExpanded = !expanded;
+          setExpanded(nextExpanded);
+          if (nextExpanded && (membership.status === "idle" || membership.status === "error" || membership.status === "account_required")) loadMembership();
+        }}
+      >
+        <Wrench size={16} aria-hidden="true" />
+        {expanded ? "Hide tools" : `Manage tools${currentLayout ? ` (${currentLayout.toolIds.length})` : ""}`}
+      </button>
+
+      {expanded && (
+        <section id={controlId} className="spaces-page__membership-panel" aria-label={`Tools in ${space.name}`}>
+          <p className="spaces-page__membership-note" role="note">
+            Tool membership organizes this Space. It does not grant permission or make a tool executable.
+          </p>
+          {membershipLoading && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading this Space&apos;s tools…</p>}
+          {membershipError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{error || "Tools in this Space could not be loaded."}</p><button type="button" className="spaces-page__secondary" onClick={loadMembership}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
+          {!membershipLoading && !membershipError && toolsStatus === "loading" && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading registered tools…</p>}
+          {!membershipLoading && !membershipError && toolsStatus === "error" && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>Registered tools could not be loaded.</p><button type="button" className="spaces-page__secondary" onClick={retryTools}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
+          {!membershipLoading && !membershipError && toolsStatus === "ready" && tools.length === 0 && <p className="spaces-page__empty-membership" role="status">No registered tools are available to add yet.</p>}
+          {currentLayout && toolsStatus === "ready" && tools.length > 0 && (
+            <>
+              <label className="spaces-page__tool-search" htmlFor={searchId}>
+                <Search size={16} aria-hidden="true" />
+                <span className="spaces-page__sr-only">Search registered tools for {space.name}</span>
+                <input id={searchId} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools by name or category" />
+              </label>
+              {toolGroups.length === 0 && <p className="spaces-page__empty-membership" role="status">No registered tools match “{query}”.</p>}
+              <div className="spaces-page__tool-categories">
+                {toolGroups.map(([category, categoryTools]) => (
+                  <fieldset className="spaces-page__tool-category" key={category}>
+                    <legend>{category}</legend>
+                    {categoryTools.map((tool) => (
+                      <label className="spaces-page__tool-option" key={tool.name}>
+                        <input
+                          type="checkbox"
+                          checked={currentLayout.toolIds.includes(tool.name)}
+                          disabled={membership.accountId !== accountId}
+                          onChange={(event) => toggleMembership(tool.name, event.target.checked)}
+                        />
+                        <span><strong>{tool.name}</strong><small>{tool.description || "Registered tool"}</small></span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+              </div>
+            </>
+          )}
+          {error && !membershipError && <p className="spaces-page__membership-error" role="alert">{error}</p>}
+          {notice && <p className="spaces-page__notice" role="status"><Check size={15} aria-hidden="true" /> {notice}</p>}
+        </section>
+      )}
+    </div>
+  );
 }
 
 export default function SpacesPage() {
@@ -20,6 +180,9 @@ export default function SpacesPage() {
 
   const [spaces, setSpaces] = useState([]);
   const [loadedAccountId, setLoadedAccountId] = useState("");
+  const [toolCatalog, setToolCatalog] = useState([]);
+  const [toolCatalogAccountId, setToolCatalogAccountId] = useState("");
+  const [toolCatalogStatus, setToolCatalogStatus] = useState("loading");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -46,6 +209,29 @@ export default function SpacesPage() {
     }
   }, [accountId]);
 
+  const loadToolCatalog = useCallback(async () => {
+    const requestedAccountId = accountId;
+    setToolCatalogStatus("loading");
+    setToolCatalogAccountId("");
+    setToolCatalog([]);
+    await Promise.resolve();
+    if (!requestedAccountId || accountRef.current !== requestedAccountId || getAccountScope() !== `account:${requestedAccountId}`) return;
+    try {
+      const catalog = HEY.tools.catalog({ platform: "web" });
+      if (!Array.isArray(catalog)) throw new TypeError("Invalid tool catalog response");
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== `account:${requestedAccountId}`) return;
+      setToolCatalog(catalog.filter((tool) => tool && typeof tool.name === "string"));
+      setToolCatalogAccountId(requestedAccountId);
+      setToolCatalogStatus("ready");
+    } catch {
+      if (accountRef.current === requestedAccountId && getAccountScope() === `account:${requestedAccountId}`) {
+        setToolCatalog([]);
+        setToolCatalogAccountId(requestedAccountId);
+        setToolCatalogStatus("error");
+      }
+    }
+  }, [accountId]);
+
   const loadSpaces = useCallback(async () => {
     setLoading(true);
     setLoadError("");
@@ -60,6 +246,9 @@ export default function SpacesPage() {
     setLoading(true);
     setLoadError("");
     setSpaces([]);
+    setToolCatalog([]);
+    setToolCatalogAccountId("");
+    setToolCatalogStatus("loading");
     setPrompt("");
     setPreview(null);
     setPreviewError("");
@@ -77,6 +266,7 @@ export default function SpacesPage() {
     } catch {
       // Initial loading below still shows an actionable retry if listing fails.
     }
+    loadToolCatalog();
     Promise.resolve().then(() => {
       if (!active) return;
       refreshSpaces();
@@ -87,7 +277,7 @@ export default function SpacesPage() {
       active = false;
       unsubscribe();
     };
-  }, [accountId, refreshSpaces]);
+  }, [accountId, loadToolCatalog, refreshSpaces]);
 
   const createPreview = async (event) => {
     event.preventDefault();
@@ -242,6 +432,14 @@ export default function SpacesPage() {
           <div className="spaces-page__card-copy"><h3>{space.name}</h3><p>{space.description || "Private Space"}</p></div>
           <span className="spaces-page__private-label"><LockKeyhole size={13} aria-hidden="true" /> Private</span>
           <time dateTime={space.createdAt}>{formatDate(space.createdAt)}</time>
+          <SpaceToolMembership
+            space={space}
+            accountId={accountId}
+            accountRef={accountRef}
+            tools={toolCatalogAccountId === accountId ? toolCatalog : []}
+            toolsStatus={toolCatalogAccountId === accountId ? toolCatalogStatus : "loading"}
+            retryTools={loadToolCatalog}
+          />
         </li>)}</ul>}
       </section>
     </section>

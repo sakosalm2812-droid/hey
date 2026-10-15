@@ -3,6 +3,7 @@ import { FUSION_MODES, runProviderFusion } from "../../../src/core/providerFusio
 const MAX_REQUEST_BUDGET_USD = 0.25;
 const MAX_PROVIDER_RATE_USD_PER_MILLION = 1_000;
 const PROVIDER_TIMEOUT_MS = 20_000;
+const AUTHORITY_RECHECK_INTERVAL_MS = 5_000;
 const PROVIDER_ENDPOINTS = Object.freeze({
   openai: "https://api.openai.com/v1/chat/completions",
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
@@ -184,6 +185,7 @@ export async function runFusionChatRequest({
   signal,
   isCurrent = () => true,
   getCurrentEntitlements,
+  authorityRecheckIntervalMs = AUTHORITY_RECHECK_INTERVAL_MS,
   fetchImpl = fetch,
 } = {}) {
   if (!requested) return { status: "not_requested" };
@@ -197,6 +199,9 @@ export async function runFusionChatRequest({
   }
   if (!pricingConfig || !Array.isArray(pricingConfig.providers) || !Array.isArray(attempts)) {
     return { status: "unconfigured", reason: "trusted_pricing_required" };
+  }
+  if (!Number.isSafeInteger(authorityRecheckIntervalMs) || authorityRecheckIntervalMs < 1 || authorityRecheckIntervalMs > AUTHORITY_RECHECK_INTERVAL_MS) {
+    return { status: "invalid_request", reason: "authority_recheck_interval_invalid" };
   }
   if (!Array.isArray(messages) || messages.length > 24 || messages.some((message) =>
     !message || !["system", "user", "assistant"].includes(message.role) || typeof message.content !== "string"
@@ -226,6 +231,9 @@ export async function runFusionChatRequest({
   if (selectedProviders.reduce((total, provider) => total + provider.reservedCostUsd, 0) > pricingConfig.budgetUsd) {
     return { status: "budget_exhausted", reason: "independent_calls_exceed_server_budget", calls: 0 };
   }
+  if (getCurrentEntitlements !== undefined && typeof getCurrentEntitlements !== "function") {
+    return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+  }
 
   const providerModels = selectedProviders.map((provider, priority) => ({
     id: provider.model,
@@ -247,13 +255,82 @@ export async function runFusionChatRequest({
     providerModels,
     signal,
     isCurrent,
+    authorizeProviderCall: async ({ accountScope, signal: authoritySignal }) => {
+      const currentEntitlements = typeof getCurrentEntitlements === "function"
+        ? await getCurrentEntitlements(accountScope, authoritySignal)
+        : entitlements;
+      if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
+        throw new Error("Authorization state is unavailable");
+      }
+      const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
+      return currentGrants.has("hey.fusion") && currentGrants.has("provider.remote") &&
+        selectedProviders.every((provider) => currentGrants.has(`provider:${provider.id}`));
+    },
     maxCostUsd: pricingConfig.budgetUsd,
     minConfidence: pricingConfig.minConfidence,
     invoke: async ({ providerId, signal: providerSignal }) => {
       const provider = selectedProviders.find((item) => item.id === providerId);
       const attempt = attempts.find((item) => item.id === providerId && item.model === provider?.model && item.key);
       if (!provider || !attempt || !Array.isArray(messages)) throw new Error("Provider configuration is unavailable");
-      return await requestProvider({ provider, attempt, messages, signal: providerSignal, fetchImpl });
+      if (typeof getCurrentEntitlements !== "function") {
+        return await requestProvider({ provider, attempt, messages, signal: providerSignal, fetchImpl });
+      }
+
+      const authorityController = new AbortController();
+      let authorityFailure = null;
+      let authorityCheckInFlight = false;
+      let pollTimer;
+      const stopPolling = () => {
+        if (pollTimer !== undefined) clearInterval(pollTimer);
+        pollTimer = undefined;
+      };
+      const abortFromProvider = () => {
+        authorityController.abort(providerSignal?.reason);
+        stopPolling();
+      };
+      if (providerSignal?.aborted) abortFromProvider();
+      else providerSignal?.addEventListener("abort", abortFromProvider, { once: true });
+      const pollAuthority = async () => {
+        if (authorityCheckInFlight || authorityController.signal.aborted) return;
+        authorityCheckInFlight = true;
+        try {
+          const currentEntitlements = await getCurrentEntitlements(accountId, authorityController.signal);
+          if (authorityController.signal.aborted) return;
+          if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
+            throw new Error("Authorization state is unavailable");
+          }
+          const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
+          const authorized = currentGrants.has("hey.fusion") && currentGrants.has("provider.remote") &&
+            selectedProviders.every((selectedProvider) => currentGrants.has(`provider:${selectedProvider.id}`));
+          if (!authorized) authorityFailure = "revoked";
+        } catch {
+          if (!authorityController.signal.aborted) authorityFailure = "unavailable";
+        } finally {
+          authorityCheckInFlight = false;
+          if (authorityFailure && !authorityController.signal.aborted) {
+            authorityController.abort(new Error("Provider authorization changed"));
+            stopPolling();
+          }
+        }
+      };
+      pollTimer = setInterval(() => { void pollAuthority(); }, authorityRecheckIntervalMs);
+      if (authorityController.signal.aborted) stopPolling();
+      try {
+        const result = await requestProvider({ provider, attempt, messages, signal: authorityController.signal, fetchImpl });
+        if (authorityFailure) {
+          throw Object.assign(new Error("Provider authorization changed"), { providerAuthorization: authorityFailure });
+        }
+        return result;
+      } catch (error) {
+        if (authorityFailure) {
+          throw Object.assign(new Error("Provider authorization changed"), { providerAuthorization: authorityFailure });
+        }
+        throw error;
+      } finally {
+        stopPolling();
+        providerSignal?.removeEventListener("abort", abortFromProvider);
+        authorityController.abort(new Error("Provider call finished"));
+      }
     },
   });
   if (result.status !== "complete") return result;
@@ -261,7 +338,7 @@ export async function runFusionChatRequest({
     if (typeof getCurrentEntitlements !== "function") return { status: "unconfigured", reason: "authorization_revalidation_failed" };
     let currentEntitlements;
     try {
-      currentEntitlements = await getCurrentEntitlements(accountId);
+      currentEntitlements = await getCurrentEntitlements(accountId, signal);
     } catch {
       return { status: "unconfigured", reason: "authorization_revalidation_failed" };
     }
