@@ -11,7 +11,7 @@ import {
 import { parseNaturalCommand } from "../src/core/commandParser.js";
 import { createNativeAdapter } from "../src/core/osAdapter.js";
 import { createTauriAdapter, isTauriRuntime } from "../src/lib/tauriAdapter.js";
-import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice } from "../src/core/deviceGateway.js";
+import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice, registerDeviceAdapter, unregisterDeviceAdapter, unregisterDevice } from "../src/core/deviceGateway.js";
 import { VOICE_STATES, createVoiceState } from "../src/core/voiceState.js";
 import { executeRequest } from "../src/core/executionController.js";
 import { subscribe, clearEventListeners } from "../src/core/eventBus.js";
@@ -165,6 +165,98 @@ test("device registry exposes capabilities without allowing fake remote executio
   const result = await executeOnDevice(deviceId, "computer.camera");
   assert.equal(result.status, "unavailable");
   assert.equal(result.verified, false);
+});
+
+test("device execution requires an explicit device and matching adapter capability grant", async () => {
+  const action = "test.edge.read";
+  const executions = [];
+  const declaredCapabilities = [action];
+  registerDeviceAdapter("android", {
+    platform: "android",
+    capabilities: declaredCapabilities,
+    execute: async (request) => { executions.push(request); return { success: true, verified: true, value: "ok" }; },
+  });
+  declaredCapabilities.push("test.edge.other");
+  registerDevice({ id: "edge-empty-grant", platform: "android", status: "online", trusted: true, transport: "local", capabilities: [] });
+  registerDevice({ id: "edge-adapter-denied", platform: "android", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.other"] });
+  registerDevice({ id: "edge-approved", platform: "android", status: "online", trusted: true, transport: "local", capabilities: [action], metadata: { label: "original" } });
+
+  const noDeviceGrant = await executeOnDevice("edge-empty-grant", action);
+  const noAdapterGrant = await executeOnDevice("edge-adapter-denied", "test.edge.other");
+  assert.equal(noDeviceGrant.status, "unsupported");
+  assert.equal(noAdapterGrant.status, "unsupported");
+  assert.equal(executions.length, 0);
+
+  const leaked = getDevice("edge-approved");
+  leaked.trusted = false;
+  leaked.capabilities.push("test.edge.admin");
+  leaked.metadata.label = "tampered";
+  const registered = registerDevice({ id: "edge-copied-input", platform: "android", capabilities: [action], metadata: { label: "caller" } });
+  registered.capabilities.push("test.edge.admin");
+  registered.metadata.label = "tampered";
+  assert.deepEqual(getDeviceCapabilities("edge-approved"), [action]);
+  assert.equal(getDevice("edge-approved").metadata.label, "original");
+  assert.deepEqual(getDeviceCapabilities("edge-copied-input"), [action]);
+
+  const allowed = await executeOnDevice("edge-approved", action, { value: "input" }, {
+    permission: "device.control",
+    riskLevel: "low",
+    confirmed: true,
+    user: { id: "edge-account", plan: "pro", permissions: ["device.control"] },
+  });
+  assert.equal(allowed.success, true);
+  assert.equal(allowed.verified, true);
+  assert.equal(allowed.value, "ok");
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0].device.metadata.label, "original");
+  unregisterDeviceAdapter("android");
+  for (const id of ["edge-empty-grant", "edge-adapter-denied", "edge-approved", "edge-copied-input"]) unregisterDevice(id);
+});
+
+test("device execution rejects platform mismatches and adapters without verified postconditions", async () => {
+  let executions = 0;
+  registerDeviceAdapter("ios", {
+    platform: "ios",
+    capabilities: ["test.edge.unverified"],
+    execute: async () => { executions += 1; return { success: true, verified: false }; },
+  });
+  registerDevice({ id: "edge-platform-mismatch", platform: "android", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.unverified"] });
+  registerDevice({ id: "edge-unverified", platform: "ios", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.unverified"] });
+  const user = { id: "edge-account", plan: "pro", permissions: ["device.control"] };
+
+  const mismatch = await executeOnDevice("edge-platform-mismatch", "test.edge.unverified", {}, { permission: "device.control", riskLevel: "low", confirmed: true, user });
+  const unverified = await executeOnDevice("edge-unverified", "test.edge.unverified", {}, { permission: "device.control", riskLevel: "low", confirmed: true, user });
+  assert.equal(mismatch.status, "unsupported");
+  assert.equal(unverified.status, "verification_failed");
+  assert.equal(unverified.success, false);
+  assert.equal(unverified.verified, false);
+  assert.equal(executions, 1);
+  unregisterDeviceAdapter("ios");
+  unregisterDevice("edge-platform-mismatch");
+  unregisterDevice("edge-unverified");
+});
+
+test("device gateway rejects accessor-backed input before evaluating getters", async () => {
+  let getterCalls = 0;
+  registerDeviceAdapter("linux", {
+    platform: "linux",
+    capabilities: ["test.edge.input"],
+    execute: async () => ({ success: true, verified: true }),
+  });
+  registerDevice({ id: "edge-input-guard", platform: "linux", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.input"] });
+  const input = Object.defineProperty({}, "command", { enumerable: true, get() { getterCalls += 1; return "unauthorized"; } });
+
+  assert.throws(() => registerDevice({ id: "edge-metadata-guard", platform: "linux", metadata: input }), /accessors/i);
+  const result = await executeOnDevice("edge-input-guard", "test.edge.input", input, {
+    permission: "device.control",
+    riskLevel: "low",
+    confirmed: true,
+    user: { id: "edge-account", plan: "pro", permissions: ["device.control"] },
+  });
+  assert.equal(result.status, "invalid_input");
+  assert.equal(getterCalls, 0);
+  unregisterDeviceAdapter("linux");
+  unregisterDevice("edge-input-guard");
 });
 
 test("voice state rejects impossible transitions and preserves real states", () => {
