@@ -2,11 +2,13 @@ import { VOICE_STATES, createVoiceState } from "../core/voiceState.js";
 import { resolveUtteranceVoice, stripWakePhrase } from "../core/heyVoiceSettings.js";
 import { getAccountScope, subscribeAccountScope } from "../core/accountScope.js";
 
+const browserSpeechProviders = new WeakSet();
+
 export function createBrowserSpeechProvider(environment = globalThis) {
   const Recognition = environment.SpeechRecognition || environment.webkitSpeechRecognition;
   if (!Recognition) return null;
 
-  return {
+  const provider = {
     kind: "browser",
     start({ onTranscript, onError, onEnd, language = "en-US" }) {
       const recognition = new Recognition();
@@ -21,6 +23,8 @@ export function createBrowserSpeechProvider(environment = globalThis) {
     },
     stop(recognition) { recognition?.stop(); },
   };
+  browserSpeechProviders.add(provider);
+  return provider;
 }
 
 function normalizeSpeechLanguage(language) {
@@ -214,7 +218,7 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
  * Browser speech recognition may send audio to the browser vendor; callers
  * should disclose that before asking the user to consent.
  */
-export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, corrections = [], language = "en-US" } = {}) {
+export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, onMetrics, corrections = [], language = "en-US" } = {}) {
   // Validate once when the session is created. The immutable snapshot keeps
   // later caller mutation from changing what an active microphone session emits.
   applyDictationCorrections("", corrections);
@@ -226,6 +230,43 @@ export function createDictationSession({ speechProvider, environment = globalThi
   let starting = null;
   let destroyed = false;
   let active = false;
+  let attempt = null;
+
+  function now() {
+    try {
+      const performance = environment.performance;
+      const read = performance?.now;
+      if (typeof read === "function") {
+        const value = Reflect.apply(read, performance, []);
+        if (Number.isFinite(value)) return value;
+      }
+    } catch { /* Use the wall clock when a runtime clock is unavailable. */ }
+    try {
+      const value = Date.now();
+      return Number.isFinite(value) ? value : null;
+    } catch { return null; }
+  }
+
+  function elapsed(start, end) {
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    return Math.round(Math.max(0, Math.min(86_400_000, end - start)));
+  }
+
+  function finishAttempt(status, endedAt = now()) {
+    if (!attempt || attempt.finished) return;
+    attempt.finished = true;
+    const metrics = Object.freeze({
+      schemaVersion: 1,
+      provider: !speechProvider ? "unavailable" : browserSpeechProviders.has(speechProvider) ? "browser" : "custom",
+      status,
+      startupLatencyMs: elapsed(attempt.startedAt, attempt.providerStartedAt),
+      firstTranscriptLatencyMs: elapsed(attempt.providerRequestedAt, attempt.firstTranscriptAt),
+      transcriptCount: attempt.transcriptCount,
+      emptyTranscriptCount: attempt.emptyTranscriptCount,
+      durationMs: elapsed(attempt.startedAt, endedAt),
+    });
+    try { onMetrics?.(metrics); } catch { /* Optional instrumentation cannot affect dictation. */ }
+  }
 
   function transition(nextState, error = null) {
     const result = state.transition(nextState);
@@ -233,8 +274,10 @@ export function createDictationSession({ speechProvider, environment = globalThi
     return result;
   }
 
-  function stop() {
+  function stop(terminalStatus = "stopped") {
     generation += 1;
+    finishAttempt(terminalStatus === "account_changed" ? terminalStatus : active ? terminalStatus : "cancelled");
+    attempt = null;
     active = false;
     try { speechProvider?.stop(recognition); } catch { /* The local session is still stopped. */ }
     recognition = null;
@@ -246,7 +289,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
 
   const unsubscribeScope = subscribeAccountScope(() => {
     if (getAccountScope() !== startingScope) {
-      stop();
+      stop("account_changed");
       destroyed = true;
       unsubscribeScope();
     }
@@ -266,40 +309,63 @@ export function createDictationSession({ speechProvider, environment = globalThi
   }
 
   async function startListening() {
+    attempt = {
+      startedAt: now(),
+      providerRequestedAt: null,
+      providerStartedAt: null,
+      firstTranscriptAt: null,
+      transcriptCount: 0,
+      emptyTranscriptCount: 0,
+      finished: false,
+    };
     if (!speechProvider) {
+      finishAttempt("unavailable");
       transition(VOICE_STATES.error, "Speech recognition is unavailable in this runtime.");
       return { success: false, status: VOICE_STATES.error, error: "Speech recognition is unavailable in this runtime." };
     }
     if (environment.navigator?.onLine === false) {
+      finishAttempt("offline");
       transition(VOICE_STATES.offline, "The browser is offline.");
       return { success: false, status: VOICE_STATES.offline, error: "The browser is offline." };
     }
     const currentGeneration = ++generation;
     const permission = await requestMicrophonePermission(environment);
     if (destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) {
+      finishAttempt("cancelled");
       return { success: false, status: "cancelled", error: "Dictation start was cancelled." };
     }
     if (!permission.granted) {
+      finishAttempt("permission_failed");
       transition(VOICE_STATES.permissionRequired, permission.error);
       return { success: false, status: VOICE_STATES.permissionRequired, error: permission.error };
     }
     if (destroyed || getAccountScope() !== startingScope) {
+      finishAttempt("cancelled");
       return { success: false, status: "session_ended", error: "Dictation session ended after the account changed." };
     }
     if ([VOICE_STATES.error, VOICE_STATES.offline, VOICE_STATES.permissionRequired].includes(state.state)) state.transition(VOICE_STATES.idle);
     active = true;
     transition(VOICE_STATES.listening);
+    const currentAttempt = attempt;
+    currentAttempt.providerRequestedAt = now();
     try {
       recognition = speechProvider.start({
         language: normalizeSpeechLanguage(language),
         onTranscript: (transcript) => {
           const text = typeof transcript === "string" ? transcript.trim() : "";
-          if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope || !text) return;
+          if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) return;
+          if (!text) {
+            currentAttempt.emptyTranscriptCount = Math.min(1000, currentAttempt.emptyTranscriptCount + 1);
+            return;
+          }
+          currentAttempt.transcriptCount = Math.min(1000, currentAttempt.transcriptCount + 1);
+          if (currentAttempt.firstTranscriptAt === null) currentAttempt.firstTranscriptAt = now();
           onTranscript?.(applyDictationCorrections(text, correctionSnapshot));
         },
         onError: (error) => {
           if (currentGeneration === generation && !destroyed) {
             active = false;
+            finishAttempt("recognition_error");
             transition(VOICE_STATES.error, error);
           }
         },
@@ -307,11 +373,14 @@ export function createDictationSession({ speechProvider, environment = globalThi
           if (currentGeneration !== generation) return;
           active = false;
           recognition = null;
+          finishAttempt("ended");
           if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.idle);
         },
       });
+      currentAttempt.providerStartedAt = now();
     } catch (error) {
       active = false;
+      finishAttempt("start_failed");
       transition(VOICE_STATES.error, error?.message || "Speech recognition could not start.");
       return { success: false, status: VOICE_STATES.error, error: error?.message || "Speech recognition could not start." };
     }

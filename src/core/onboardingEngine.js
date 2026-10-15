@@ -152,6 +152,39 @@ export class OnboardingEngine {
       this.load();
       this.notify("account_scope_changed", this.getProgress());
     });
+    this.storageEventTarget = globalThis.window && typeof globalThis.window.addEventListener === "function"
+      ? globalThis.window
+      : null;
+    this.handleStorageEvent = (event) => {
+      if (!event || (event.key !== getAccountStorageKey(STORAGE_KEY) && event.key !== null)) return;
+      try {
+        if (event.storageArea && globalThis.localStorage && event.storageArea !== globalThis.localStorage) return;
+        // localStorage.clear() emits a storage event with a null key. Resolve
+        // the current account's record after the clear instead of treating it
+        // as an unrelated global storage change.
+        const newValue = event.key === null ? globalThis.localStorage?.getItem(getAccountStorageKey(STORAGE_KEY)) : event.newValue;
+        if (newValue === null) {
+          this.progress = createInitialProgress();
+          this.notify("storage_synced", this.getProgress());
+          return;
+        }
+        if (typeof newValue !== "string" || newValue.length > 100_000) return;
+        const parsed = JSON.parse(newValue);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+        this.progress = normalizeProgress(parsed);
+        this.notify("storage_synced", this.getProgress());
+      } catch {
+        // Storage events are external input. Keep the current in-memory state
+        // when a browser or hostile test harness supplies an unreadable update.
+      }
+    };
+    this.storageEventTarget?.addEventListener("storage", this.handleStorageEvent);
+  }
+
+  destroy() {
+    this.storageEventTarget?.removeEventListener("storage", this.handleStorageEvent);
+    this.unsubscribeAccountScope?.();
+    this.listeners.clear();
   }
 
   load() {

@@ -12,6 +12,7 @@ import TaskBoard from "./components/tasks/TaskBoard";
 import { useAuth } from "./AuthContext.jsx";
 import { buzz } from "./lib/heyFeedback";
 import { listRecords } from "./lib/heyRecords.js";
+import "./TasksPage.css";
 
 
 export default function TasksPage(){
@@ -63,14 +64,7 @@ export default function TasksPage(){
 
 
       <div
-        style={{
-          display:"grid",
-
-          gridTemplateColumns:
-          "1fr 360px",
-
-          gap:24,
-        }}
+        className="hey-tasks-layout"
       >
 
 
@@ -80,14 +74,7 @@ export default function TasksPage(){
         >
 
 
-          <div
-            style={{
-              display:"flex",
-              justifyContent:"space-between",
-              alignItems:"center",
-              marginBottom:28,
-            }}
-          >
+          <div className="hey-tasks-card-heading">
 
 
             <div
@@ -103,9 +90,7 @@ export default function TasksPage(){
               />
 
               <h2
-                style={{
-                  fontSize:34,
-                }}
+                className="hey-tasks-heading"
               >
                 Today's Mission
               </h2>
@@ -116,7 +101,7 @@ export default function TasksPage(){
 
             <button
               type="button"
-onClick={() => document.querySelector('input[placeholder="Add a task..."]')?.focus()}
+              onClick={() => document.querySelector('input[placeholder="Add a task..."]')?.focus()}
               onPointerDown={() => buzz("light")}
               className="hey-btn-primary"
               style={{
@@ -144,13 +129,7 @@ onClick={() => document.querySelector('input[placeholder="Add a task..."]')?.foc
           )}
 
           <div
-            style={{
-              display:"grid",
-              gridTemplateColumns:
-              "repeat(3,1fr)",
-              gap:14,
-              marginBottom:28,
-            }}
+            className="hey-tasks-stats"
           >
 
 
@@ -234,13 +213,7 @@ onClick={() => document.querySelector('input[placeholder="Add a task..."]')?.foc
 
 
 
-        <div
-          style={{
-            display:"flex",
-            flexDirection:"column",
-            gap:24,
-          }}
-        >
+        <div className="hey-tasks-sidebar">
 
 
 
