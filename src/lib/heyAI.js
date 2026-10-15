@@ -34,9 +34,10 @@ You are the core intelligence behind a futuristic AI operating system.
 `;
 
 function getHEYApiUrl() {
-  return import.meta.env.VITE_HEY_API_URL ||
-    (import.meta.env.VITE_SUPABASE_URL
-      ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/hey`
+  const env = import.meta.env || {};
+  return env.VITE_HEY_API_URL ||
+    (env.VITE_SUPABASE_URL
+      ? `${env.VITE_SUPABASE_URL}/functions/v1/hey`
       : '/api/hey');
 }
 
@@ -65,6 +66,32 @@ export function getHEYChatError(response, details = {}, fusion = false) {
     ? "Model fusion is unavailable right now. No answer was delivered."
     : "HEY could not reach its AI provider. Check the server configuration and try again.";
   return details.error || "HEY could not send this message.";
+}
+
+export async function checkHEYAIReadiness({ signal, timeoutMs = 8_000 } = {}) {
+  const healthUrl = `${getHEYApiUrl().replace(/\/+$/, "")}/health`;
+  let response;
+  try {
+    response = await fetchWithTimeout(healthUrl, { method: "GET" }, timeoutMs, signal);
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return { status: "unavailable", message: "HEY AI health endpoint could not be reached." };
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    return { status: "unavailable", message: "HEY AI returned an invalid health response." };
+  }
+
+  if (response.ok && payload?.status === "ready") {
+    return { status: "ready", message: "Required backend configuration is present." };
+  }
+  if (response.status === 503 && payload?.status === "not_ready") {
+    return { status: "not_configured", message: "Required Supabase or AI provider configuration is missing." };
+  }
+  return { status: "unavailable", message: "HEY AI health could not be confirmed." };
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
@@ -147,7 +174,9 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
       addConversationMessage({ role: "assistant", content: answer });
       return answer;
     }
-    const response = await fetchWithRetry(getHEYApiUrl(), {
+    let response;
+    try {
+      response = await fetchWithRetry(getHEYApiUrl(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -173,7 +202,11 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         responseStyle: brainResult.responseStyle,
         conversationId,
       }, fusion))
-    }, { signal })
+      }, { signal });
+    } catch (error) {
+      if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
+      throw new Error("HEY AI could not be reached. Check your connection and try again.", { cause: error });
+    }
 
     if (!response.ok) {
       const details = await response.json().catch(() => ({}));
@@ -238,8 +271,10 @@ export async function createForgeArtifact(description, category, plan) {
 }
 
 export async function listHEYConversations() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) return [];
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error("Supabase could not verify your session.", { cause: sessionError });
+  const session = sessionData?.session;
+  if (!session?.user) throw new Error("Your Supabase session is unavailable.");
 
   const { data, error } = await supabase
     .from("hey_conversations")

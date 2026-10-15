@@ -59,6 +59,8 @@
 .hey-chat-sidebar-footer strong { color: var(--text-primary); font-size: 12px; }
 .hey-chat-sidebar-footer span:not(.hey-chat-live-dot) { color: var(--text-muted); font-size: 10px; }
 .hey-chat-live-dot { width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--green-accent); box-shadow: 0 0 13px var(--green-accent); }
+.hey-chat-live-dot.is-unavailable { background: var(--coral); box-shadow: 0 0 9px rgba(255,158,122,.55); }
+.hey-chat-live-dot.is-checking { background: var(--text-muted); box-shadow: none; }
 
 .hey-chat-panel { display: flex; flex: 1; min-width: 0; flex-direction: column; overflow: hidden; background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.018)); }
 .hey-chat-header { min-height: 70px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.025); }
@@ -66,6 +68,21 @@
 .hey-chat-title h2 { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 700; }
 .hey-chat-status { gap: 6px; letter-spacing: .08em; }
 .hey-chat-status span { width: 6px; height: 6px; border-radius: 50%; background: var(--green-accent); box-shadow: 0 0 10px var(--green-accent); }
+.hey-chat-status.is-not_configured span,
+.hey-chat-status.is-unavailable span { background: var(--coral); box-shadow: 0 0 10px rgba(255,158,122,.55); }
+.hey-chat-status.is-checking span { background: var(--text-muted); box-shadow: none; }
+.hey-chat-service-status { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 15px; min-height: 42px; padding: 8px 18px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,.1); }
+.hey-chat-service-item { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.hey-chat-service-item i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.hey-chat-service-item strong { color: var(--text-secondary); font-weight: 600; }
+.hey-chat-service-item.is-connected i,
+.hey-chat-service-item.is-ready i { background: var(--green-accent); box-shadow: 0 0 9px var(--green-accent); }
+.hey-chat-service-item.is-unavailable i,
+.hey-chat-service-item.is-not_configured i { background: var(--coral); box-shadow: 0 0 9px rgba(255,158,122,.55); }
+.hey-chat-service-explainer { flex: 1 1 240px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+.hey-chat-service-retry { min-height: 28px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 10px; cursor: pointer; }
+.hey-chat-service-retry:hover { border-color: var(--accent); color: var(--text-primary); }
+.hey-chat-service-retry:disabled { cursor: wait; opacity: .6; }
 .hey-chat-header-actions { gap: 9px; }
 .hey-chat-adaptive { gap: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); font-size: 11px; }
 .hey-chat-icon-button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--border); border-radius: 11px; background: var(--glass-bg); color: var(--text-secondary); cursor: pointer; }
