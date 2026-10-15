@@ -12,6 +12,8 @@ const EXPERTS = Object.freeze([
 
 const MAX_QUERY_LENGTH = 4096;
 const MAX_EXPERTS = 3;
+const MAX_CATALOG_EXPERTS = 10_000;
+const MAX_CATALOG_TERMS = 250_000;
 const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
 const TOKEN_EXPERT_INDEX = new Map();
 const TOKEN_EXPERT_MASK_INDEX = new Map();
@@ -45,7 +47,7 @@ function selectionInput(input, limit) {
 
 function formatSelection(ranked, requestedLimit, truncated) {
   const chosen = ranked.filter((expert) => expert.score > 0)
-    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
+    .sort((left, right) => right.score - left.score || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
     .slice(0, requestedLimit);
   return {
     experts: chosen.map(({ id, score }) => ({ id, score })),
@@ -53,6 +55,115 @@ function formatSelection(ranked, requestedLimit, truncated) {
     status: chosen.length ? "selected" : "no_match",
     truncated,
   };
+}
+
+function readCatalogArray(value, label, maximum, minimum = 1) {
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) {
+    throw new TypeError(`Invalid ${label}`);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys.some((key) => key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key))) {
+    throw new TypeError(`Invalid ${label}`);
+  }
+  const values = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !("value" in descriptor)) throw new TypeError(`Invalid ${label}`);
+    values.push(descriptor.value);
+  }
+  return values;
+}
+
+function readCatalogExpert(value) {
+  if (!value || typeof value !== "object") throw new TypeError("Invalid expert definition");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError("Invalid expert definition");
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== 2 || !keys.includes("id") || !keys.includes("terms")) throw new TypeError("Invalid expert definition");
+  const idDescriptor = Object.getOwnPropertyDescriptor(value, "id");
+  const termsDescriptor = Object.getOwnPropertyDescriptor(value, "terms");
+  if (!idDescriptor || !("value" in idDescriptor) || !termsDescriptor || !("value" in termsDescriptor)) {
+    throw new TypeError("Invalid expert definition");
+  }
+  const id = idDescriptor.value;
+  if (typeof id !== "string" || /^[a-z0-9][a-z0-9._-]{0,63}$/i.exec(id)?.[0] !== id) throw new TypeError("Invalid expert id");
+  const terms = readCatalogArray(termsDescriptor.value, "expert terms", 31);
+  if (terms.some((term) => typeof term !== "string" || /^[a-z0-9]+$/.exec(term)?.[0] !== term) || new Set(terms).size !== terms.length) {
+    throw new TypeError("Invalid expert terms");
+  }
+  return Object.freeze({ id, terms: Object.freeze(terms) });
+}
+
+/**
+ * Build a bounded lexical selector for a caller-supplied expert catalog.
+ * Catalogs with twenty or more experts use an inverted candidate index;
+ * smaller catalogs retain the linear scan until more measurements justify a
+ * lower crossover. This selects labels only.
+ */
+export function createUltraSparseSelector(catalog) {
+  const definitions = readCatalogArray(catalog, "expert catalog", MAX_CATALOG_EXPERTS);
+  const experts = definitions.map(readCatalogExpert);
+  const ids = new Set(experts.map(({ id }) => id));
+  const totalTerms = experts.reduce((count, expert) => count + expert.terms.length, 0);
+  if (ids.size !== experts.length || totalTerms > MAX_CATALOG_TERMS) throw new TypeError("Invalid expert catalog");
+
+  let tokenIndex = null;
+
+  function prepareIndexed() {
+    if (tokenIndex) return false;
+    tokenIndex = new Map();
+    for (const [expertIndex, expert] of experts.entries()) {
+      for (const [termIndex, term] of expert.terms.entries()) {
+        if (!tokenIndex.has(term)) tokenIndex.set(term, []);
+        tokenIndex.get(term).push({ expertIndex, bit: 1 << termIndex });
+      }
+    }
+    return true;
+  }
+
+  function selectLinear(input, { limit = 2 } = {}) {
+    const normalized = selectionInput(input, limit);
+    if (!normalized) return { experts: [], matchedTerms: [], status: "invalid_input" };
+    const ranked = experts.map((expert) => {
+      const matchedTerms = expert.terms.filter((term) => normalized.tokenSet.has(term));
+      return { id: expert.id, score: matchedTerms.length, matchedTerms };
+    });
+    return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
+  }
+
+  function selectIndexed(input, { limit = 2 } = {}) {
+    const normalized = selectionInput(input, limit);
+    if (!normalized) return { experts: [], matchedTerms: [], status: "invalid_input" };
+    prepareIndexed();
+    const masks = new Map();
+    for (const token of normalized.tokenSet) {
+      for (const { expertIndex, bit } of tokenIndex.get(token) || []) {
+        masks.set(expertIndex, (masks.get(expertIndex) || 0) | bit);
+      }
+    }
+    const ranked = [];
+    for (const [expertIndex, mask] of masks) {
+      const expert = experts[expertIndex];
+      const matchedTerms = [];
+      for (let termIndex = 0; termIndex < expert.terms.length; termIndex += 1) {
+        if ((mask & (1 << termIndex)) !== 0) matchedTerms.push(expert.terms[termIndex]);
+      }
+      ranked.push({ id: expert.id, score: matchedTerms.length, matchedTerms });
+    }
+    return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
+  }
+
+  const strategy = experts.length >= 20 ? "indexed-candidates" : "linear";
+  return Object.freeze({
+    expertCount: experts.length,
+    strategy,
+    prepareIndexed,
+    selectLinear,
+    selectIndexed,
+    select(input, options) {
+      return strategy === "linear" ? selectLinear(input, options) : selectIndexed(input, options);
+    },
+  });
 }
 
 /**
@@ -133,4 +244,4 @@ export function createUltraSparsePlan(input, { intent = "conversation", limit = 
   };
 }
 
-export default { selectUltraSparseExperts, selectUltraSparseExpertsIndexed, selectUltraSparseExpertsMasked, createUltraSparsePlan };
+export default { selectUltraSparseExperts, selectUltraSparseExpertsIndexed, selectUltraSparseExpertsMasked, createUltraSparseSelector, createUltraSparsePlan };
