@@ -1,3 +1,5 @@
+import { createArtifact as createForgeArtifact } from "./artifactEngine.js";
+
 const REQUEST_FIELDS = new Set([
   "title", "subject", "gradeBand", "durationMinutes", "learningObjectives",
   "curriculumReferences", "resources", "activities", "assessment", "accountScope",
@@ -10,6 +12,9 @@ const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "met
 const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "studentDataPolicy", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
+const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "currentAccountScope", "currentWorkspaceId"]);
+const SAVE_OPTION_FIELDS = new Set(["createArtifact"]);
+const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "grades", "roster", "names", "email", "phone", "dateOfBirth",
@@ -29,8 +34,9 @@ const SENSITIVE_CONTENT = [
  * Space ID twice (request scope plus trusted current context), then call this
  * async builder and verifier, then await the Markdown export before offering
  * it. Verification rechecks a SHA-256 content digest for stale edits; this
- * digest detects changes but is not a signature or authenticity proof. This is
- * a local artifact contract; it does not call or replace HEY Brain, Cosmos, or Forge.
+ * digest detects changes but is not a signature or authenticity proof. Verified
+ * lessons can be saved as draft documents through the shared Forge artifact
+ * contract; this flow does not write lessons into Cosmos memory.
  * Do not pass student records. Curriculum references remain teacher-supplied
  * and unverified, and exported lessons always carry a teacher-review notice.
  */
@@ -252,7 +258,9 @@ export async function buildTeacherLessonArtifact(input) {
       verification: { valid: true, checks: { accountWorkspaceBound: true, studentDataAbsent: true, objectivesPresent: true, assessmentPresent: true, activityTimeWithinDuration: true }, contentDigest },
     },
   };
-  return freezeDeep(artifact);
+  const frozenArtifact = freezeDeep(artifact);
+  BUILT_TEACHER_LESSON_ARTIFACTS.add(frozenArtifact);
+  return frozenArtifact;
 }
 
 export async function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId } = {}) {
@@ -341,6 +349,55 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
   return Object.freeze({ valid: Object.values(checks).every(Boolean), checks });
 }
 
+/**
+ * Store a verified teacher lesson in the shared Forge artifact graph as a
+ * draft document. The active account and Space must be supplied independently
+ * of the artifact's embedded scope. This stores lesson-planning content only;
+ * it does not send the lesson to Cosmos memory or claim database durability.
+ */
+export async function saveTeacherLessonArtifact(artifact, context, options = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_LESSON_ARTIFACTS.has(artifact)) {
+    throw new Error("Only a lesson artifact built in the active Teacher runtime can be saved");
+  }
+  let stableArtifact;
+  let stableContext;
+  try {
+    stableArtifact = snapshotLessonData(artifact);
+    stableContext = snapshotLessonData(context);
+    assertOnlyDataFields(stableContext, "Teacher artifact save context", SAVE_CONTEXT_FIELDS);
+    assertOnlyDataFields(options, "Teacher artifact save options", SAVE_OPTION_FIELDS);
+  } catch {
+    throw new Error("Lesson artifact failed verification for the active account and workspace");
+  }
+  const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
+  const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
+    throw new Error("Lesson artifact account and workspace must match the active context");
+  }
+  const createArtifact = options.createArtifact ?? createForgeArtifact;
+  if (typeof createArtifact !== "function") throw new TypeError("Shared artifact creator must be a function");
+
+  freezeDeep(stableArtifact);
+  const verification = await verifyTeacherLessonArtifact(stableArtifact, { accountScope, workspaceId });
+  if (!verification.valid) throw new Error("Lesson artifact failed verification for the active account and workspace");
+
+  const { content, metadata } = stableArtifact;
+  return createArtifact({
+    projectId: workspaceId,
+    type: "document",
+    title: stableArtifact.title,
+    description: stableArtifact.description,
+    content,
+    metadata: {
+      ...metadata,
+      artifactContract: "hey.teacher.lesson.v1",
+      accountScope,
+      workspaceId,
+    },
+    tags: ["teacher", "lesson-plan"],
+  });
+}
+
 export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
   let stableArtifact;
   let stableSafetyReview;
@@ -380,4 +437,4 @@ export async function exportTeacherLessonMarkdown(artifact, { accountScope, work
   return Object.freeze({ filename: "lesson-plan.md", mimeType: "text/markdown", content: lines.join("\n") });
 }
 
-export default { buildTeacherLessonArtifact, verifyTeacherLessonArtifact, exportTeacherLessonMarkdown };
+export default { buildTeacherLessonArtifact, verifyTeacherLessonArtifact, saveTeacherLessonArtifact, exportTeacherLessonMarkdown };
