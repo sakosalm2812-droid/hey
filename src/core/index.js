@@ -223,6 +223,7 @@ import { createSkill, listSkills, getSkill, updateSkill, runSkill } from "./skil
 import { createMorningBriefing } from "./briefingEngine.js";
 import { registerProvider, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
 import { selectModel, createProviderPlan } from "./providerRouter.js";
+import { FUSION_MODES, runProviderFusion } from "./providerFusion.js";
 import { createModelRecord, createAdapterManifest, createInferenceRequest, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
 import { 
   initializeComputerControl, 
@@ -639,6 +640,8 @@ import {
       clear: clearProviders,
       select: selectModel,
       plan: createProviderPlan,
+      fusionModes: FUSION_MODES,
+      runFusion: runProviderFusion,
     },
 
     modelPlatform: {

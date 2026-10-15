@@ -2,6 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
 import { FUSION_MODES, runProviderFusion } from "../src/core/providerFusion.js";
+import HEY from "../src/core/index.js";
+
+test("the canonical HEY provider API exposes the fusion contract and modes", () => {
+  assert.equal(HEY.providers.runFusion, runProviderFusion);
+  assert.equal(HEY.providers.fusionModes, FUSION_MODES);
+});
 
 function providers({ secondCost = 0.02, withLocal = false, priced = true } = {}) {
   clearProviders();
