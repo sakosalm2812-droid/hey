@@ -1,10 +1,25 @@
-import { registerTool } from "./toolRegistry.js";
+import { registerOwnedTool } from "./toolRegistry.js";
 import { OS_CAPABILITIES, createBrowserOSAdapter, unsupportedCapability } from "./osAdapter.js";
 import { getCapability } from "./capabilityRegistry.js";
 import { createTauriAdapter } from "../lib/tauriAdapter.js";
 
 const browserAdapter = typeof navigator !== "undefined" ? createBrowserOSAdapter() : null;
 let activeAdapter = createTauriAdapter() || browserAdapter;
+const COMPUTER_TOOL_OWNER = Object.freeze({});
+
+const COMPUTER_TOOL_CAPABILITIES = [
+  OS_CAPABILITIES.systemInfo,
+  OS_CAPABILITIES.openUrl,
+  OS_CAPABILITIES.screenshot,
+  "app.open", "app.close", "filesystem.read", "filesystem.write", "filesystem.create_directory",
+  "filesystem.list", "filesystem.delete", "filesystem.organize", "terminal.execute", "window.control",
+  "input.control", "browser.navigate", "browser.read", "vision.inspect", "hardware.inspect",
+  "notifications.create", "media.control",
+];
+const computerToolHandlers = new Map(COMPUTER_TOOL_CAPABILITIES.map((capability) => [
+  capability,
+  (input, context) => browserTool(capability, input, context),
+]));
 
 export function setComputerAdapter(adapter) {
   if (!adapter || typeof adapter.execute !== "function") throw new TypeError("A computer adapter with execute() is required.");
@@ -24,7 +39,7 @@ function browserTool(capability, input, context = {}) {
 }
 
 export function registerComputerTools() {
-  registerTool("computer.system_info", (input, context) => browserTool(OS_CAPABILITIES.systemInfo, input, context), {
+  registerOwnedTool("computer.system_info", computerToolHandlers.get(OS_CAPABILITIES.systemInfo), {
     category: "system",
     capabilities: [OS_CAPABILITIES.systemInfo],
     permissions: ["system.info"],
@@ -32,9 +47,9 @@ export function registerComputerTools() {
     riskLevel: "low",
     inputSchema: { type: "object", properties: {} },
     source: "browser_adapter",
-  });
+  }, COMPUTER_TOOL_OWNER);
 
-  registerTool("computer.open_url", (input, context) => browserTool(OS_CAPABILITIES.openUrl, input, context), {
+  registerOwnedTool("computer.open_url", computerToolHandlers.get(OS_CAPABILITIES.openUrl), {
     category: "browser",
     capabilities: [OS_CAPABILITIES.openUrl],
     permission: "browser.open_url",
@@ -42,9 +57,9 @@ export function registerComputerTools() {
     requiresConfirmation: true,
     inputSchema: { type: "object", required: ["url"], properties: { url: { type: "string" } } },
     source: "browser_adapter",
-  });
+  }, COMPUTER_TOOL_OWNER);
 
-  registerTool("computer.capture_screen", (input, context) => browserTool(OS_CAPABILITIES.screenshot, input, context), {
+  registerOwnedTool("computer.capture_screen", computerToolHandlers.get(OS_CAPABILITIES.screenshot), {
     category: "vision",
     capabilities: [OS_CAPABILITIES.screenshot],
     permission: "screen.capture",
@@ -52,7 +67,7 @@ export function registerComputerTools() {
     requiresConfirmation: true,
     inputSchema: { type: "object", properties: {} },
     source: "browser_adapter",
-  });
+  }, COMPUTER_TOOL_OWNER);
 
   const adapterTools = [
     ["computer.open_app", "app.open"],
@@ -76,7 +91,7 @@ export function registerComputerTools() {
 
   adapterTools.forEach(([name, capability]) => {
     const definition = getCapability(capability);
-    registerTool(name, (input, context) => browserTool(capability, input, context), {
+    registerOwnedTool(name, computerToolHandlers.get(capability), {
       category: "computer",
       capabilities: [capability],
       permission: capability,
@@ -84,7 +99,7 @@ export function registerComputerTools() {
       requiresConfirmation: definition.riskLevel !== "low",
       inputSchema: { type: "object", properties: { target: { type: "string" }, command: { type: "string" }, path: { type: "string" } } },
       source: "platform_adapter",
-    });
+    }, COMPUTER_TOOL_OWNER);
   });
 
   return ["computer.system_info", "computer.open_url", "computer.capture_screen", ...adapterTools.map(([name]) => name)];

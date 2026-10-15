@@ -84,6 +84,11 @@ test("benchmark smoke mode emits bounded latency percentiles and timer overhead"
   assert.equal(report.algorithms.linear.perOperationSelectionLatency.samples, 50);
   assert.equal(report.algorithms.indexed.perOperationSelectionLatency.samples, 50);
   assert.equal(report.algorithms.masked.perOperationSelectionLatency.samples, 50);
+  assert.equal(report.correctness.baseline, "linear");
+  assert.equal(report.correctness.outputEquivalent, true);
+  assert.equal(report.correctness.comparedAfterTimer, true);
+  assert.equal(report.correctness.checkedCallsPerAlgorithm, 70);
+  assert.deepEqual(report.correctness.checkedCalls, { linear: 70, indexed: 70, masked: 70 });
   assert.equal(report.emptyTimerPairLatency.samples, 50);
   for (const key of ["p50Microseconds", "p95Microseconds", "p99Microseconds"]) {
     assert.ok(Number.isFinite(report.algorithms.linear.perOperationSelectionLatency[key]));
