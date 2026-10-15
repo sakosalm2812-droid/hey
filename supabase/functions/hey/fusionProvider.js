@@ -12,7 +12,7 @@ const PROVIDER_ENDPOINTS = Object.freeze({
 
 const ALLOWED_TOP_LEVEL = ["budgetUsd", "minConfidence", "providers"];
 const ALLOWED_PROVIDER_FIELDS = ["id", "model", "inputUsdPerMillion", "outputUsdPerMillion", "maxCostUsd"];
-const FUSION_INSTRUCTION = "Return only JSON matching {\"text\": string, \"confidence\": number from 0 to 1, \"evidence\": Array<{\"claimId\": string, \"statement\": string, \"value\": string|number|boolean|null, \"source\": string|null}>}. Confidence is your estimate, not authorization. Keep evidence short and factual; use an empty array when you cannot provide claim-level support.";
+const FUSION_INSTRUCTION = "Return only JSON matching {\"text\": string, \"confidence\": number from 0 to 1, \"evidence\": Array<{\"claimId\": string, \"statement\": string, \"value\": string|number|boolean|null, \"source\": string|null}>}. Confidence is your estimate, not authorization. Include exactly one evidence item with claimId \"answer\" and a string value exactly equal to your complete text response; its statement must briefly describe that answer. Keep other evidence short and factual. If you cannot bind your response to an answer claim, return empty evidence; the server will withhold the response.";
 
 function isPlainObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -74,6 +74,12 @@ function readUsage(providerId, data) {
   if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > 100_000 ||
     !Number.isSafeInteger(outputTokens) || outputTokens < 0 || outputTokens > 100_000) return null;
   return { inputTokens, outputTokens };
+}
+
+function hasBoundAnswerEvidence(output) {
+  if (!output || typeof output.text !== "string" || !output.text.trim() || output.text !== output.text.trim() || !Array.isArray(output.evidence)) return false;
+  const answerClaims = output.evidence.filter((item) => typeof item?.claimId === "string" && item.claimId.toLowerCase() === "answer");
+  return answerClaims.length === 1 && answerClaims[0].value === output.text;
 }
 
 function calculateCost(usage, pricing) {
@@ -152,6 +158,7 @@ async function requestProvider({ provider, attempt, messages, signal, fetchImpl 
   } catch {
     throw new Error("Provider output did not match the structured response contract");
   }
+  if (!hasBoundAnswerEvidence(parsed)) throw new Error("Provider answer was not bound to its evidence claim");
   const usage = readUsage(provider.id, data);
   if (!usage) throw new Error("Provider usage is unavailable");
   if (usage.inputTokens > provider.maxInputTokens || usage.outputTokens > provider.maxOutputTokens) {
@@ -268,14 +275,12 @@ export async function runFusionChatRequest({
       return { status: "denied", reason: "fusion_permission_revoked" };
     }
   }
-  const claims = new Map();
-  for (const item of result.evidence) {
-    const key = `${item.claimId}:${JSON.stringify(item.value)}`;
-    const providerIds = claims.get(key) || new Set();
-    providerIds.add(item.providerId);
-    claims.set(key, providerIds);
-  }
-  if (result.confidence < pricingConfig.minConfidence || !Array.from(claims.values()).some((ids) => ids.size > 1)) {
+  const boundAnswerProviders = new Set(result.evidence
+    .filter((item) => item.claimId.toLowerCase() === "answer" && item.value === result.answer)
+    .map((item) => item.providerId));
+  if (result.confidence < pricingConfig.minConfidence ||
+    boundAnswerProviders.size < 2 ||
+    result.providers.some((provider) => !boundAnswerProviders.has(provider.providerId))) {
     return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" };
   }
   return result;

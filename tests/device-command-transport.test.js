@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeTransportRequest } from "../supabase/functions/hey-device-transport/dispatch.js";
+import { digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
 
 const accountId = "2e4a81a4-2da8-4ae0-bfd6-719484a37795";
 const otherAccountId = "10e7b9e4-765b-4e88-b5d4-5eafc0f39f40";
@@ -100,11 +100,35 @@ test("malformed, spoofed, revoked and mismatched credentials fail before queue a
   assert.equal((await digestDeviceCredential("bad-token")), null);
 });
 
+test("account stop request snapshots only operation/device and atomically delegates owner scope to the trusted RPC", async () => {
+  assert.deepEqual(normalizeAccountDeviceRequest({ operation: "revoke", deviceId }), { operation: "revoke", deviceId });
+  assert.equal(normalizeAccountDeviceRequest({ operation: "revoke", deviceId, accountId: otherAccountId }), null);
+  assert.equal(normalizeAccountDeviceRequest({ operation: "revoke", deviceId: "bad" }), null);
+  const hostile = new Proxy({}, { ownKeys() { throw new Error("hostile stop request"); } });
+  assert.equal(normalizeAccountDeviceRequest(hostile), null);
+
+  const calls = [];
+  const stop = await revokeOwnedDeviceTransport({
+    authenticatedAccountId: accountId,
+    deviceId,
+    revokeDevice: async (...args) => { calls.push(args); return true; },
+  });
+  assert.deepEqual(stop, { ok: true, status: 200, revoked: true });
+  assert.deepEqual(calls, [[accountId, deviceId]], "the client cannot provide the account scope");
+
+  const notOwner = await revokeOwnedDeviceTransport({ authenticatedAccountId: accountId, deviceId, revokeDevice: async () => false });
+  assert.deepEqual(notOwner, { ok: false, status: 404, reason: "The requested device is unavailable for this account." });
+  const outage = await revokeOwnedDeviceTransport({ authenticatedAccountId: accountId, deviceId, revokeDevice: async () => { throw new Error("private service-role details"); } });
+  assert.equal(outage.status, 503);
+  assert.equal(JSON.stringify(outage).includes("private service-role"), false);
+  assert.equal((await revokeOwnedDeviceTransport({ authenticatedAccountId: otherAccountId, deviceId })).status, 400);
+});
+
 test("credential migration stores only hashes, requires trusted service role and revokes on device revocation", async () => {
   const sql = await readFile(new URL("../supabase/migrations/20261015000200_device_transport_credentials.sql", import.meta.url), "utf8");
   assert.match(sql, /secret_hash text not null unique check \(secret_hash ~ '\^\[0-9a-f\]\{64\}\$'\)/i);
   assert.match(sql, /foreign key \(device_id, account_id\) references public\.hey_devices\(id, user_id\)/i);
-  assert.equal((sql.match(/coalesce\(auth\.role\(\), ''\) <> 'service_role'/gi) || []).length, 5);
+  assert.equal((sql.match(/coalesce\(auth\.role\(\), ''\) <> 'service_role'/gi) || []).length, 6);
   assert.match(sql, /where d\.id = p_device_id and d\.user_id = p_account_id and d\.status <> 'revoked'/i);
   assert.match(sql, /c\.secret_hash = p_secret_hash and c\.revoked_at is null and d\.status <> 'revoked'/i);
   assert.match(sql, /update public\.hey_device_credentials set revoked_at = clock_timestamp\(\)/i);
@@ -113,10 +137,22 @@ test("credential migration stores only hashes, requires trusted service role and
   assert.match(sql, /d\.capabilities @> jsonb_build_array\(c\.envelope->>'action'\)/i);
   assert.match(sql, /state = 'cancelled', lease_token = null, lease_until = null[\s\S]*c\.envelope->>'action' = v_permission/i);
   assert.match(sql, /create trigger hey_devices_cancel_unsupported_commands[\s\S]*after update of capabilities/i);
+  assert.match(sql, /create or replace function public\.revoke_hey_device_transport\(p_account_id uuid, p_device_id uuid\)[\s\S]*?where d\.id = p_device_id and d\.user_id = p_account_id[\s\S]*?for update/i);
+  assert.match(sql, /update public\.hey_devices set status = 'revoked'[\s\S]*update public\.hey_device_credentials set revoked_at = coalesce\(revoked_at, clock_timestamp\(\)\)[\s\S]*update public\.hey_device_commands set state = 'cancelled', lease_token = null, lease_until = null[\s\S]*state = 'pending'/i);
+  assert.match(sql, /grant execute on function public\.revoke_hey_device_transport\(uuid, uuid\) to service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.revoke_hey_device_transport\([^;]+\) to [^;]*authenticated/i);
   assert.match(sql, /grant execute on function public\.rotate_hey_device_credential\(uuid, uuid, text\) to service_role/i);
   assert.match(sql, /grant execute on function public\.authenticate_hey_device_credential\(text\) to service_role/i);
   assert.doesNotMatch(sql, /grant execute on function public\.(?:rotate|authenticate)_hey_device_credential\([^;]+\) to [^;]*authenticated/i);
   assert.doesNotMatch(sql, /credential text|secret text|token text/i);
+});
+
+test("edge stop route authenticates the account JWT and never accepts caller-supplied account scope", async () => {
+  const edge = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
+  assert.match(edge, /userClient\.auth\.getUser\(\)/);
+  assert.match(edge, /normalizeAccountDeviceRequest\(parsed\.value\)/);
+  assert.match(edge, /revokeOwnedDeviceTransport\(\{\s*authenticatedAccountId: accountId,[\s\S]*?deviceId: accountRequest\.deviceId/);
+  assert.match(edge, /rpc\("revoke_hey_device_transport", \{ p_account_id: userId, p_device_id: deviceId \}\)/);
 });
 
 test("device transport disables gateway JWT verification because it verifies JWTs or device secrets itself", async () => {

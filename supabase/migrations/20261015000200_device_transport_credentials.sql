@@ -83,6 +83,41 @@ revoke all on function public.revoke_hey_device_credential_on_device_revoke() fr
 grant execute on function public.rotate_hey_device_credential(uuid, uuid, text) to service_role;
 grant execute on function public.authenticate_hey_device_credential(text) to service_role;
 
+-- Authenticated-account Edge callers can request a stop. The service-role RPC
+-- locks the owner-bound device row and atomically revokes it, its credential,
+-- and every still-pending (including leased but unacknowledged) command.
+create or replace function public.revoke_hey_device_transport(p_account_id uuid, p_device_id uuid)
+returns boolean
+language plpgsql security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+  v_device public.hey_devices%rowtype;
+begin
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Trusted device revocation service required.' using errcode = '42501';
+  end if;
+  if p_account_id is null or p_device_id is null then
+    raise exception 'Invalid device revocation request.' using errcode = '22023';
+  end if;
+  select * into v_device from public.hey_devices d
+    where d.id = p_device_id and d.user_id = p_account_id
+    for update;
+  if not found then return false; end if;
+
+  update public.hey_devices set status = 'revoked', updated_at = clock_timestamp()
+    where id = p_device_id and user_id = p_account_id;
+  update public.hey_device_credentials set revoked_at = coalesce(revoked_at, clock_timestamp())
+    where account_id = p_account_id and device_id = p_device_id;
+  update public.hey_device_commands set state = 'cancelled', lease_token = null, lease_until = null
+    where account_id = p_account_id and device_id = p_device_id and state = 'pending';
+  return true;
+end;
+$$;
+
+revoke all on function public.revoke_hey_device_transport(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.revoke_hey_device_transport(uuid, uuid) to service_role;
+
 -- Permission revocation is an emergency stop for commands that have not been
 -- acknowledged. Clearing leases prevents a later ack/retry from reviving them.
 create or replace function public.cancel_hey_device_commands_on_permission_revoke()
