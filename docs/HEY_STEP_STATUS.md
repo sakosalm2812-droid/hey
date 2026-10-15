@@ -2,7 +2,7 @@
 
 Updated: 2026-10-15
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `fcd1750` (source); full Node suite 454/454, focused third-wave suites 52/52 and 120/120, changed-file ESLint, `git diff --check`, and production Vite build passed. SQL migrations and Edge functions were not run against PostgreSQL/Supabase or deployed.
+Latest verified implementation checkpoint: `61e8b6b` (source); full Node suite 471/471 passed on a standalone rerun, production Vite build and changed-file ESLint passed. Gesture profiles focused tests 20/20; Ultrasparse selector focused tests 8/8. One concurrent full-suite run had a transient Fusion deadline assertion failure during build load; focused Fusion passed 30/30 and the full rerun passed. SQL migrations and Edge functions were not run against PostgreSQL/Supabase or deployed.
 
 ## Status rules
 
