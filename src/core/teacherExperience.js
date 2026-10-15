@@ -135,6 +135,46 @@ function canonicalJson(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
 }
 
+function snapshotLessonData(value, path = new WeakSet(), budget = { nodes: 0 }, depth = 0) {
+  budget.nodes += 1;
+  if (budget.nodes > 10000 || depth > 32) throw new TypeError("Lesson artifact exceeds verification bounds");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (!value || typeof value !== "object" || path.has(value)) throw new TypeError("Lesson artifact must contain only acyclic plain data");
+  path.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype || value.length > 2000) throw new TypeError("Lesson artifact arrays must be plain and bounded");
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== value.length + 1 || keys.some((key) => key !== "length" && (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))) {
+        throw new TypeError("Lesson artifact arrays cannot contain holes or custom properties");
+      }
+      const clone = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new TypeError("Lesson artifact arrays cannot contain accessors");
+        clone.push(snapshotLessonData(descriptor.value, path, budget, depth + 1));
+      }
+      return clone;
+    }
+    if (!isPlainRecord(value)) throw new TypeError("Lesson artifact must contain plain objects");
+    const clone = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (typeof key !== "string" || !descriptor || !Object.hasOwn(descriptor, "value")) throw new TypeError("Lesson artifact objects cannot contain symbols or accessors");
+      Object.defineProperty(clone, key, {
+        value: snapshotLessonData(descriptor.value, path, budget, depth + 1),
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      });
+    }
+    return clone;
+  } finally {
+    path.delete(value);
+  }
+}
+
 async function digestLesson(lesson) {
   if (!globalThis.crypto?.subtle) throw new Error("Web Crypto SHA-256 is required to verify teacher lesson exports");
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(lesson)));
@@ -216,6 +256,11 @@ export async function buildTeacherLessonArtifact(input) {
 }
 
 export async function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId } = {}) {
+  try {
+    artifact = snapshotLessonData(artifact);
+  } catch {
+    return Object.freeze({ valid: false, checks: Object.freeze({ safeSnapshot: false }) });
+  }
   let lessonShapeSafe = false;
   let detectedSafetyReview = null;
   try {
@@ -297,19 +342,27 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
 }
 
 export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
-  const verification = await verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId });
+  let stableArtifact;
+  let stableSafetyReview;
+  try {
+    stableArtifact = snapshotLessonData(artifact);
+    stableSafetyReview = safetyReview === undefined ? undefined : snapshotLessonData(safetyReview);
+  } catch {
+    throw new Error("Lesson artifact failed verification for the active account and workspace");
+  }
+  const verification = await verifyTeacherLessonArtifact(stableArtifact, { accountScope, workspaceId });
   if (!verification.valid) throw new Error("Lesson artifact failed verification for the active account and workspace");
-  if (artifact.metadata.safety.reviewRequired) {
-    if (!isPlainRecord(safetyReview)) throw new Error("Teacher safety review is required for the active account and workspace before exporting this lesson");
-    assertOnlyDataFields(safetyReview, "Teacher safety review", new Set(["accountScope", "workspaceId", "reviewerId", "reviewedAt"]));
-    if (safetyReview.accountScope !== accountScope
-      || safetyReview.workspaceId !== workspaceId
-      || typeof safetyReview.reviewerId !== "string" || !safetyReview.reviewerId.trim()
-      || !Number.isFinite(Date.parse(safetyReview.reviewedAt || ""))) {
+  if (stableArtifact.metadata.safety.reviewRequired) {
+    if (!isPlainRecord(stableSafetyReview)) throw new Error("Teacher safety review is required for the active account and workspace before exporting this lesson");
+    assertOnlyDataFields(stableSafetyReview, "Teacher safety review", new Set(["accountScope", "workspaceId", "reviewerId", "reviewedAt"]));
+    if (stableSafetyReview.accountScope !== accountScope
+      || stableSafetyReview.workspaceId !== workspaceId
+      || typeof stableSafetyReview.reviewerId !== "string" || !stableSafetyReview.reviewerId.trim()
+      || !Number.isFinite(Date.parse(stableSafetyReview.reviewedAt || ""))) {
       throw new Error("Teacher safety review is required for the active account and workspace before exporting this lesson");
     }
   }
-  const { content: lesson, metadata } = artifact;
+  const { content: lesson, metadata } = stableArtifact;
   const lines = [
     `# ${escapeMarkdown(lesson.title)}`, "", `**Subject:** ${escapeMarkdown(lesson.subject)}  `,
     `**Grade band:** ${escapeMarkdown(lesson.gradeBand)}  `, `**Duration:** ${lesson.durationMinutes} minutes`, "",

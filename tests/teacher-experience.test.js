@@ -78,6 +78,16 @@ test("export blocks plausible post-build edits and forged verification markers",
   await assert.rejects(exportTeacherLessonMarkdown(forgedEvidence, { accountScope: "account:teacher-1", workspaceId: "school-space" }), /failed verification/);
 });
 
+test("async export snapshots mutable imported artifacts before digest verification", async () => {
+  const artifact = JSON.parse(JSON.stringify(await buildTeacherLessonArtifact(lessonInput())));
+  const exportPromise = exportTeacherLessonMarkdown(artifact, { accountScope: "account:teacher-1", workspaceId: "school-space" });
+  artifact.title = "Tampered during verification";
+  artifact.content.title = "Tampered during verification";
+  const markdown = await exportPromise;
+  assert.match(markdown.content, /Fractions on a number line/);
+  assert.doesNotMatch(markdown.content, /Tampered during verification/);
+});
+
 test("student records, unknown data fields, contact details, and accessor payloads are rejected", async () => {
   await assert.rejects(buildTeacherLessonArtifact(lessonInput({ studentRecords: [{ name: "Student Example" }] })), /Student personal data is not accepted/);
   await assert.rejects(buildTeacherLessonArtifact(lessonInput({ assessment: { prompt: "Use this", expectedLearning: "Understand", studentAnswers: ["private"] } })), /Student personal data is not accepted/);
