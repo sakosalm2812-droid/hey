@@ -157,6 +157,7 @@ import { createLiveSession, startLiveSession, addLiveSource, switchLiveSource, r
 import { createDynamicIsland, getDynamicIsland, getDefaultDynamicIsland, listDynamicIslands, updateDynamicIslandSettings, addIslandActivity, updateIslandActivity, removeIslandActivity, dismissIslandActivity, pinIslandActivity, unpinIslandActivity, setIslandState, toggleIslandExpanded, handleIslandInteraction, addIslandModule, removeIslandModule, updateIslandModule, enableIslandModule, disableIslandModule, getVisibleIslandActivities, cleanupExpiredIslandActivities, completeIslandActivity, errorIslandActivity, destroyDynamicIsland, ISLAND_STATES, ACTIVITY_TYPES } from "./dynamicIsland.js";
 import { startBackgroundHelper, stopBackgroundHelper, pauseBackgroundHelper, resumeBackgroundHelper, getBackgroundHelperState, isBackgroundCapabilityEnabled, enableBackgroundCapability, disableBackgroundCapability, runBackgroundTask, cancelBackgroundTask, handleBackgroundCloseBehavior, HELPER_STATES, BACKGROUND_CAPABILITIES } from "./backgroundHelper.js";
 import { validateForgeArtifact, createForgePreview } from "./forgeEngine.js";
+import { buildTeacherLessonArtifact, verifyTeacherLessonArtifact, saveTeacherLessonArtifact, exportTeacherLessonMarkdown } from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
 import { getDeviceId, getDeviceName, renameDevice, startFabric, listPeers, requestHandoff, getHandoffBundle, clearHandoffBundle, acceptHandoff, producePairCode, registerPairCode, getPairCode } from "./deviceFabric.js";
@@ -233,7 +234,7 @@ import { createMorningBriefing } from "./briefingEngine.js";
 import { registerProvider, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
 import { selectModel, createProviderPlan } from "./providerRouter.js";
 import { FUSION_MODES, runProviderFusion } from "./providerFusion.js";
-import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
+import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
 import { 
   initializeComputerControl, 
   executeComputerControl, 
@@ -665,6 +666,7 @@ import {
 
     modelPlatform: {
       createModelRecord,
+      createEvaluationReport,
       createAdapterManifest,
       createAdapterServingTarget,
       createInferenceRequest,
@@ -846,6 +848,13 @@ import {
       getGraph: getVersionGraph,
       types: ARTIFACT_KINDS,
       statuses: ARTIFACT_STATUS,
+    },
+
+    teacher: {
+      buildLessonArtifact: buildTeacherLessonArtifact,
+      verifyLessonArtifact: verifyTeacherLessonArtifact,
+      saveLessonArtifact: saveTeacherLessonArtifact,
+      exportLessonMarkdown: exportTeacherLessonMarkdown,
     },
 
     live: {
