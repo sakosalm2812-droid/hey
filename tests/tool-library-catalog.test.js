@@ -3,6 +3,7 @@ import test from "node:test";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
 import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, getToolLifecycleContract } from "../src/core/toolRegistry.js";
 import { seedPermissions, clearPermissions } from "../src/core/permissionManager.js";
+import { setAccountScope } from "../src/core/accountScope.js";
 
 test("Tool Library catalog derives availability from capability policy without exposing handlers", () => {
   const availableCapability = "test.tool_library.available";
@@ -209,6 +210,7 @@ test("tool lifecycle reports only declared actions and requires canonical accoun
   const name = "test.tool_library.lifecycle_contract";
   const capability = "test.tool_library.lifecycle_contract_capability";
   registerCapability({ id: capability, name: "Lifecycle contract capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("contract-account");
   try {
     registerTool(name, async () => ({ success: true }), {
       description: "A lifecycle contract fixture.",
@@ -224,6 +226,7 @@ test("tool lifecycle reports only declared actions and requires canonical accoun
     assert.equal(stopToolLibraryEntry(name, "not-a-session", { user: { id: "contract-account" } }).status, "unsupported");
   } finally {
     unregisterTool(name);
+    setAccountScope(null);
   }
 });
 
@@ -231,6 +234,7 @@ test("lifecycle start is denied after permission revocation and never dispatches
   const name = "test.tool_library.revoked_lifecycle";
   const capability = "test.tool_library.revoked_lifecycle_capability";
   registerCapability({ id: capability, name: "Revoked lifecycle capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("revoked-lifecycle-account");
   let executions = 0;
   try {
     registerTool(name, async () => { executions += 1; return { success: true }; }, {
@@ -247,6 +251,7 @@ test("lifecycle start is denied after permission revocation and never dispatches
   } finally {
     clearPermissions();
     unregisterTool(name);
+    setAccountScope(null);
   }
 });
 
@@ -254,6 +259,7 @@ test("account-scoped lifecycle sessions resist concurrent reuse, cross-account s
   const name = "test.tool_library.lifecycle_session";
   const capability = "test.tool_library.lifecycle_session_capability";
   registerCapability({ id: capability, name: "Lifecycle session capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-owner");
   seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-owner");
   let entered;
   let handlerFinished;
@@ -276,8 +282,8 @@ test("account-scoped lifecycle sessions resist concurrent reuse, cross-account s
     await handlerEntered;
     assert.equal(getToolLifecycleContract(name, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } }).status, "running");
     assert.equal(startToolLibraryEntry(name, {}, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } }).status, "conflict");
-    assert.equal(getToolLifecycleContract(name, { user: { id: "other-account", plan: "elite", entitlements: ["elite"] } }).sessionId, null);
-    assert.equal(stopToolLibraryEntry(name, started.sessionId, { user: { id: "other-account", plan: "elite", entitlements: ["elite"] } }).status, "not_found");
+    assert.equal(getToolLifecycleContract(name, { user: { id: "other-account", plan: "elite", entitlements: ["elite"] } }).status, "denied");
+    assert.equal(stopToolLibraryEntry(name, started.sessionId, { user: { id: "other-account", plan: "elite", entitlements: ["elite"] } }).status, "denied");
     const stopping = stopToolLibraryEntry(name, started.sessionId, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } });
     assert.equal(stopping.status, "stopping");
     await handlerDone;
@@ -289,6 +295,7 @@ test("account-scoped lifecycle sessions resist concurrent reuse, cross-account s
   } finally {
     unregisterTool(name);
     clearPermissions();
+    setAccountScope(null);
   }
 });
 
@@ -296,6 +303,7 @@ test("a non-cooperative handler is never reported as stopped when it completes a
   const name = "test.tool_library.lifecycle_noncooperative";
   const capability = "test.tool_library.lifecycle_noncooperative_capability";
   registerCapability({ id: capability, name: "Noncooperative lifecycle capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-noncooperative");
   seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-noncooperative");
   let entered;
   let release;
@@ -321,6 +329,63 @@ test("a non-cooperative handler is never reported as stopped when it completes a
   } finally {
     unregisterTool(name);
     clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("account-scope changes abort prior runs, discard stale completion, and purge bounded activity", async () => {
+  const name = "test.tool_library.lifecycle_scope_switch";
+  const capability = "test.tool_library.lifecycle_scope_switch_capability";
+  registerCapability({ id: capability, name: "Scope switch lifecycle capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-scope-a");
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-scope-a");
+  let entered;
+  let release;
+  let observedSignal;
+  const handlerEntered = new Promise((resolve) => { entered = resolve; });
+  const releaseHandler = new Promise((resolve) => { release = resolve; });
+  try {
+    registerTool(name, async (_input, { signal }) => {
+      observedSignal = signal;
+      entered();
+      await releaseHandler;
+      return { success: true, secret: "prior-account-result" };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, stop: true },
+    });
+    const ownerContext = { user: { id: "lifecycle-scope-a", plan: "elite", entitlements: ["elite"] } };
+    const started = startToolLibraryEntry(name, {}, ownerContext);
+    await handlerEntered;
+    setAccountScope("lifecycle-scope-b");
+    assert.equal(observedSignal.aborted, true);
+    assert.equal(getToolLifecycleContract(name, ownerContext).status, "denied");
+    assert.equal(getToolLifecycleContract(name, { user: { id: "lifecycle-scope-b" } }).activity.length, 0);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(stopToolLibraryEntry(name, started.sessionId, ownerContext).status, "denied");
+
+    // Churn more identities than the activity LRU bound; returning to A must
+    // not recover its pre-switch history or the stale run's completion.
+    for (let index = 0; index < 70; index += 1) {
+      const accountId = `lifecycle-activity-${index}`;
+      setAccountScope(accountId);
+      seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], accountId);
+      const context = { user: { id: accountId, plan: "elite", entitlements: ["elite"] } };
+      const run = startToolLibraryEntry(name, {}, context);
+      assert.equal(run.success, true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    setAccountScope("lifecycle-scope-a");
+    const returned = getToolLifecycleContract(name, ownerContext);
+    assert.equal(returned.status, "registered");
+    assert.equal(returned.sessionId, null);
+    assert.deepEqual(returned.activity, []);
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
   }
 });
 

@@ -1,12 +1,27 @@
 import { recordAudit } from "./auditLog.js";
 import { executeWithPermission, authorizeExecution, hasPermission } from "./permissionManager.js";
 import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
+import { getAccountScope, subscribeAccountScope } from "./accountScope.js";
 
 const tools = new Map();
 const activeToolSessions = new Map();
 const toolSessionActivity = new Map();
 const MAX_TOOL_ACTIVITY = 50;
+const MAX_ACTIVITY_ACCOUNTS = 64;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
+
+subscribeAccountScope((previousScope) => {
+  const previousAccountId = typeof previousScope === "string" && previousScope.startsWith("account:")
+    ? previousScope.slice("account:".length)
+    : null;
+  if (!previousAccountId) return;
+  for (const [key, session] of activeToolSessions) {
+    if (session.accountId !== previousAccountId) continue;
+    session.controller.abort(new Error("Account scope changed."));
+    activeToolSessions.delete(key);
+  }
+  toolSessionActivity.delete(previousAccountId);
+});
 
 function cloneMetadata(metadata) {
   return cloneMetadataValue(metadata, new WeakSet());
@@ -259,18 +274,25 @@ export async function runToolLibraryEntry(name, input, context = {}) {
 function resolveToolAccount(context = {}) {
   const user = context.user || context.session?.user || context.account || null;
   const accountId = user?.id || user?.userId || user?.accountId || null;
-  return accountId ? { user, accountId: String(accountId) } : null;
+  if (!accountId) return null;
+  const normalizedAccountId = String(accountId);
+  return getAccountScope() === `account:${normalizedAccountId}` ? { user, accountId: normalizedAccountId } : null;
 }
 
 function sessionKey(accountId, name) {
-  return `${accountId}\u0000${name}`;
+  return JSON.stringify([accountId, name]);
 }
 
 function appendToolActivity(accountId, activity) {
   const activityList = toolSessionActivity.get(accountId) || [];
   activityList.unshift(Object.freeze({ ...activity, accountId }));
   activityList.length = Math.min(activityList.length, MAX_TOOL_ACTIVITY);
+  toolSessionActivity.delete(accountId);
   toolSessionActivity.set(accountId, activityList);
+  while (toolSessionActivity.size > MAX_ACTIVITY_ACCOUNTS) {
+    const oldestAccountId = toolSessionActivity.keys().next().value;
+    toolSessionActivity.delete(oldestAccountId);
+  }
 }
 
 /**

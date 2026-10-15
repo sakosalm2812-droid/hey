@@ -8,8 +8,9 @@ export function getAccountScope() {
 export function setAccountScope(accountId) {
   const nextScope = accountId ? `account:${accountId}` : "anonymous";
   if (nextScope === activeScope) return;
+  const previousScope = activeScope;
   activeScope = nextScope;
-  listeners.forEach((listener) => listener());
+  listeners.forEach((listener) => listener(previousScope, nextScope));
 }
 
 export function subscribeAccountScope(listener) {
