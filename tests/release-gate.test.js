@@ -25,6 +25,7 @@ async function fixture({ signer = "release-auditor", body = {}, ageMs = 0, store
   return {
     now,
     envelope,
+    evidencePrivateKey: keys.privateKey,
     inventoryPrivateKey: inventoryKeys.privateKey,
     store,
     options: { trustedKeys: { [signer]: keys.publicKey, "inventory-authority": inventoryKeys.publicKey }, store, maxAgeMs: 30_000, allowTestOnlyStore: true },
@@ -180,4 +181,61 @@ test("release recommendation requires a fresh independent signature over the com
     const rejected = await request(unbounded, { inventoryAttestation: stale });
     assert.equal(rejected.recommendation, "NOT_READY");
   });
+});
+
+test("release evaluation verifies detached input snapshots across asynchronous evidence-store callbacks", async () => {
+  const data = await fixture();
+  const gates = [{ ...gate }];
+  const claims = [{ id: "claim-web-ready", text: "Web release verified", gateIds: [gate.id] }];
+  const gatesAfterMutation = [{ ...gate, version: "3", subjectDigest: "sha256:mutated-build" }];
+  const claimsAfterMutation = [{ id: "claim-web-ready", text: "Mutated claim", gateIds: [gate.id] }];
+  const attestationBody = createReleaseInventoryAttestationBody({ gates, publicClaims: claims, challenge: data.inventoryChallenge });
+  const changedAttestationBody = createReleaseInventoryAttestationBody({ gates: gatesAfterMutation, publicClaims: claimsAfterMutation, challenge: data.inventoryChallenge });
+  const attestation = await createEvidenceEnvelope({
+    accountId,
+    source: { kind: "release-inventory", id: "authoritative-registry-17" },
+    body: attestationBody,
+    capturedAt: new Date(data.now).toISOString(),
+    expiresAt: new Date(data.now + 60_000).toISOString(),
+    revocationEpoch: 4,
+  }, { privateKey: data.inventoryPrivateKey, keyId: "inventory-authority", now: data.now });
+  const evidenceAfterMutation = await createEvidenceEnvelope({
+    accountId,
+    source: { kind: "release-check", id: "ci-run-mutated" },
+    body: { gateId: gate.id, gateVersion: gatesAfterMutation[0].version, subjectDigest: gatesAfterMutation[0].subjectDigest, result: "passed" },
+    capturedAt: new Date(data.now).toISOString(),
+    expiresAt: new Date(data.now + 60_000).toISOString(),
+    revocationEpoch: 4,
+  }, { privateKey: data.evidencePrivateKey, keyId: "release-auditor", now: data.now });
+  const evidence = [{ envelope: data.envelope }];
+  let mutationApplied = false;
+  const store = {
+    contractVersion: "hey.evidence-store.v1",
+    async isInvalidated() {
+      if (!mutationApplied) {
+        mutationApplied = true;
+        Object.assign(gates[0], gatesAfterMutation[0]);
+        Object.assign(claims[0], claimsAfterMutation[0]);
+        Object.assign(attestation.body.gates[0], changedAttestationBody.gates[0]);
+        Object.assign(attestation.body.publicClaims[0], changedAttestationBody.publicClaims[0]);
+        evidence[0].envelope = evidenceAfterMutation;
+      }
+      return false;
+    },
+  };
+  const result = await evaluateReleaseGate({
+    gates,
+    evidence,
+    publicClaims: claims,
+    verificationContext: context,
+    verificationOptions: { ...data.options, store, allowTestOnlyStore: true },
+    trustedIndependentVerifierKeyIds: ["release-auditor"],
+    inventoryAttestation: attestation,
+    trustedInventoryAttestorKeyIds: ["inventory-authority"],
+    inventoryAttestationChallenge: data.inventoryChallenge,
+    now: data.now,
+  });
+  assert.equal(mutationApplied, true);
+  assert.equal(result.recommendation, "READY", JSON.stringify(result));
+  assert.equal(result.gates[0].evidenceIds[0], data.envelope.payload.id);
 });

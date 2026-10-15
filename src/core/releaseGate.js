@@ -13,6 +13,68 @@ function assertRecord(value, label) {
   }
 }
 
+function detachedJson(value, label, ancestors = new WeakSet()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "object") throw new TypeError(`${label} must contain only JSON data.`);
+  if (ancestors.has(value)) throw new TypeError(`${label} cannot contain cycles.`);
+  const prototype = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) {
+    if (Reflect.ownKeys(value).some((key) => key === "length" ? false : typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key))) {
+      throw new TypeError(`${label} arrays cannot contain custom properties.`);
+    }
+    const keys = Object.keys(value);
+    if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
+      throw new TypeError(`${label} arrays cannot be sparse or reordered.`);
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (keys.some((key) => !descriptors[key].enumerable || !Object.hasOwn(descriptors[key], "value"))) {
+      throw new TypeError(`${label} cannot contain accessors or hidden array entries.`);
+    }
+    ancestors.add(value);
+    try { return keys.map((key) => detachedJson(descriptors[key].value, label, ancestors)); }
+    finally { ancestors.delete(value); }
+  }
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must contain only plain objects.`);
+  const keys = Reflect.ownKeys(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (keys.some((key) => typeof key !== "string" || !descriptors[key].enumerable || !Object.hasOwn(descriptors[key], "value"))) {
+    throw new TypeError(`${label} cannot contain symbol keys, accessor properties, or hidden properties.`);
+  }
+  ancestors.add(value);
+  try {
+    const copy = Object.create(null);
+    for (const key of keys) copy[key] = detachedJson(descriptors[key].value, label, ancestors);
+    return copy;
+  } finally { ancestors.delete(value); }
+}
+
+function detachedOptions(value) {
+  assertRecord(value, "Evidence verification options");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const copy = Object.create(null);
+  for (const key of Object.keys(descriptors)) {
+    if (!descriptors[key].enumerable) continue;
+    const entry = descriptors[key].value;
+    if (key !== "trustedKeys") {
+      copy[key] = entry;
+      continue;
+    }
+    if (entry instanceof Map) {
+      const keysCopy = new Map();
+      for (const [trustedKeyId, trustedKey] of Map.prototype.entries.call(entry)) keysCopy.set(trustedKeyId, trustedKey);
+      copy[key] = keysCopy;
+    } else {
+      assertRecord(entry, "Trusted evidence keys");
+      const keyDescriptors = Object.getOwnPropertyDescriptors(entry);
+      const keysCopy = Object.create(null);
+      for (const trustedKeyId of Object.keys(keyDescriptors)) keysCopy[trustedKeyId] = keyDescriptors[trustedKeyId].value;
+      copy[key] = keysCopy;
+    }
+  }
+  return copy;
+}
+
 function assertUniqueStrings(values, label, { allowEmpty = false } = {}) {
   if (!Array.isArray(values) || (!allowEmpty && values.length === 0)) throw new TypeError(`${label} must be a non-empty array.`);
   const seen = new Set();
@@ -72,9 +134,11 @@ function stableJson(value) {
 
 /** Build the exact body an independent inventory authority must sign. */
 export function createReleaseInventoryAttestationBody({ gates, publicClaims = [], challenge } = {}) {
-  validateGates(gates);
-  const claims = validateClaims(publicClaims);
-  return inventoryBody(gates, claims, challenge);
+  const gatesSnapshot = detachedJson(gates, "Release gates");
+  const claimsSnapshot = detachedJson(publicClaims, "Public claims");
+  validateGates(gatesSnapshot);
+  const claims = validateClaims(claimsSnapshot);
+  return inventoryBody(gatesSnapshot, claims, challenge);
 }
 
 /**
@@ -94,26 +158,31 @@ export async function evaluateReleaseGate({
   inventoryAttestationChallenge,
   now = Date.now(),
 } = {}) {
-  const gateIds = validateGates(gates);
-  const normalizedClaims = validateClaims(publicClaims);
-  const independentKeyIds = assertUniqueStrings(trustedIndependentVerifierKeyIds, "Trusted independent verifier key IDs");
-  const inventoryKeyIds = assertUniqueStrings(trustedInventoryAttestorKeyIds, "Trusted independent inventory attestor key IDs");
-  assertRecord(verificationContext, "Evidence verification context");
-  assertRecord(verificationOptions, "Evidence verification options");
-  if (!Number.isFinite(now)) throw new TypeError("Release evaluation time must be finite.");
   if (!Array.isArray(evidence)) throw new TypeError("Release evidence must be an array.");
+  const gatesSnapshot = detachedJson(gates, "Release gates");
+  const evidenceSnapshot = detachedJson(evidence, "Release evidence");
+  const claimsSnapshot = detachedJson(publicClaims, "Public claims");
+  const inventoryAttestationSnapshot = inventoryAttestation == null
+    ? inventoryAttestation
+    : detachedJson(inventoryAttestation, "Inventory attestation envelope");
+  const contextSnapshot = detachedJson(verificationContext, "Evidence verification context");
+  const optionsSnapshot = detachedOptions(verificationOptions);
+  const independentKeyIds = assertUniqueStrings(detachedJson(trustedIndependentVerifierKeyIds, "Trusted independent verifier key IDs"), "Trusted independent verifier key IDs");
+  const inventoryKeyIds = assertUniqueStrings(detachedJson(trustedInventoryAttestorKeyIds, "Trusted independent inventory attestor key IDs"), "Trusted independent inventory attestor key IDs");
+  const gateIds = validateGates(gatesSnapshot);
+  const normalizedClaims = validateClaims(claimsSnapshot);
+  if (!Number.isFinite(now)) throw new TypeError("Release evaluation time must be finite.");
 
   let inventoryAttestationValid;
   let inventoryAttestationEvidenceId;
   try {
-    assertRecord(inventoryAttestation, "Inventory attestation envelope");
-    const body = inventoryAttestation.body;
-    const verification = await verifyEvidenceEnvelope(inventoryAttestation, body, verificationContext, {
-      ...verificationOptions,
-      maxAgeMs: Math.min(verificationOptions.maxAgeMs ?? Infinity, MAX_INVENTORY_ATTESTATION_AGE_MS),
+    const body = inventoryAttestationSnapshot.body;
+    const verification = await verifyEvidenceEnvelope(inventoryAttestationSnapshot, body, contextSnapshot, {
+      ...optionsSnapshot,
+      maxAgeMs: Math.min(optionsSnapshot.maxAgeMs ?? Infinity, MAX_INVENTORY_ATTESTATION_AGE_MS),
       now,
     });
-    const expectedBody = inventoryBody(gates, normalizedClaims, inventoryAttestationChallenge);
+    const expectedBody = inventoryBody(gatesSnapshot, normalizedClaims, inventoryAttestationChallenge);
     inventoryAttestationValid = verification.valid === true
       && inventoryKeyIds.has(verification.signerKeyId)
       && !independentKeyIds.has(verification.signerKeyId)
@@ -123,19 +192,19 @@ export async function evaluateReleaseGate({
     inventoryAttestationValid = false;
   }
 
-  const gatesById = new Map(gates.map((gate) => [gate.id, gate]));
-  const passedByGate = new Map(gates.map((gate) => [gate.id, []]));
+  const gatesById = new Map(gatesSnapshot.map((gate) => [gate.id, gate]));
+  const passedByGate = new Map(gatesSnapshot.map((gate) => [gate.id, []]));
   const seenEvidenceIds = new Set();
   let rejectedEvidenceCount = 0;
 
-  for (const item of evidence) {
+  for (const item of evidenceSnapshot) {
     assertRecord(item, "Evidence record");
     const envelope = item.envelope;
     assertRecord(envelope, "Evidence envelope");
     const body = envelope.body;
     let verification;
     try {
-      verification = await verifyEvidenceEnvelope(envelope, body, verificationContext, { ...verificationOptions, now });
+      verification = await verifyEvidenceEnvelope(envelope, body, contextSnapshot, { ...optionsSnapshot, now });
     } catch {
       rejectedEvidenceCount += 1;
       continue;
@@ -162,7 +231,7 @@ export async function evaluateReleaseGate({
     passedByGate.get(gate.id).push(verification.evidenceId);
   }
 
-  const gateResults = gates.map((gate) => {
+  const gateResults = gatesSnapshot.map((gate) => {
     const passedEvidenceIds = passedByGate.get(gate.id);
     if (passedEvidenceIds.length) return { id: gate.id, status: PASS, evidenceIds: passedEvidenceIds };
     return {
