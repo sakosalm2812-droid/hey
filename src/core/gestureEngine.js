@@ -52,7 +52,7 @@ function generateSampleId() {
   return `sample_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-class GestureEngine {
+export class GestureEngine {
   constructor() {
     this.profiles = new Map();
     this.bindings = new Map();
@@ -61,6 +61,12 @@ class GestureEngine {
     this.mediaStream = null;
     this.videoElement = null;
     this.detector = null;
+    this.recognitionAdapter = null;
+    this.recognitionAbortController = null;
+    this.recognitionGeneration = 0;
+    this.activeProfileId = null;
+    this.frameCanvas = null;
+    this.lastFrameAt = 0;
     this.listeners = new Set();
     this.load();
   }
@@ -241,65 +247,132 @@ class GestureEngine {
     return true;
   }
 
-  async startRecognition(profileId) {
-    const profile = this.profiles.get(profileId);
-    if (!profile) return { error: "Profile not found" };
+  setRecognitionAdapter(adapter) {
+    if (adapter !== null && (!adapter || typeof adapter.detect !== "function")) {
+      throw new TypeError("Gesture adapter must implement detect(video, profile, context).");
+    }
+    if (this.recognitionState === GESTURE_STATES.ACTIVE || this.recognitionState === GESTURE_STATES.CALIBRATING) {
+      throw new Error("Stop gesture recognition before replacing its adapter.");
+    }
+    this.recognitionAdapter = adapter;
+    return { available: Boolean(adapter), kind: adapter?.kind || null };
+  }
 
+  async startRecognition(profileId, { consent = false } = {}) {
+    const profile = this.profiles.get(profileId);
+    if (!profile) return { success: false, error: "Profile not found", code: "profile_not_found" };
+    if (this.recognitionState === GESTURE_STATES.ACTIVE || this.recognitionState === GESTURE_STATES.CALIBRATING) {
+      return { success: false, error: "Gesture recognition is already active.", code: "already_active" };
+    }
+    if (!consent) return { success: false, error: "Explicit camera consent is required.", code: "consent_required" };
+    if (!this.recognitionAdapter) {
+      return { success: false, error: "No gesture recognition adapter is available on this platform.", code: "adapter_unavailable" };
+    }
+    if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.document?.createElement !== "function" || typeof globalThis.requestAnimationFrame !== "function") {
+      return { success: false, error: "Camera capture is unsupported in this environment.", code: "camera_unsupported" };
+    }
+
+    const generation = ++this.recognitionGeneration;
+    const abortController = new AbortController();
+    this.recognitionAbortController = abortController;
+    this.activeProfileId = profileId;
     this.recognitionState = GESTURE_STATES.CALIBRATING;
-    this.notify("recognition_state_changed", { state: this.recognitionState });
+    this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "requesting" });
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      this.mediaStream = await globalThis.navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: profile.cameraId ? { exact: profile.cameraId } : undefined,
           facingMode: "user",
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+          width: { ideal: 640, max: 640 },
+          height: { ideal: 480, max: 480 },
         },
       });
 
-      this.videoElement = document.createElement("video");
+      if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
+        this.mediaStream.getTracks().forEach(track => track.stop());
+        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+      }
+      this.videoElement = globalThis.document.createElement("video");
       this.videoElement.srcObject = this.mediaStream;
-      this.videoElement.play();
+      this.videoElement.muted = true;
+      this.videoElement.playsInline = true;
+      await this.videoElement.play();
+
+      const videoTrack = this.mediaStream.getVideoTracks?.()[0];
+      if (!videoTrack || videoTrack.readyState === "ended") throw new Error("Camera track is unavailable.");
+      videoTrack.addEventListener?.("ended", () => {
+        if (generation === this.recognitionGeneration) this.stopRecognition("permission_revoked");
+      }, { once: true });
 
       this.recognitionState = GESTURE_STATES.ACTIVE;
-      this.notify("recognition_state_changed", { state: this.recognitionState, profileId });
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "active", visible: true, processing: "local_adapter" });
       
       this.startDetectionLoop(profileId);
       
       publish("gesture.recognition_started", { profileId });
       recordAudit({ action: "gesture.recognition_started", status: "completed", metadata: { profileId } });
       
-      return { success: true };
+      return { success: true, profileId, camera: "active", visible: true, adapter: this.recognitionAdapter.kind || "custom" };
     } catch (error) {
+      this.stopRecognition("start_failed");
       this.recognitionState = GESTURE_STATES.ERROR;
-      this.notify("recognition_state_changed", { state: this.recognitionState, error: error.message });
-      return { error: error.message };
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: error.message });
+      return { success: false, error: error.message, code: "camera_or_adapter_error" };
     }
   }
 
   startDetectionLoop(profileId) {
     const profile = this.profiles.get(profileId);
-    if (!profile) return;
+    const generation = this.recognitionGeneration;
+    const signal = this.recognitionAbortController?.signal;
+    if (!profile || !signal || typeof globalThis.requestAnimationFrame !== "function") return;
 
     const detect = async () => {
-      if (this.recognitionState !== GESTURE_STATES.ACTIVE) return;
-      
-      if (this.videoElement && this.videoElement.readyState === 4) {
-        const gesture = await this.detectGesture(this.videoElement, profile);
-        if (gesture) {
-          this.handleGestureDetection(gesture, profile);
+      if (generation !== this.recognitionGeneration || signal.aborted) return;
+
+      const now = Date.now();
+      if (this.recognitionState === GESTURE_STATES.ACTIVE && this.videoElement && this.videoElement.readyState >= 2 && now - this.lastFrameAt >= 100) {
+        this.lastFrameAt = now;
+        try {
+          const gesture = await this.detectGesture(this.videoElement, profile, signal);
+          if (gesture && generation === this.recognitionGeneration && this.recognitionState === GESTURE_STATES.ACTIVE) {
+            this.handleGestureDetection(gesture, profile);
+          }
+        } catch (error) {
+          if (!signal.aborted) {
+            this.notify("recognition_adapter_error", { profileId, error: error?.message || "Gesture adapter failed." });
+            this.stopRecognition("adapter_error");
+          }
+          return;
         }
       }
-      
-      requestAnimationFrame(() => detect());
+
+      if (generation === this.recognitionGeneration && !signal.aborted) globalThis.requestAnimationFrame(() => detect());
     };
-    
+
     detect();
   }
 
-  async detectGesture() {
-    return { id: "G01", confidence: 0.95, timestamp: new Date().toISOString() };
+  async detectGesture(video, profile, signal) {
+    if (!this.recognitionAdapter || signal?.aborted) return null;
+    let canvas = this.frameCanvas;
+    if (!canvas) {
+      canvas = typeof globalThis.OffscreenCanvas === "function"
+        ? new globalThis.OffscreenCanvas(640, 480)
+        : globalThis.document?.createElement?.("canvas");
+      if (!canvas) return null;
+      canvas.width = 640;
+      canvas.height = 480;
+      this.frameCanvas = canvas;
+    }
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(video, 0, 0, 640, 480);
+    const frame = context.getImageData(0, 0, 640, 480);
+    const result = await this.recognitionAdapter.detect(frame, profile, { signal, maxFrameSize: { width: 640, height: 480 } });
+    if (signal?.aborted || !result || !GESTURES[result.id] || !Number.isFinite(result.confidence) || result.confidence < profile.confidence) return null;
+    return { id: result.id, confidence: result.confidence, timestamp: new Date().toISOString() };
   }
 
   handleGestureDetection(gesture, profile) {
@@ -366,7 +439,10 @@ class GestureEngine {
     this.notify("action_executed", { binding, action });
   }
 
-  stopRecognition() {
+  stopRecognition(reason = "user_stop") {
+    this.recognitionGeneration += 1;
+    this.recognitionAbortController?.abort(reason);
+    this.recognitionAbortController = null;
     this.recognitionState = GESTURE_STATES.INACTIVE;
     
     if (this.mediaStream) {
@@ -375,24 +451,38 @@ class GestureEngine {
     }
     
     if (this.videoElement) {
+      this.videoElement.pause?.();
       this.videoElement.srcObject = null;
       this.videoElement = null;
     }
+
+    try {
+      this.recognitionAdapter?.stop?.(reason);
+    } catch (error) {
+      this.notify("recognition_adapter_error", { profileId: this.activeProfileId, error: error?.message || "Gesture adapter cleanup failed." });
+    }
+    this.activeProfileId = null;
+    this.frameCanvas = null;
+    this.lastFrameAt = 0;
     
-    this.notify("recognition_state_changed", { state: this.recognitionState });
-    publish("gesture.recognition_stopped", {});
+    this.notify("recognition_state_changed", { state: this.recognitionState, camera: "inactive", reason });
+    publish("gesture.recognition_stopped", { reason });
   }
 
   pauseRecognition() {
+    if (this.recognitionState !== GESTURE_STATES.ACTIVE) return false;
     this.recognitionState = GESTURE_STATES.PAUSED;
-    this.notify("recognition_state_changed", { state: this.recognitionState });
+    this.notify("recognition_state_changed", { state: this.recognitionState, profileId: this.activeProfileId, camera: "active", visible: true });
+    return true;
   }
 
   resumeRecognition() {
     if (this.recognitionState === GESTURE_STATES.PAUSED) {
       this.recognitionState = GESTURE_STATES.ACTIVE;
-      this.notify("recognition_state_changed", { state: this.recognitionState });
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId: this.activeProfileId, camera: "active", visible: true });
+      return true;
     }
+    return false;
   }
 
   createCustomGesture(input) {
@@ -538,8 +628,12 @@ export function deleteGestureBinding(id) {
   return gestureEngine.deleteBinding(id);
 }
 
-export function startGestureRecognition(profileId) {
-  return gestureEngine.startRecognition(profileId);
+export function startGestureRecognition(profileId, options) {
+  return gestureEngine.startRecognition(profileId, options);
+}
+
+export function setGestureRecognitionAdapter(adapter) {
+  return gestureEngine.setRecognitionAdapter(adapter);
 }
 
 export function stopGestureRecognition() {
