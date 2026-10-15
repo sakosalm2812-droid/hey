@@ -255,17 +255,17 @@ export async function runFusionChatRequest({
     providerModels,
     signal,
     isCurrent,
-    authorizeProviderCall: typeof getCurrentEntitlements === "function"
-      ? async ({ accountScope, signal: authoritySignal }) => {
-        const currentEntitlements = await getCurrentEntitlements(accountScope, authoritySignal);
-        if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
-          throw new Error("Authorization state is unavailable");
-        }
-        const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
-        return currentGrants.has("hey.fusion") && currentGrants.has("provider.remote") &&
-          selectedProviders.every((provider) => currentGrants.has(`provider:${provider.id}`));
+    authorizeProviderCall: async ({ accountScope, signal: authoritySignal }) => {
+      const currentEntitlements = typeof getCurrentEntitlements === "function"
+        ? await getCurrentEntitlements(accountScope, authoritySignal)
+        : entitlements;
+      if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
+        throw new Error("Authorization state is unavailable");
       }
-      : undefined,
+      const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
+      return currentGrants.has("hey.fusion") && currentGrants.has("provider.remote") &&
+        selectedProviders.every((provider) => currentGrants.has(`provider:${provider.id}`));
+    },
     maxCostUsd: pricingConfig.budgetUsd,
     minConfidence: pricingConfig.minConfidence,
     invoke: async ({ providerId, signal: providerSignal }) => {
