@@ -100,7 +100,7 @@ import { createDictationEditSession } from "../lib/dictationEditProposals.js";
 import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
 import { defaultTutorials } from "./tutorialCatalog.js";
 import { workspaceEngine, createWidget, getWidget, getAllWidgets, getWidgetsByFamily, getActiveWidgets, updateWidget, setWidgetState, moveWidget, resizeWidget, bringWidgetToFront, sendWidgetToBack, pinWidget, groupWidgets, ungroupWidgets, dockWidget, undockWidget, closeWidget, deleteWidget, handleSemanticDrop, saveLayout, loadLayout, getLayouts, deleteLayout, handleMonitorChange, subscribeToWorkspace, WIDGET_STATES, WIDGET_FAMILIES, DRAG_TYPES, SNAP_MODES } from "./workspaceEngine.js";
-import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
+import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
 import { createProjectDNA, getProjectDNA, updateProjectDNA, deleteProjectDNA, listProjectDNAs, checkProjectConsistency, exportProjectDNA, importProjectDNA, setProjectLock, getProjectLocks, removeProjectLock, DNA_FIELDS, DRIFT_TYPES, RULE_PRECEDENCE, LOCK_TYPES as DNA_LOCK_TYPES } from "./projectDNA.js";
 import {
   createPinpointContract,
@@ -168,6 +168,11 @@ import {
   verifyTeacherAssessmentArtifact,
   saveTeacherAssessmentArtifact,
   exportTeacherAssessmentMarkdown,
+  exportTeacherAnswerKeyMarkdown,
+  buildTeacherWorksheetArtifact,
+  verifyTeacherWorksheetArtifact,
+  saveTeacherWorksheetArtifact,
+  exportTeacherWorksheetMarkdown,
 } from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
@@ -839,6 +844,7 @@ import {
       getPrivateSpaces,
       getLayoutPreferences: getSpaceLayoutPreferences,
       updateLayoutPreferences: updateSpaceLayoutPreferences,
+      setToolMembership: setSpaceToolMembership,
       subscribe: subscribeToPrivateSpaces,
       contractVersion: SPACE_CREATION_CONTRACT_VERSION,
       storageContractVersion: SPACE_STORAGE_CONTRACT_VERSION,
@@ -878,6 +884,11 @@ import {
       verifyAssessmentArtifact: verifyTeacherAssessmentArtifact,
       saveAssessmentArtifact: saveTeacherAssessmentArtifact,
       exportAssessmentMarkdown: exportTeacherAssessmentMarkdown,
+      exportAnswerKeyMarkdown: exportTeacherAnswerKeyMarkdown,
+      buildWorksheetArtifact: buildTeacherWorksheetArtifact,
+      verifyWorksheetArtifact: verifyTeacherWorksheetArtifact,
+      saveWorksheetArtifact: saveTeacherWorksheetArtifact,
+      exportWorksheetMarkdown: exportTeacherWorksheetMarkdown,
     },
 
     live: {
@@ -1011,7 +1022,7 @@ import {
 export const events = HEY.events;
 export const onboarding = HEY.onboarding;
 export const spaces = HEY.spaces;
-export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
+export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
 export { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS };
 export { understandVoiceCommand, createDictationEditSession };
 

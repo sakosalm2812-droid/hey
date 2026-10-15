@@ -2,12 +2,14 @@ const HASH_PATTERN = /^[a-f0-9]{64}$/i;
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,199}$/;
 const MAX_EVALUATION_CASES = 1_000;
 const MAX_CASE_LATENCY_MS = 3_600_000;
+const verifiedEvaluationReports = new WeakSet();
 
 export const INFERENCE_PROFILES = Object.freeze({
   fast: Object.freeze({
     id: "fast",
     maxLatencyP95Ms: 1_200,
     maxRequestCostUsd: 0.0025,
+    maxEvaluationAgeMs: 30 * 24 * 60 * 60 * 1_000,
     minQualityScore: 0.65,
     inputTokenBudget: 1_000,
     outputTokenBudget: 500,
@@ -16,6 +18,7 @@ export const INFERENCE_PROFILES = Object.freeze({
     id: "balanced",
     maxLatencyP95Ms: 4_000,
     maxRequestCostUsd: 0.01,
+    maxEvaluationAgeMs: 30 * 24 * 60 * 60 * 1_000,
     minQualityScore: 0.8,
     inputTokenBudget: 2_000,
     outputTokenBudget: 1_000,
@@ -24,6 +27,7 @@ export const INFERENCE_PROFILES = Object.freeze({
     id: "maximum_quality",
     maxLatencyP95Ms: 20_000,
     maxRequestCostUsd: 0.05,
+    maxEvaluationAgeMs: 30 * 24 * 60 * 60 * 1_000,
     minQualityScore: 0.9,
     inputTokenBudget: 4_000,
     outputTokenBudget: 2_000,
@@ -301,7 +305,9 @@ export async function getVerifiedEvaluationReport(input) {
     if (!Number.isFinite(expectedCost) || report.totalCostUsd !== expectedCost || report.averageCostUsd !== expectedCost / report.sampleCount) return null;
     if (typeof report.reportDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(report.reportDigest)) return null;
     const { reportDigest, ...body } = report;
-    return await sha256Canonical(body) === reportDigest ? report : null;
+    if (await sha256Canonical(body) !== reportDigest) return null;
+    verifiedEvaluationReports.add(report);
+    return report;
   } catch {
     return null;
   }
@@ -310,6 +316,11 @@ export async function getVerifiedEvaluationReport(input) {
 /** Verify the canonical, content-free digest on a previously created report. */
 export async function verifyEvaluationReport(input) {
   return Boolean(await getVerifiedEvaluationReport(input));
+}
+
+/** True only for detached reports accepted by the canonical verifier in this runtime. */
+export function isVerifiedEvaluationReport(report) {
+  return Boolean(report && typeof report === "object" && verifiedEvaluationReports.has(report));
 }
 
 /** Validate and freeze reproducible model/version/evaluation metadata. */

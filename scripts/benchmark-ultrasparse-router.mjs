@@ -1,6 +1,7 @@
 import os from "node:os";
 import { createHash } from "node:crypto";
 import {
+  createUltraSparseSelector,
   selectUltraSparseExperts,
   selectUltraSparseExpertsIndexed,
   selectUltraSparseExpertsMasked,
@@ -49,6 +50,108 @@ function verifyOutput(name, query, output) {
   equivalentCalls[name] += 1;
 }
 
+function createScalingWorkload(expertCount) {
+  const catalog = Array.from({ length: expertCount }, (_, expertIndex) => ({
+    id: `expert-${String(expertIndex).padStart(5, "0")}`,
+    terms: Array.from({ length: 8 }, (_, termIndex) => `expert${expertIndex}term${termIndex}`),
+  }));
+  const pairs = [
+    [0, Math.floor(expertCount / 2)],
+    [Math.floor(expertCount / 3), Math.floor((expertCount * 2) / 3)],
+    [expertCount - 2, expertCount - 1],
+  ];
+  const queries = pairs.map((pair) => `${pair.flatMap((expertIndex) => catalog[expertIndex].terms.slice(0, 4)).join(" ")} unrelated tokens`);
+  return { catalog, queries };
+}
+
+function benchmarkScaling() {
+  const expertCounts = smokeMode ? [5, 20, 100] : [5, 20, 100, 500, 2_000];
+  return expertCounts.map((expertCount) => {
+    const { catalog, queries } = createScalingWorkload(expertCount);
+    const preparationStarted = process.hrtime.bigint();
+    const selector = createUltraSparseSelector(catalog);
+    const catalogConstructionMicroseconds = Number(process.hrtime.bigint() - preparationStarted) / 1e3;
+    const indexPreparationStarted = process.hrtime.bigint();
+    selector.prepareIndexed();
+    const indexedCandidatePreparationMicroseconds = Number(process.hrtime.bigint() - indexPreparationStarted) / 1e3;
+    const expected = new Map(queries.map((query) => [query, selector.selectLinear(query)]));
+    const samplesPerTrial = smokeMode ? 50 : expertCount <= 100 ? 5_000 : expertCount <= 500 ? 1_000 : 250;
+    const warmupPerTrial = smokeMode ? 20 : 300;
+    const trialCount = smokeMode ? 1 : 3;
+    const samples = { linear: [], indexedCandidates: [] };
+    const samplesByTrial = {
+      linear: Array.from({ length: trialCount }, () => []),
+      indexedCandidates: Array.from({ length: trialCount }, () => []),
+    };
+    const checkedCalls = { linear: 0, indexedCandidates: 0, adaptive: 0 };
+
+    function checkResult(name, query, result) {
+      if (!outputsEqual(result, expected.get(query))) throw new Error(`Scaling selector output mismatch: ${name}, experts=${expertCount}`);
+      checkedCalls[name] += 1;
+    }
+
+    for (let trial = 0; trial < trialCount; trial += 1) {
+      for (let index = 0; index < warmupPerTrial; index += 1) {
+        const query = queries[index % queries.length];
+        checkResult("linear", query, selector.selectLinear(query));
+        checkResult("indexedCandidates", query, selector.selectIndexed(query));
+        checkResult("adaptive", query, selector.select(query));
+      }
+      for (let index = 0; index < samplesPerTrial; index += 1) {
+        const query = queries[(trial * samplesPerTrial + index) % queries.length];
+        const offset = (trial + index) % 2;
+        const order = offset === 0
+          ? [["linear", selector.selectLinear], ["indexedCandidates", selector.selectIndexed]]
+          : [["indexedCandidates", selector.selectIndexed], ["linear", selector.selectLinear]];
+        for (const [name, select] of order) {
+          const started = process.hrtime.bigint();
+          const result = select(query);
+          const elapsedNs = Number(process.hrtime.bigint() - started);
+          samples[name].push(elapsedNs);
+          samplesByTrial[name][trial].push(elapsedNs);
+          checkResult(name, query, result);
+        }
+        checkResult("adaptive", query, selector.select(query));
+      }
+    }
+
+    const linear = summarize(samples.linear);
+    const indexedCandidates = summarize(samples.indexedCandidates);
+    const selectionSavingsP50 = linear.p50Microseconds - indexedCandidates.p50Microseconds;
+    return {
+      expertCount,
+      termsPerExpert: 8,
+      matchedExpertsPerQuery: 2,
+      queryCount: queries.length,
+      fingerprintVersion: 1,
+      fingerprintAlgorithm: "sha256",
+      fingerprintCanonicalization: "UTF-8 bytes of JSON.stringify(value)",
+      catalogSha256: createHash("sha256").update(JSON.stringify(catalog), "utf8").digest("hex"),
+      querySha256: createHash("sha256").update(JSON.stringify(queries), "utf8").digest("hex"),
+      selectorStrategy: selector.strategy,
+      catalogConstructionMicroseconds,
+      indexedCandidatePreparationMicroseconds,
+      samplesPerTrial,
+      warmupPerTrial,
+      trials: trialCount,
+      linear,
+      indexedCandidates,
+      adaptivePathP95PerTrialMicroseconds: samplesByTrial[selector.strategy === "linear" ? "linear" : "indexedCandidates"]
+        .map((trialSamples) => summarize(trialSamples).p95Microseconds),
+      estimatedBreakEvenSelectionsAtP50: selectionSavingsP50 > 0
+        ? Math.ceil((catalogConstructionMicroseconds + indexedCandidatePreparationMicroseconds) / selectionSavingsP50)
+        : null,
+      adaptivePath: selector.strategy,
+      correctness: {
+        baseline: "linear",
+        outputEquivalent: true,
+        comparedAfterTimer: true,
+        checkedCalls,
+      },
+    };
+  });
+}
+
 function summarize(samplesNs) {
   const sorted = [...samplesNs].sort((left, right) => left - right);
   const percentile = (fraction) => sorted[Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)];
@@ -61,6 +164,10 @@ function summarize(samplesNs) {
 }
 
 const selectionSamplesNs = Object.fromEntries(algorithms.map(([name]) => [name, []]));
+const selectionSamplesByTrialNs = Object.fromEntries(algorithms.map(([name]) => [
+  name,
+  Array.from({ length: trials }, () => []),
+]));
 const memoryBefore = process.memoryUsage();
 for (let trial = 0; trial < trials; trial += 1) {
   for (let index = 0; index < warmup; index += 1) {
@@ -76,6 +183,7 @@ for (let trial = 0; trial < trials; trial += 1) {
       const output = select(query);
       const elapsedNs = Number(process.hrtime.bigint() - started);
       selectionSamplesNs[name].push(elapsedNs);
+      selectionSamplesByTrialNs[name][trial].push(elapsedNs);
       // Consume and compare the exact timed result after stopping the timer.
       verifyOutput(name, query, output);
     }
@@ -106,6 +214,15 @@ for (let index = 0; index < timerOverheadSamples; index += 1) {
   emptyPairSamplesNs.push(Number(process.hrtime.bigint() - started));
 }
 
+const scalingResults = benchmarkScaling();
+const primaryTrialP95Microseconds = Object.fromEntries(algorithms.map(([name]) => [
+  name,
+  selectionSamplesByTrialNs[name].map((trialSamples) => summarize(trialSamples).p95Microseconds),
+]));
+const subMillisecondTargetVerified = !smokeMode
+  && Object.values(primaryTrialP95Microseconds).every((trialValues) => trialValues.every((value) => value < 1_000))
+  && scalingResults.every(({ adaptivePathP95PerTrialMicroseconds }) => adaptivePathP95PerTrialMicroseconds.every((value) => value < 1_000));
+
 const report = {
   benchmark: "HEY lexical ultrasparse selector comparison",
   mode: smokeMode ? "smoke" : "benchmark",
@@ -129,16 +246,19 @@ const report = {
       isDefault: true,
       description: "Scan each expert's declared terms against the token set.",
       perOperationSelectionLatency: summarize(selectionSamplesNs.linear),
+      p95MicrosecondsByTrial: primaryTrialP95Microseconds.linear,
     },
     indexed: {
       isDefault: false,
       description: "Use a prebuilt token-to-expert inverted index.",
       perOperationSelectionLatency: summarize(selectionSamplesNs.indexed),
+      p95MicrosecondsByTrial: primaryTrialP95Microseconds.indexed,
     },
     masked: {
       isDefault: false,
       description: "Use a prebuilt token-to-expert bit-mask index with fixed per-expert accumulators.",
       perOperationSelectionLatency: summarize(selectionSamplesNs.masked),
+      p95MicrosecondsByTrial: primaryTrialP95Microseconds.masked,
     },
   },
   correctness: {
@@ -148,6 +268,13 @@ const report = {
     checkedCallsPerAlgorithm: equivalentCalls.linear,
     checkedCalls: equivalentCalls,
   },
+  scalingBenchmarks: {
+    synthetic: true,
+    catalogPreparationIncludedInSelectionLatency: false,
+    indexedCandidatePreparationIncludedInSelectionLatency: false,
+    comparison: "linear full scan vs indexed candidate accumulation",
+    results: scalingResults,
+  },
   selectionOnly: true,
   modelLoadingIncluded: false,
   networkIncluded: false,
@@ -155,8 +282,11 @@ const report = {
   decodeIncluded: false,
   inferenceIncluded: false,
   performanceClaims: {
-    subMillisecondTargetVerified: false,
-    note: "Selection-only synthetic measurements do not verify an end-to-end or production latency target.",
+    subMillisecondTargetVerified,
+    verificationScope: "p95 below 1,000 microseconds in every full-mode trial for each fixed selector and each synthetic catalog's adaptive path",
+    endToEndSubMillisecondTargetVerified: false,
+    linearReferenceCatalogCountsOver1ms: scalingResults.filter(({ linear }) => linear.p95Microseconds >= 1_000).map(({ expertCount }) => expertCount),
+    note: "This verifies only in-process lexical selection for the declared synthetic workload; linear reference scans at listed catalog sizes may exceed 1 ms, and no end-to-end or production latency is verified.",
   },
   emptyTimerPairLatency: summarize(emptyPairSamplesNs),
   timingMethod: "Each operation is bracketed by process.hrtime.bigint(); each algorithm receives the same deterministic query sequence, call order rotates across algorithms to balance ordering effects, and empty timer-pair samples estimate timer overhead without subtraction.",

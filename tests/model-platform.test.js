@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { attachEvaluationReport, clearProviders, listModels, registerProvider } from "../src/core/providerRegistry.js";
-import { selectModel, createProviderPlan } from "../src/core/providerRouter.js";
+import { selectModel, selectModelFromSnapshot, createProviderPlan } from "../src/core/providerRouter.js";
 import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, createModelRecord, verifyEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
 import { HEY } from "../src/core/index.js";
 
@@ -55,6 +55,29 @@ function validEvaluationRun() {
       caseId: `case-${index + 1}`,
       passed: index !== 2 && index !== 12,
       latencyMs: (index + 1) * 10,
+      inputTokens: 100,
+      outputTokens: 50,
+    })),
+  };
+}
+
+function modelEvaluation(modelRecord, { quality = 0.9, latencyP95Ms = 800, inputUsdPerMillion = 1, outputUsdPerMillion = 2, ageMs = 60_000 } = {}) {
+  const sampleCount = 100;
+  return {
+    model: { id: modelRecord.id, revision: modelRecord.revision, weightSha256: modelRecord.weightSha256 },
+    suite: "hey-conformance-v1",
+    suiteRevision: "suite-7a1c",
+    datasetSha256: "b".repeat(64),
+    evaluatedAt: new Date(Date.now() - ageMs).toISOString(),
+    hardware: "fixture host; no model execution asserted",
+    runtime: "fixture-runtime",
+    runtimeVersion: "1.2.3",
+    runId: `run-${modelRecord.id}`,
+    pricing: { inputUsdPerMillion, outputUsdPerMillion },
+    samples: Array.from({ length: sampleCount }, (_, index) => ({
+      caseId: `case-${index}`,
+      passed: index < quality * sampleCount,
+      latencyMs: latencyP95Ms,
       inputTokens: 100,
       outputTokens: 50,
     })),
@@ -172,6 +195,7 @@ test("evaluation report digests bind provenance and exact measurement values wit
 test("provider registry attaches only verified evaluation evidence for its exact pinned model", async () => {
   clearProviders();
   const input = validEvaluationRun();
+  input.evaluatedAt = new Date(Date.now() - 60_000).toISOString();
   const provider = registerProvider({
     id: "evaluation-fixture",
     name: "Evaluation Fixture",
@@ -183,7 +207,7 @@ test("provider registry attaches only verified evaluation evidence for its exact
     const attached = await attachEvaluationReport(provider.id, input.model.id, report);
     assert.equal(attached.routingEvidence.evaluationReportDigest, report.reportDigest);
     assert.equal(listModels()[0].routingEvidence.qualityScore, report.evaluation.qualityScore);
-    assert.equal(selectModel({ profile: "fast" }).selected.id, input.model.id);
+    assert.equal(selectModel({ profile: "fast", allowedProviders: [provider.id] }).selected.id, input.model.id);
 
     const mismatched = await createEvaluationReport({ ...validEvaluationRun(), model: { ...input.model, revision: "other-pinned-revision" } });
     await assert.rejects(attachEvaluationReport(provider.id, input.model.id, mismatched), /does not match/i);
@@ -281,29 +305,63 @@ test("Fast, Balanced, and Maximum Quality profiles are measurable constraints, n
   assert.deepEqual(Object.keys(INFERENCE_PROFILES), ["fast", "balanced", "maximum_quality"]);
   assert.ok(INFERENCE_PROFILES.fast.maxLatencyP95Ms < INFERENCE_PROFILES.balanced.maxLatencyP95Ms);
   assert.ok(INFERENCE_PROFILES.maximum_quality.minQualityScore > INFERENCE_PROFILES.balanced.minQualityScore);
+  assert.ok(Object.values(INFERENCE_PROFILES).every((profile) => profile.maxEvaluationAgeMs === 30 * 24 * 60 * 60 * 1_000));
   assert.ok(OPEN_MODEL_CANDIDATES.every((candidate) => candidate.status === "candidate_not_selected"));
   assert.ok(OPEN_MODEL_CANDIDATES.every((candidate) => candidate.licenseUrl.startsWith("https://")));
 });
 
-test("canonical provider router applies profile limits, request budgets, fallback, and local-only privacy", () => {
+test("canonical provider router applies profile limits only to registered permitted models with fresh reports", async () => {
   clearProviders();
   try {
-    registerProvider({ id: "fixture", name: "Fixture", capabilities: ["chat"], models: [
-      model("too-costly", { ...fastEvidence, inputUsdPerMillion: 5, outputUsdPerMillion: 5 }),
-      model("too-slow", { ...fastEvidence, latencyP95Ms: 1_500 }),
-      model("selected", fastEvidence),
-      model("fallback", { ...fastEvidence, latencyP95Ms: 900, qualityScore: 0.7 }),
-      model("local", { ...fastEvidence, qualityScore: 0.71 }, true),
-    ] });
-    const plan = createProviderPlan({ profile: "fast", budgetUsd: 0.002 });
+    const candidates = [
+      { id: "too-costly", quality: 0.78, latencyP95Ms: 800, inputUsdPerMillion: 5, outputUsdPerMillion: 5 },
+      { id: "too-slow", quality: 0.78, latencyP95Ms: 1_500, inputUsdPerMillion: 0.4, outputUsdPerMillion: 0.8 },
+      { id: "selected", quality: 0.78, latencyP95Ms: 800, inputUsdPerMillion: 0.4, outputUsdPerMillion: 0.8 },
+      { id: "fallback", quality: 0.7, latencyP95Ms: 900, inputUsdPerMillion: 0.4, outputUsdPerMillion: 0.8 },
+      { id: "local", quality: 0.71, latencyP95Ms: 900, inputUsdPerMillion: 0.4, outputUsdPerMillion: 0.8, local: true },
+    ].map((candidate, index) => ({
+      ...candidate,
+      revision: `revision-${candidate.id}`,
+      weightSha256: String(index + 1).repeat(64),
+    }));
+    registerProvider({
+      id: "fixture", name: "Fixture", capabilities: ["chat"],
+      models: candidates.map(({ id, revision, weightSha256, local }) => ({ id, revision, weightSha256, local })),
+    });
+    for (const candidate of candidates) {
+      const report = await createEvaluationReport(modelEvaluation(candidate, candidate));
+      await attachEvaluationReport("fixture", candidate.id, report);
+    }
+
+    const plan = createProviderPlan({ profile: "fast", budgetUsd: 0.002, allowedProviders: ["fixture"] });
     assert.equal(plan.selected.id, "selected");
     assert.deepEqual(plan.fallbacks.map(({ id }) => id), ["fallback", "local"]);
     assert.equal(plan.policy.profile, "fast");
-    assert.equal(selectModel({ profile: "fast", budgetUsd: 0.0001 }).selected, null);
-    assert.equal(selectModel({ profile: "fast", privacyMode: "local_only" }).selected.id, "local");
-    assert.equal(selectModel({ profile: "fast", privacyMode: "local_only" }).fallbacks.length, 0);
-    assert.equal(selectModel({ profile: "maximum_quality" }).selected, null, "models without measured quality above the profile floor fail closed");
-    assert.equal(selectModel({ profile: "fast", privacyMode: "no_cloud" }).selected.id, "local");
+    assert.equal(selectModel({ profile: "fast", budgetUsd: 0.0001, allowedProviders: ["fixture"] }).selected, null);
+    assert.equal(selectModel({ profile: "fast", privacyMode: "local_only", allowedProviders: ["fixture"] }).selected.id, "local");
+    assert.equal(selectModel({ profile: "fast", privacyMode: "local_only", allowedProviders: ["fixture"] }).fallbacks.length, 0);
+    assert.equal(selectModel({ profile: "maximum_quality", allowedProviders: ["fixture"] }).selected, null, "models without measured quality above the profile floor fail closed");
+    assert.equal(selectModel({ profile: "fast", privacyMode: "no_cloud", allowedProviders: ["fixture"] }).selected.id, "local");
+    assert.equal(selectModel({ profile: "fast" }).selected, null, "a profile requires explicit provider permission");
+    assert.throws(() => selectModelFromSnapshot([], { profile: "fast", allowedProviders: [" fixture"] }), /non-empty strings/i);
+    const hostileAllowlist = Object.defineProperty([], "0", { enumerable: true, get() { throw new Error("must not run"); } });
+    assert.throws(() => selectModelFromSnapshot([], { profile: "fast", allowedProviders: hostileAllowlist }), /accessors/i);
+    const unregistered = { ...listModels()[0], providerId: "rogue-provider" };
+    assert.equal(selectModelFromSnapshot([unregistered], { profile: "fast", allowedProviders: ["rogue-provider"] }).selected, null,
+      "an allowlist cannot make an unregistered provider eligible");
+
+    const staleModel = { id: "stale", revision: "revision-stale", weightSha256: "f".repeat(64) };
+    registerProvider({ id: "stale-provider", name: "Stale", capabilities: ["chat"], models: [staleModel] });
+    await attachEvaluationReport("stale-provider", staleModel.id, await createEvaluationReport(modelEvaluation(staleModel, { quality: 0.95, ageMs: INFERENCE_PROFILES.fast.maxEvaluationAgeMs + 1 })));
+    assert.equal(selectModel({ profile: "fast", allowedProviders: ["stale-provider"] }).selected, null, "expired evaluation evidence is not routed");
+
+    const missingModel = { id: "missing-report", revision: "revision-missing", weightSha256: "e".repeat(64), routingEvidence: fastEvidence };
+    registerProvider({ id: "missing-provider", name: "Missing", capabilities: ["chat"], models: [missingModel] });
+    assert.equal(selectModel({ profile: "fast", allowedProviders: ["missing-provider"] }).selected, null, "unverified caller evidence is not routed");
+
+    const failedFallback = createProviderPlan({ profile: "fast", allowedProviders: ["stale-provider", "missing-provider"] });
+    assert.equal(failedFallback.selected, null);
+    assert.deepEqual(failedFallback.attempts, [], "no fallback is planned when every candidate fails its evidence gates");
   } finally {
     clearProviders();
   }
