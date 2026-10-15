@@ -4,6 +4,7 @@ import {
   applyDictationPreferences,
   createDictationPreferenceStore,
   normalizeDictationPreferences,
+  resolveDictationPreferences,
 } from "../src/lib/dictationPreferences.js";
 import { createBrowserSpeechProvider, createDictationSession } from "../src/lib/voiceProviders.js";
 import { setAccountScope } from "../src/core/accountScope.js";
@@ -137,4 +138,82 @@ test("preference persistence reports account, storage and read-back failures wit
   assert.equal(store.save({ language: "en-US" }).success, true);
   storage.setItem = () => { throw new Error("quota"); };
   assert.equal(store.save({ language: "fr-FR" }).status, "storage_failed");
+});
+
+test("per-application preferences are bounded, account-scoped overrides of the global defaults", () => {
+  const storage = new MemoryStorage();
+  let scope = "account:app-a";
+  const store = createDictationPreferenceStore({ storageProvider: () => storage, getScope: () => scope });
+  assert.equal(store.save({ language: "fr-FR", corrections: [{ from: "hey", to: "bonjour" }], snippets: [] }).success, true);
+  const appSaved = store.save({ language: "ar-IQ", corrections: [], snippets: [{ name: "signature", text: "Hello" }] }, { applicationId: "mail.desktop" });
+  assert.equal(appSaved.success, true);
+  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "ar-IQ");
+  assert.deepEqual(store.load({ applicationId: "mail.desktop" }).preferences.snippets, [{ name: "signature", text: "Hello" }]);
+
+  const otherApp = store.load({ applicationId: "editor.desktop" }).preferences;
+  assert.equal(otherApp.language, "fr-FR");
+  assert.deepEqual(otherApp.corrections, [{ from: "hey", to: "bonjour" }]);
+  assert.deepEqual(otherApp.snippets, []);
+  assert.equal(store.load().preferences.language, "fr-FR");
+
+  scope = "account:app-b";
+  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "en-US");
+  scope = "account:app-a";
+  const cleared = store.clear({ applicationId: "mail.desktop" });
+  assert.equal(cleared.success, true);
+  assert.equal(cleared.preferences.language, "fr-FR");
+  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "fr-FR");
+  assert.equal(store.load().preferences.language, "fr-FR");
+});
+
+test("application identity and app preference payloads fail closed on invalid or hostile input", () => {
+  const store = createDictationPreferenceStore({ storageProvider: () => new MemoryStorage(), getScope: () => "account:secure" });
+  for (const applicationId of ["", "../mail", "Mail", "com..mail", "x".repeat(97), { id: "mail" }]) {
+    assert.equal(store.load({ applicationId }).status, "invalid_application");
+    assert.equal(store.save({}, { applicationId }).status, "invalid_application");
+    assert.equal(store.clear({ applicationId }).status, "invalid_application");
+  }
+  assert.throws(() => normalizeDictationPreferences({ applications: [
+    { applicationId: "mail", preferences: { language: "fr-FR" } },
+    { applicationId: "mail", preferences: { language: "ar-IQ" } },
+  ] }), /unique/);
+  assert.throws(() => normalizeDictationPreferences({ applications: Array.from({ length: 33 }, (_, index) => ({
+    applicationId: `app-${index}`, preferences: { language: "en-US" },
+  })) }), /bounded/);
+  assert.throws(() => resolveDictationPreferences({}, "../mail"), /identity is invalid/);
+});
+
+test("legacy preference envelopes still load and per-app session settings stay snapshotted", async () => {
+  const storage = new MemoryStorage();
+  const scope = "account:legacy";
+  const key = `hey_scoped:${encodeURIComponent(scope)}:hey_dictation_preferences`;
+  storage.setItem(key, JSON.stringify({ version: 1, scope, preferences: { language: "fr-FR", corrections: [], snippets: [] } }));
+  const store = createDictationPreferenceStore({ storageProvider: () => storage, getScope: () => scope });
+  assert.equal(store.load({ applicationId: "notes.app" }).preferences.language, "fr-FR");
+  assert.equal(store.save({ language: "ar-IQ", corrections: [{ from: "hello", to: "fixed" }], snippets: [] }, { applicationId: "notes.app" }).success, true);
+  const snapshot = store.load({ applicationId: "notes.app" }).preferences;
+  let callbacks;
+  const transcripts = [];
+  const session = createDictationSession({
+    language: snapshot.language,
+    corrections: snapshot.corrections,
+    speechProvider: { start(options) { callbacks = options; assert.equal(options.language, "ar-IQ"); return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } } },
+    onTranscript: (text) => transcripts.push(text),
+  });
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  store.save({ language: "ku-Arab", corrections: [{ from: "hello", to: "changed" }], snippets: [] }, { applicationId: "notes.app" });
+  callbacks.onTranscript("hello");
+  assert.deepEqual(transcripts, ["fixed"]);
+  session.destroy();
+});
+
+test("an account switch during an app save cannot copy one account's settings into another", () => {
+  const storage = new MemoryStorage();
+  const scopes = ["account:before", "account:after", "account:after"];
+  const store = createDictationPreferenceStore({ storageProvider: () => storage, getScope: () => scopes.shift() ?? "account:after" });
+  const saved = store.save({ language: "ar-IQ", corrections: [], snippets: [] }, { applicationId: "mail.desktop" });
+  assert.equal(saved.success, false);
+  assert.equal(saved.status, "account_required");
+  assert.equal(storage.values.size, 0);
 });

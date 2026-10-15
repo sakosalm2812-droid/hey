@@ -5,13 +5,13 @@ import { useAuth } from "../../AuthContext.jsx";
 import { VOICE_STATES } from "../../core/voiceState.js";
 import { getAccountScope, subscribeAccountScope } from "../../core/accountScope.js";
 import { useLocale } from "../../i18n/LocaleContext.jsx";
-import { DEFAULT_DICTATION_PREFERENCES, dictationPreferenceStore, normalizeDictationPreferences } from "../../lib/dictationPreferences.js";
+import { DEFAULT_DICTATION_PREFERENCES, dictationPreferenceStore, normalizeDictationApplicationId, normalizeDictationPreferences } from "../../lib/dictationPreferences.js";
 
 const isRecognitionAvailable = (environment) => Boolean(
   environment?.SpeechRecognition || environment?.webkitSpeechRecognition
 );
 
-export default function DictationControl({ onInsert, disabled = false }) {
+export default function DictationControl({ onInsert, disabled = false, applicationId }) {
   const { user } = useAuth();
   const { t } = useLocale();
   const translateRef = useRef(t);
@@ -40,6 +40,13 @@ export default function DictationControl({ onInsert, disabled = false }) {
   const [preferenceStatus, setPreferenceStatus] = useState("");
   const [preferenceError, setPreferenceError] = useState("");
   const isActive = state === VOICE_STATES.listening;
+  let resolvedApplicationId = null;
+  let applicationIdentityValid = true;
+  try {
+    if (applicationId !== undefined && applicationId !== null) resolvedApplicationId = normalizeDictationApplicationId(applicationId);
+  } catch {
+    applicationIdentityValid = false;
+  }
 
   const getErrorMessage = useCallback((errorState) => {
     if (errorState === VOICE_STATES.permissionRequired) return translateRef.current("chat.dictation.permissionDenied");
@@ -52,13 +59,15 @@ export default function DictationControl({ onInsert, disabled = false }) {
     const speechProvider = createBrowserSpeechProvider(environment);
     const startingScope = getAccountScope();
     scopeRef.current = startingScope;
-    const loaded = dictationPreferenceStore.load();
+    const loaded = applicationIdentityValid
+      ? dictationPreferenceStore.load({ applicationId: resolvedApplicationId })
+      : { success: false, status: "invalid_application", preferences: null };
     const initialPreferences = loaded.success ? loaded.preferences : DEFAULT_DICTATION_PREFERENCES;
     setPreferences(initialPreferences);
     setPreferenceDraft(initialPreferences);
     setPreferenceError("");
     setPreferenceStatus("");
-    setSupported(isRecognitionAvailable(environment));
+    setSupported(applicationIdentityValid && isRecognitionAvailable(environment));
     setState(VOICE_STATES.idle);
     setStatus("");
     setTranscript("");
@@ -85,7 +94,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
       },
     });
     createSessionRef.current = createSession;
-    sessionRef.current = createSession(initialPreferences);
+    sessionRef.current = applicationIdentityValid ? createSession(initialPreferences) : null;
     const unsubscribeScope = subscribeAccountScope((_previous, nextScope) => {
       if (nextScope === startingScope) return;
       scopeRef.current = nextScope;
@@ -108,7 +117,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
       sessionRef.current?.destroy();
       sessionRef.current = null;
     };
-  }, [user?.id, getErrorMessage]);
+  }, [user?.id, getErrorMessage, resolvedApplicationId, applicationIdentityValid]);
 
   function savePreferences() {
     const startingScope = scopeRef.current;
@@ -121,7 +130,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
       return;
     }
     if (getAccountScope() !== startingScope) return;
-    const result = dictationPreferenceStore.save(normalized);
+    const result = dictationPreferenceStore.save(normalized, { applicationId: resolvedApplicationId });
     if (!result.success || getAccountScope() !== startingScope || scopeRef.current !== startingScope) {
       setPreferenceError(translateRef.current("chat.dictation.preferencesSaveFailed"));
       setPreferenceStatus("");
@@ -136,13 +145,14 @@ export default function DictationControl({ onInsert, disabled = false }) {
   function clearPreferences() {
     const startingScope = scopeRef.current;
     if (getAccountScope() !== startingScope) return;
-    const result = dictationPreferenceStore.clear();
+    const result = dictationPreferenceStore.clear({ applicationId: resolvedApplicationId });
     if (!result.success || getAccountScope() !== startingScope || scopeRef.current !== startingScope) {
       setPreferenceError(translateRef.current("chat.dictation.preferencesSaveFailed"));
       return;
     }
-    setPreferences(DEFAULT_DICTATION_PREFERENCES);
-    setPreferenceDraft(DEFAULT_DICTATION_PREFERENCES);
+    const clearedPreferences = resolvedApplicationId === null ? DEFAULT_DICTATION_PREFERENCES : result.preferences;
+    setPreferences(clearedPreferences);
+    setPreferenceDraft(clearedPreferences);
     setPreferenceError("");
     setPreferenceStatus(translateRef.current("chat.dictation.preferencesCleared"));
   }
@@ -196,7 +206,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
   }, [disclosureOpen, isActive, requestCancelled, requesting]);
   async function startWithConsent() {
     const startingScope = scopeRef.current;
-    if (getAccountScope() !== startingScope) return;
+    if (!applicationIdentityValid || getAccountScope() !== startingScope) return;
     setStatus(translateRef.current("chat.dictation.requesting"));
     setDisclosureOpen(false);
     setRequestCancelled(false);

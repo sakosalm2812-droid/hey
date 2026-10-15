@@ -5,12 +5,24 @@ const STORAGE_KEY = "hey_dictation_preferences";
 const MAX_BYTES = 48_000;
 const MAX_CORRECTIONS = 64;
 const MAX_SNIPPETS = 32;
+const MAX_APPLICATIONS = 32;
+const MAX_APPLICATION_ID_LENGTH = 96;
 
 export const DEFAULT_DICTATION_PREFERENCES = Object.freeze({
   language: "en-US",
   corrections: Object.freeze([]),
   snippets: Object.freeze([]),
+  applications: Object.freeze([]),
 });
+
+/** Validate an explicit, stable application identifier supplied by the host. */
+export function normalizeDictationApplicationId(value) {
+  if (typeof value !== "string" || value.length > MAX_APPLICATION_ID_LENGTH ||
+      !/^[a-z0-9][a-z0-9._-]{0,95}$/u.test(value) || value.includes("..")) {
+    throw new TypeError("Dictation application identity is invalid.");
+  }
+  return value;
+}
 
 function plainRecord(value, name) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -80,7 +92,7 @@ function plainText(value, name, maxLength, allowLineBreaks = false) {
 
 export function normalizeDictationPreferences(input) {
   const record = plainRecord(input, "Dictation preferences");
-  const allowed = new Set(["language", "corrections", "snippets"]);
+  const allowed = new Set(["language", "corrections", "snippets", "applications"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new TypeError("Dictation preferences contain an unsupported field.");
   const language = canonicalLanguage(record.language ?? DEFAULT_DICTATION_PREFERENCES.language);
 
@@ -113,8 +125,53 @@ export function normalizeDictationPreferences(input) {
     snippetNames.add(key);
     return Object.freeze({ name, text });
   });
+  if (corrections.length + snippets.length > MAX_CORRECTIONS) {
+    throw new TypeError(`Combined dictation corrections and snippets must not exceed ${MAX_CORRECTIONS} entries.`);
+  }
 
-  return Object.freeze({ language, corrections: Object.freeze(corrections), snippets: Object.freeze(snippets) });
+  const applicationInput = plainArray(record.applications ?? [], "Dictation applications", MAX_APPLICATIONS);
+  const applicationIds = new Set();
+  const applications = applicationInput.map((entry) => {
+    const application = plainRecord(entry, "Dictation application preferences");
+    if (Object.keys(application).some((key) => !["applicationId", "preferences"].includes(key)) ||
+        !Object.hasOwn(application, "applicationId") || !Object.hasOwn(application, "preferences")) {
+      throw new TypeError("Dictation application preferences contain unsupported fields.");
+    }
+    const applicationId = normalizeDictationApplicationId(application.applicationId);
+    if (applicationIds.has(applicationId)) throw new TypeError("Dictation application identities must be unique.");
+    applicationIds.add(applicationId);
+    const override = plainRecord(application.preferences, "Application dictation preferences");
+    if (!Object.keys(override).length || Object.keys(override).some((key) => !["language", "corrections", "snippets"].includes(key))) {
+      throw new TypeError("Application dictation preferences contain an unsupported field.");
+    }
+    const normalized = {};
+    if (Object.hasOwn(override, "language")) normalized.language = canonicalLanguage(override.language);
+    if (Object.hasOwn(override, "corrections")) {
+      normalized.corrections = normalizeDictationPreferences({ corrections: override.corrections }).corrections;
+    }
+    if (Object.hasOwn(override, "snippets")) {
+      normalized.snippets = normalizeDictationPreferences({ snippets: override.snippets }).snippets;
+    }
+    if ((normalized.corrections?.length ?? 0) + (normalized.snippets?.length ?? 0) > MAX_CORRECTIONS) {
+      throw new TypeError(`Combined application corrections and snippets must not exceed ${MAX_CORRECTIONS} entries.`);
+    }
+    return Object.freeze({ applicationId, preferences: Object.freeze(normalized) });
+  });
+
+  return Object.freeze({ language, corrections: Object.freeze(corrections), snippets: Object.freeze(snippets), applications: Object.freeze(applications) });
+}
+
+/** Resolve a stable snapshot, using app overrides field-by-field over global settings. */
+export function resolveDictationPreferences(input, applicationId) {
+  const preferences = normalizeDictationPreferences(input);
+  if (applicationId === undefined || applicationId === null) return preferences;
+  const identity = normalizeDictationApplicationId(applicationId);
+  const app = preferences.applications.find(({ applicationId: id }) => id === identity);
+  return normalizeDictationPreferences({
+    language: app?.preferences.language ?? preferences.language,
+    corrections: app?.preferences.corrections ?? preferences.corrections,
+    snippets: app?.preferences.snippets ?? preferences.snippets,
+  });
 }
 
 /** Apply saved phrase corrections and spoken snippet names without storing text. */
@@ -148,39 +205,39 @@ export function createDictationPreferenceStore({
     try { return storageProvider(); } catch { return null; }
   }
 
-  function load() {
+  function load({ applicationId } = {}) {
+    let identity = null;
+    try { if (applicationId !== undefined && applicationId !== null) identity = normalizeDictationApplicationId(applicationId); }
+    catch { return { success: false, status: "invalid_application", preferences: null, settings: null }; }
     const scope = activeAccountScope(getScope);
-    if (!scope) return { success: false, status: "account_required", preferences: null };
+    if (!scope) return { success: false, status: "account_required", preferences: null, settings: null };
     const store = getStorage();
-    if (!store) return { success: false, status: "unavailable", preferences: null };
+    if (!store) return { success: false, status: "unavailable", preferences: null, settings: null };
     let raw;
     try { raw = store.getItem(getAccountStorageKey(STORAGE_KEY, scope)); }
-    catch { return { success: false, status: "storage_failed", preferences: null }; }
-    if (raw == null) return { success: true, status: "default", preferences: normalizeDictationPreferences({}) };
-    if (typeof raw !== "string" || raw.length > MAX_BYTES) return { success: false, status: "invalid_store", preferences: null };
+    catch { return { success: false, status: "storage_failed", preferences: null, settings: null }; }
+    if (raw == null) {
+      const settings = normalizeDictationPreferences({});
+      return { success: true, status: "default", preferences: resolveDictationPreferences(settings, identity), settings };
+    }
+    if (typeof raw !== "string" || raw.length > MAX_BYTES) return { success: false, status: "invalid_store", preferences: null, settings: null };
     try {
       const stored = JSON.parse(raw);
       const envelope = plainRecord(stored, "Stored dictation preferences");
-      if (envelope.version !== 1 || envelope.scope !== scope || !Object.hasOwn(envelope, "preferences")) {
-        return { success: false, status: "invalid_store", preferences: null };
+      if (![1, 2].includes(envelope.version) || envelope.scope !== scope || !Object.hasOwn(envelope, "preferences")) {
+        return { success: false, status: "invalid_store", preferences: null, settings: null };
       }
-      return { success: true, status: "loaded", preferences: normalizeDictationPreferences(envelope.preferences) };
+      const settings = normalizeDictationPreferences(envelope.preferences);
+      return { success: true, status: "loaded", preferences: resolveDictationPreferences(settings, identity), settings };
     } catch {
-      return { success: false, status: "invalid_store", preferences: null };
+      return { success: false, status: "invalid_store", preferences: null, settings: null };
     }
   }
 
-  function save(value) {
-    const scope = activeAccountScope(getScope);
-    if (!scope) return { success: false, status: "account_required", preferences: null };
-    let preferences;
-    try { preferences = normalizeDictationPreferences(value); }
-    catch (error) { return { success: false, status: "invalid_input", error: error.message, preferences: null }; }
-    const store = getStorage();
-    if (!store) return { success: false, status: "unavailable", preferences: null };
+  function write(scope, store, preferences) {
     const key = getAccountStorageKey(STORAGE_KEY, scope);
-    const serialized = JSON.stringify({ version: 1, scope, preferences });
-    if (serialized.length > MAX_BYTES) return { success: false, status: "too_large", preferences: null };
+    const serialized = JSON.stringify({ version: 2, scope, preferences });
+    if (serialized.length > MAX_BYTES) return { success: false, status: "too_large", preferences: null, settings: null };
     let previous;
     try {
       previous = store.getItem(key);
@@ -188,19 +245,64 @@ export function createDictationPreferenceStore({
       if (store.getItem(key) !== serialized) {
         if (previous == null) store.removeItem(key);
         else store.setItem(key, previous);
-        return { success: false, status: "storage_failed", preferences: null };
+        return { success: false, status: "storage_failed", preferences: null, settings: null };
       }
     } catch {
-      return { success: false, status: "storage_failed", preferences: null };
+      return { success: false, status: "storage_failed", preferences: null, settings: null };
     }
-    return { success: true, status: "saved", preferences };
+    return { success: true, status: "saved", preferences, settings: preferences };
   }
 
-  function clear() {
+  function save(value, { applicationId } = {}) {
+    let identity = null;
+    try { if (applicationId !== undefined && applicationId !== null) identity = normalizeDictationApplicationId(applicationId); }
+    catch { return { success: false, status: "invalid_application", preferences: null, settings: null }; }
+    const scope = activeAccountScope(getScope);
+    if (!scope) return { success: false, status: "account_required", preferences: null, settings: null };
+    let preferences;
+    try { preferences = normalizeDictationPreferences(value); }
+    catch (error) { return { success: false, status: "invalid_input", error: error.message, preferences: null, settings: null }; }
+    const store = getStorage();
+    if (!store) return { success: false, status: "unavailable", preferences: null, settings: null };
+    if (identity === null) return write(scope, store, preferences);
+    const current = load({ applicationId: identity });
+    if (!current.success) return { success: false, status: current.status, preferences: null, settings: null };
+    if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required", preferences: null, settings: null };
+    const apps = current.settings.applications.filter((app) => app.applicationId !== identity);
+    apps.push({ applicationId: identity, preferences: { language: preferences.language, corrections: preferences.corrections, snippets: preferences.snippets } });
+    try {
+      const settings = normalizeDictationPreferences({ ...current.settings, applications: apps });
+      const result = write(scope, store, settings);
+      if (result.success) result.preferences = resolveDictationPreferences(settings, identity);
+      return result;
+    } catch (error) {
+      return { success: false, status: "invalid_input", error: error.message, preferences: null, settings: null };
+    }
+  }
+
+  function clear({ applicationId } = {}) {
+    let identity = null;
+    try { if (applicationId !== undefined && applicationId !== null) identity = normalizeDictationApplicationId(applicationId); }
+    catch { return { success: false, status: "invalid_application" }; }
     const scope = activeAccountScope(getScope);
     if (!scope) return { success: false, status: "account_required" };
     const store = getStorage();
     if (!store) return { success: false, status: "unavailable" };
+    if (identity !== null) {
+      const current = load({ applicationId: identity });
+      if (!current.success) return { success: false, status: current.status };
+      if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required" };
+      const settings = normalizeDictationPreferences({
+        ...current.settings,
+        applications: current.settings.applications.filter((app) => app.applicationId !== identity),
+      });
+      const result = write(scope, store, settings);
+      if (result.success) {
+        result.status = "cleared";
+        result.preferences = resolveDictationPreferences(settings, identity);
+      }
+      return result;
+    }
     try { store.removeItem(getAccountStorageKey(STORAGE_KEY, scope)); }
     catch { return { success: false, status: "storage_failed" }; }
     return { success: true, status: "cleared" };
@@ -213,7 +315,9 @@ export const dictationPreferenceStore = createDictationPreferenceStore();
 
 export default {
   DEFAULT_DICTATION_PREFERENCES,
+  normalizeDictationApplicationId,
   normalizeDictationPreferences,
+  resolveDictationPreferences,
   applyDictationPreferences,
   createDictationPreferenceStore,
   dictationPreferenceStore,

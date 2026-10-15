@@ -51,7 +51,7 @@ test("dictation exposes keyboard, microphone, cancellation, unsupported and acco
   assert.match(control, /t\("chat\.dictation\.cancelRequest"\)/);
   assert.match(control, /t\("chat\.dictation\.discardActive"\)/);
   assert.match(control, /t\("chat\.dictation\.unavailable"\)/);
-  assert.match(control, /\}, \[user\?\.id, getErrorMessage\]\)/);
+  assert.match(control, /\}, \[user\?\.id, getErrorMessage, resolvedApplicationId, applicationIdentityValid\]\)/);
   assert.match(control, /translateRef\.current = t/);
   assert.match(control, /sessionRef\.current\?\.destroy\(\)/);
   assert.match(chatInput, /<DictationControl key=\{user\?\.id \|\| "signed-out"\}/);
@@ -65,15 +65,17 @@ test("dictation exposes keyboard, microphone, cancellation, unsupported and acco
 
 test("dictation preferences are accessible, account-scoped, and snapshotted when starting a session", async () => {
   const control = await source("../src/components/chat/DictationControl.jsx");
-  assert.match(control, /dictationPreferenceStore\.load\(\)/);
-  assert.match(control, /dictationPreferenceStore\.save\(normalized\)/);
-  assert.match(control, /dictationPreferenceStore\.clear\(\)/);
+  assert.match(control, /dictationPreferenceStore\.load\(\{ applicationId: resolvedApplicationId \}\)/);
+  assert.match(control, /dictationPreferenceStore\.save\(normalized, \{ applicationId: resolvedApplicationId \}\)/);
+  assert.match(control, /dictationPreferenceStore\.clear\(\{ applicationId: resolvedApplicationId \}\)/);
   assert.match(control, /<details className="hey-dictation__preferences"/);
   assert.match(control, /chat\.dictation\.preferencesDisclosure/);
   assert.match(control, /aria-label=\{t\("chat\.dictation\.language"\)\}/);
   assert.match(control, /corrections: \[\s*\.\.\.snapshot\.corrections,\s*\.\.\.snapshot\.snippets\.map/);
   assert.match(control, /language: snapshot\.language/);
   assert.match(control, /createSessionRef\.current\?\.\(preferences\)/);
+  assert.match(control, /normalizeDictationApplicationId\(applicationId\)/);
+  assert.match(control, /if \(!applicationIdentityValid \|\| getAccountScope\(\) !== startingScope\) return/);
   assert.match(control, /subscribeAccountScope/);
   assert.match(control, /scopeRef\.current = nextScope/);
   assert.match(control, /setTranscript\(""\)/);
