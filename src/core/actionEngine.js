@@ -5,6 +5,7 @@ import { publish } from "./eventBus.js";
 import supabaseClient from "../lib/supabase.js";
 
 const actions = new Map();
+const undoReservations = new Map();
 
 function copyPlainJson(value, ancestors = new WeakSet(), depth = 0) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -46,9 +47,17 @@ function freezePlainJson(value) {
   return value;
 }
 
+async function digestReceiptValue(value, name) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  if (bytes.byteLength > 64 * 1024) throw new TypeError(`${name} exceeds the receipt digest size limit.`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function clearActions() {
   for (const action of actions.values()) action.status = "cancelled";
   actions.clear();
+  undoReservations.clear();
 }
 
 export function createAction(input = {}) {
@@ -138,9 +147,15 @@ export async function executeAction(actionId, handler, options = {}) {
   // Snapshot before mandate verification yields to asynchronous storage/network
   // work; callers cannot retarget an admitted action while authority is checked.
   let executionInput = action.input;
+  let executionInputDigest;
   if (requiresIndependentVerification) {
     try { executionInput = freezePlainJson(copyPlainJson(action.input)); }
     catch { return { success: false, error: "Strict computer action input must be bounded plain JSON data.", action }; }
+    try { executionInputDigest = await digestReceiptValue(executionInput, "Original action input"); }
+    catch { return { success: false, error: "Strict computer action input exceeds the bounded verification digest size.", action }; }
+    if (actions.get(actionId) !== action || (action.status !== "queued" && action.status !== "approved")) {
+      return { success: false, error: "Action is no longer available for execution.", action };
+    }
   }
   const strictAction = requiresIndependentVerification
     ? Object.freeze({ id: action.id, tool: action.tool, permission: action.permission, riskLevel: action.riskLevel })
@@ -183,6 +198,9 @@ export async function executeAction(actionId, handler, options = {}) {
   try {
     action.result = await handler(executionInput, executionContext);
     if (requiresIndependentVerification) {
+      if (actions.get(actionId) !== action || action.status !== "running") {
+        return { success: false, error: "Action is no longer available for execution.", action };
+      }
       const verification = await verifyPostcondition({
         actionId: strictAction.id,
         capability: executionContext.tool || executionContext.permission,
@@ -196,7 +214,19 @@ export async function executeAction(actionId, handler, options = {}) {
       if (verificationSnapshot?.verified !== true) {
         throw new Error(verificationSnapshot?.reason || "Independent postcondition verification failed.");
       }
-      action.verification = { verified: true, resource: strictResource, evidence: verificationSnapshot.evidence ?? null };
+      if (actions.get(actionId) !== action || action.status !== "running") {
+        return { success: false, error: "Action is no longer available for execution.", action };
+      }
+      const verificationRecord = freezePlainJson({
+        verified: true,
+        capability: executionContext.tool || executionContext.permission,
+        permission: executionContext.permission,
+        riskLevel: executionContext.riskLevel,
+        resource: strictResource,
+        inputDigest: executionInputDigest,
+        evidence: verificationSnapshot.evidence ?? null,
+      });
+      Object.defineProperty(action, "verification", { value: verificationRecord, enumerable: true, writable: false, configurable: false });
     } else if (!action.result || action.result.success !== true || action.result.verified !== true) {
       throw new Error(action.result?.error || "The action could not be verified.");
     }
@@ -216,21 +246,47 @@ export async function executeAction(actionId, handler, options = {}) {
 
 export async function undoAction(actionId, handler, options = {}) {
   const action = getAction(actionId);
-  if (!action || action.status !== "completed" || typeof handler !== "function") return { success: false, error: "Action cannot be undone." };
+  if (!action || action.status !== "completed" || typeof handler !== "function" || undoReservations.has(actionId)) return { success: false, error: "Action cannot be undone." };
   const requiresIndependentVerification = options.requireIndependentVerification === true;
   const strictResource = options.resource;
   const verifyTargetBinding = options.verifyTargetBinding;
   const verifyPostcondition = options.verifyPostcondition;
   const undoCapability = options.undoCapability;
   const undoPermission = options.undoPermission;
+  const originalCapability = action.tool || action.permission;
+  const originalPermission = action.permission;
+  const originalRiskLevel = action.riskLevel;
+  let originalVerificationSnapshot;
   let policyDecision;
   if (requiresIndependentVerification) {
     if (!options.requireMandate || typeof verifyTargetBinding !== "function" || typeof verifyPostcondition !== "function"
       || typeof strictResource !== "string" || !strictResource.trim()
       || typeof undoCapability !== "string" || !undoCapability.trim()
       || typeof undoPermission !== "string" || !undoPermission.trim()
+      || typeof originalCapability !== "string" || !originalCapability.trim()
+      || strictResource.length > 4096 || undoCapability.length > 512 || undoPermission.length > 512 || originalCapability.length > 512
       || !options.policy || !options.user?.id) {
       return { success: false, error: "Strict undo requires a reverse capability, Trust Kernel policy, exact resource, mandate, and independent verifiers.", action };
+    }
+    if (Object.hasOwn(action, "undoReceipt")) {
+      return { success: false, error: "Strict undo receipt already exists or cannot be replaced.", action };
+    }
+    const verificationDescriptor = Object.getOwnPropertyDescriptor(action, "verification");
+    if (!verificationDescriptor || !Object.hasOwn(verificationDescriptor, "value")
+      || verificationDescriptor.writable !== false || verificationDescriptor.configurable !== false) {
+      return { success: false, error: "Strict undo requires an immutable original action verification snapshot.", action };
+    }
+    try { originalVerificationSnapshot = freezePlainJson(copyPlainJson(verificationDescriptor.value)); }
+    catch { return { success: false, error: "Strict undo original verification must be bounded plain JSON data.", action };
+    }
+    if (originalVerificationSnapshot?.verified !== true
+      || originalVerificationSnapshot.capability !== originalCapability
+      || originalVerificationSnapshot.permission !== originalPermission
+      || originalVerificationSnapshot.riskLevel !== originalRiskLevel
+      || originalVerificationSnapshot.resource !== strictResource
+      || typeof originalVerificationSnapshot.inputDigest !== "string"
+      || !/^[a-f0-9]{64}$/.test(originalVerificationSnapshot.inputDigest)) {
+      return { success: false, error: "Strict undo does not match the verified original action and exact resource.", action };
     }
     let strictPolicy;
     try { strictPolicy = freezePlainJson(copyPlainJson(options.policy)); }
@@ -265,7 +321,7 @@ export async function undoAction(actionId, handler, options = {}) {
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
   const strictAction = requiresIndependentVerification
-    ? Object.freeze({ id: action.id, tool: undoCapability, permission: undoPermission, riskLevel: action.riskLevel })
+    ? Object.freeze({ id: action.id, tool: undoCapability, permission: undoPermission, riskLevel: originalRiskLevel, originalCapability, originalPermission })
     : action;
   let strictMandate = options.mandate;
   if (requiresIndependentVerification && options.mandate !== undefined) {
@@ -286,15 +342,46 @@ export async function undoAction(actionId, handler, options = {}) {
   // lets only one strict undo proposal pass the execution boundary at a time.
   action.status = "undo_authorizing";
   action.updatedAt = new Date();
-  publish("action.updated", action);
+  const reservationToken = Object.freeze({});
+  undoReservations.set(actionId, reservationToken);
   const releaseReservation = (error) => {
+    if (undoReservations.get(actionId) === reservationToken) undoReservations.delete(actionId);
     if (actions.get(actionId) === action && action.status === "undo_authorizing") {
       action.status = "completed";
       action.updatedAt = new Date();
-      publish("action.updated", action);
+      try { publish("action.updated", action); } catch { /* Keep denial closed if an observer is faulty. */ }
     }
     return { success: false, error, action, policyDecision };
   };
+  const staleReservation = () => {
+    if (undoReservations.get(actionId) === reservationToken) {
+      if (actions.get(actionId) === action && action.status !== "cancelled") {
+        action.status = "undo_failed";
+        action.error = "Undo proposal state changed during verification.";
+        action.updatedAt = new Date();
+      }
+      undoReservations.delete(actionId);
+    }
+    return { success: false, error: "Action is no longer available for undo.", action };
+  };
+  try { publish("action.updated", action); }
+  catch { return releaseReservation("Undo proposal could not be safely reserved."); }
+  if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing") return staleReservation();
+  let originalResourceDigest;
+  let originalEvidenceDigest;
+  let undoInputDigest;
+  if (requiresIndependentVerification) {
+    try {
+      [originalResourceDigest, originalEvidenceDigest, undoInputDigest] = await Promise.all([
+        digestReceiptValue(strictResource, "Undo resource"),
+        digestReceiptValue(originalVerificationSnapshot.evidence ?? null, "Original verification evidence"),
+        digestReceiptValue(undoInput, "Undo target input"),
+      ]);
+    } catch {
+      return releaseReservation("Strict undo receipt inputs must remain within the bounded digest size.");
+    }
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing") return staleReservation();
+  }
   if (requiresIndependentVerification) {
     let binding;
     try {
@@ -302,34 +389,92 @@ export async function undoAction(actionId, handler, options = {}) {
     } catch {
       return releaseReservation("The exact computer undo target could not be independently bound.");
     }
-    if (actions.get(actionId) !== action || action.status !== "undo_authorizing") return { success: false, error: "Action is no longer available for undo.", action };
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing") return staleReservation();
     if (binding?.verified !== true) return releaseReservation(binding?.reason || "The exact computer undo target could not be independently bound.");
   }
   const mandate = await verifyActionMandate(strictAction, strictOptions);
   if (!mandate.authorized) {
     return { ...releaseReservation(mandate.reason), mandate };
   }
-  if (actions.get(actionId) !== action || action.status !== "undo_authorizing") return { success: false, error: "Action is no longer available for undo.", action };
+  if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing") return staleReservation();
+  if (requiresIndependentVerification && (typeof mandate.mandateId !== "string" || mandate.mandateId.length > 512)) {
+    return releaseReservation("Strict undo mandate result exceeds the receipt size limit.");
+  }
   action.status = "undoing";
   action.updatedAt = new Date();
-  publish("action.updated", action);
   try {
+    publish("action.updated", action);
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing") return staleReservation();
     const result = await handler(undoInput, undoContext);
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing") return staleReservation();
     if (requiresIndependentVerification) {
       const verification = await verifyPostcondition({ actionId: strictAction.id, capability: undoContext.tool || undoContext.permission, resource: strictResource, input: undoInput, result, operation: "undo" });
       let verificationSnapshot;
       try { verificationSnapshot = copyPlainJson(verification); }
       catch { throw new Error("Independent undo evidence must be bounded plain JSON data."); }
       if (verificationSnapshot?.verified !== true) throw new Error(verificationSnapshot?.reason || "Independent undo verification failed.");
+      if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing") return staleReservation();
+      const postconditionEvidenceDigest = await digestReceiptValue(verificationSnapshot.evidence ?? null, "Undo postcondition evidence");
+      if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing") return staleReservation();
+      const policyVersion = typeof policyDecision?.policyVersion === "string" && policyDecision.policyVersion.length <= 256
+        ? policyDecision.policyVersion
+        : null;
+      const receipt = freezePlainJson({
+        version: 1,
+        id: crypto.randomUUID(),
+        actionId: strictAction.id,
+        originalCapability,
+        originalPermission,
+        originalRiskLevel,
+        originalInputDigest: originalVerificationSnapshot.inputDigest,
+        originalResourceDigest,
+        originalVerificationEvidenceDigest: originalEvidenceDigest,
+        originalPostconditionVerified: true,
+        reverseCapability: undoCapability,
+        reverseResourceDigest: originalResourceDigest,
+        reverseInputDigest: undoInputDigest,
+        policyDecision: "allow",
+        policyVersion,
+        mandate: {
+          authorized: true,
+          mandateId: mandate.mandateId,
+          remainingUses: mandate.remainingUses,
+        },
+        postcondition: { verified: true, evidenceDigest: postconditionEvidenceDigest },
+        issuedAt: new Date().toISOString(),
+      });
+      if (JSON.stringify(receipt).length > 16 * 1024) throw new Error("Undo receipt exceeds the size limit.");
+      Object.defineProperty(action, "undoReceipt", { value: receipt, enumerable: true, writable: false, configurable: false });
     } else if (!result || result.success !== true || result.verified !== true) {
       throw new Error(result?.error || "The undo operation could not be verified.");
     }
     action.status = "undone";
     action.updatedAt = new Date();
+    if (undoReservations.get(actionId) === reservationToken) undoReservations.delete(actionId);
     publish("action.updated", action);
-    recordAudit({ action: "action.undone", tool: action.tool, status: "completed", metadata: { actionId } });
-    return { success: true, action, policyDecision };
+    if (actions.get(actionId) !== action || action.status !== "undone") return { success: false, error: "Action is no longer available for undo.", action };
+    recordAudit({
+      action: "action.undone",
+      tool: action.tool,
+      status: "completed",
+      metadata: {
+        actionId,
+        receiptId: action.undoReceipt?.id || null,
+        originalCapability: requiresIndependentVerification ? originalCapability : null,
+        originalPermission: requiresIndependentVerification ? originalPermission : null,
+        reverseCapability: requiresIndependentVerification ? undoCapability : null,
+        resourceDigest: action.undoReceipt?.reverseResourceDigest || null,
+        mandateId: action.undoReceipt?.mandate?.mandateId || null,
+        originalInputDigest: action.undoReceipt?.originalInputDigest || null,
+        originalVerificationEvidenceDigest: action.undoReceipt?.originalVerificationEvidenceDigest || null,
+        postconditionEvidenceDigest: action.undoReceipt?.postcondition?.evidenceDigest || null,
+        policyVersion: action.undoReceipt?.policyVersion || null,
+      },
+    });
+    return { success: true, action, policyDecision, receipt: action.undoReceipt || null };
   } catch (error) {
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing") return staleReservation();
+    if (undoReservations.get(actionId) === reservationToken) undoReservations.delete(actionId);
     action.status = "undo_failed";
     action.error = error instanceof Error ? error.message : String(error);
     action.updatedAt = new Date();

@@ -1,24 +1,49 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
+import { spaces as spacesApi } from "../src/core/index.js";
 import { OnboardingEngine } from "../src/core/onboardingEngine.js";
 import { SPACE_CREATION_LIMITS, SpaceCreationEngine } from "../src/core/spaceCreationEngine.js";
 
 class MemoryStorage {
   values = new Map();
-  getItem(key) { return this.values.get(key) ?? null; }
-  setItem(key, value) { this.values.set(key, String(value)); }
+  failReads = false;
+  failWrites = false;
+  onSet = null;
+  getItem(key) {
+    if (this.failReads) throw new Error("storage unavailable");
+    return this.values.get(key) ?? null;
+  }
+  setItem(key, value) {
+    if (this.failWrites) throw new Error("storage unavailable");
+    this.onSet?.(key, String(value));
+    this.values.set(key, String(value));
+  }
   removeItem(key) { this.values.delete(key); }
+  clear() { this.values.clear(); }
 }
 
 function withStorage(callback) {
   const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const storage = new MemoryStorage();
+  const windowListeners = new Map();
+  const windowTarget = {
+    addEventListener(type, listener) {
+      if (!windowListeners.has(type)) windowListeners.set(type, new Set());
+      windowListeners.get(type).add(listener);
+    },
+    removeEventListener(type, listener) { windowListeners.get(type)?.delete(listener); },
+    dispatchEvent(event) { windowListeners.get(event.type)?.forEach((listener) => listener(event)); },
+  };
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
-  try { return callback(storage); }
+  Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget });
+  try { return callback(storage, windowTarget); }
   finally {
     if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage);
     else delete globalThis.localStorage;
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else delete globalThis.window;
   }
 }
 
@@ -33,6 +58,205 @@ test("multi-select starter choices remain onboarding preferences and never creat
     assert.deepEqual(onboarding.getProgress().starterSpaceSelections, ["personal", "work", "learning"]);
     assert.deepEqual(spaces.getSpaces(), []);
     assert.equal(storage.getItem(getAccountStorageKey("hey_spaces")), null);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("HEY exposes versioned saved Space layout preference operations to consumers", () => {
+  assert.equal(spacesApi.layoutPreferencesContractVersion, 1);
+  assert.equal(spacesApi.storageContractVersion, 2);
+  assert.equal(typeof spacesApi.getLayoutPreferences, "function");
+  assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
+  assert.equal(typeof spacesApi.subscribe, "function");
+});
+
+test("saved Space layout preferences persist by account, merge partial edits, and keep onboarding starters as suggestions", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-layout-owner");
+    const onboarding = new OnboardingEngine();
+    const engine = new SpaceCreationEngine();
+    onboarding.setStarterSpaceSelections(["personal", "work"]);
+    const preview = engine.previewNaturalLanguageRequest({ prompt: "Create a private space called Focus" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    const initial = engine.getLayoutPreferences(created.space.id);
+    assert.equal(initial.success, true);
+    assert.equal(initial.revision, 0);
+    assert.deepEqual(initial.favoriteToolIds, []);
+
+    const saved = engine.updateLayoutPreferences({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      preferences: { favoriteToolIds: ["tool.search", "tool.notes"], widgetIds: ["notes"] },
+    });
+    assert.equal(saved.success, true);
+    assert.equal(saved.revision, 1);
+    assert.deepEqual(saved.favoriteToolIds, ["tool.search", "tool.notes"]);
+    assert.deepEqual(saved.shortcutIds, []);
+    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).contractVersion, 2);
+
+    // Onboarding suggestions remain their own contract and cannot reset a user's explicit layout.
+    onboarding.setStarterSpaceSelections(["learning"]);
+    const partial = engine.updateLayoutPreferences({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 1,
+      preferences: { shortcutIds: ["open-focus"] },
+    });
+    assert.equal(partial.revision, 2);
+    assert.deepEqual(partial.favoriteToolIds, ["tool.search", "tool.notes"]);
+    assert.deepEqual(partial.widgetIds, ["notes"]);
+    assert.deepEqual(onboarding.getProgress().starterSpaceSelections, ["learning"]);
+    assert.deepEqual(new SpaceCreationEngine().getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.search", "tool.notes"]);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space layout preference updates reject cross-account and stale revisions without overwriting newer choices", () => withStorage(() => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-layout-stale-owner");
+    const first = new SpaceCreationEngine();
+    const preview = first.previewNaturalLanguageRequest({ prompt: "Create a space called Revision test" });
+    const created = first.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    const second = new SpaceCreationEngine();
+    const request = { accountScope: created.space.accountScope, spaceId: created.space.id, expectedRevision: 0 };
+    const pending = first.previewNaturalLanguageRequest({ prompt: "Create a space called Preserve layout" });
+
+    const foreign = first.updateLayoutPreferences({ ...request, accountScope: "account:somebody-else", preferences: { favoriteToolIds: ["tool.admin"] } });
+    assert.match(foreign.error, /Account scope mismatch/);
+    const newer = second.updateLayoutPreferences({ ...request, preferences: { favoriteToolIds: ["tool.calendar"] } });
+    assert.equal(newer.revision, 1);
+    assert.equal(first.confirmNaturalLanguagePreview({ previewId: pending.previewId, confirm: true }).success, true);
+    assert.deepEqual(second.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.calendar"]);
+    const stale = first.updateLayoutPreferences({ ...request, preferences: { favoriteToolIds: ["tool.old"] } });
+    assert.equal(stale.code, "stale_revision");
+    assert.deepEqual(stale.current.favoriteToolIds, ["tool.calendar"]);
+    assert.deepEqual(first.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.calendar"]);
+
+    setAccountScope("space-layout-other-account");
+    const other = new SpaceCreationEngine();
+    assert.deepEqual(other.getSpaces(), []);
+    assert.equal(other.getLayoutPreferences(created.space.id).error, "Space not found");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space layout preference validation and persistence fail closed on hostile, oversized, or unavailable data", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-layout-validation-owner");
+    const engine = new SpaceCreationEngine();
+    const preview = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Safe preferences" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    const base = { accountScope: created.space.accountScope, spaceId: created.space.id, expectedRevision: 0 };
+    for (const preferences of [
+      { unknown: true },
+      { favoriteToolIds: ["tool.one", "tool.one"] },
+      { favoriteToolIds: ["../private"] },
+      { favoriteToolIds: ["x".repeat(65)] },
+      { favoriteToolIds: Array.from({ length: 33 }, (_, index) => `tool.${index}`) },
+      { widgetIds: ["notes"], shortcutIds: "open" },
+    ]) assert.ok(engine.updateLayoutPreferences({ ...base, preferences }).error);
+
+    let getterCalled = false;
+    const accessorPatch = Object.defineProperty({}, "favoriteToolIds", { enumerable: true, get() { getterCalled = true; return ["tool.nope"]; } });
+    assert.match(engine.updateLayoutPreferences({ ...base, preferences: accessorPatch }).error, /Accessor/);
+    assert.equal(getterCalled, false);
+    const proxyPatch = new Proxy({}, { ownKeys() { throw new Error("hostile"); } });
+    assert.match(engine.updateLayoutPreferences({ ...base, preferences: proxyPatch }).error, /safely inspected/);
+    const sparse = new Array(2);
+    assert.match(engine.updateLayoutPreferences({ ...base, preferences: { favoriteToolIds: sparse } }).error, /Invalid/);
+    assert.equal(engine.getLayoutPreferences(created.space.id).revision, 0);
+
+    storage.failWrites = true;
+    const writeFailure = engine.updateLayoutPreferences({ ...base, preferences: { favoriteToolIds: ["tool.search"] } });
+    assert.equal(writeFailure.code, "write_failed");
+    storage.failWrites = false;
+    assert.equal(engine.getLayoutPreferences(created.space.id).revision, 0);
+
+    const reentrantEngine = new SpaceCreationEngine();
+    let reentrantResult;
+    storage.onSet = () => {
+      storage.onSet = null;
+      reentrantResult = reentrantEngine.updateLayoutPreferences({ ...base, preferences: { widgetIds: ["calendar"] } });
+    };
+    const outerWrite = engine.updateLayoutPreferences({ ...base, preferences: { favoriteToolIds: ["tool.search"] } });
+    assert.equal(outerWrite.revision, 1);
+    assert.equal(reentrantResult.code, "write_in_progress");
+    assert.deepEqual(engine.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.search"]);
+
+    storage.failReads = true;
+    assert.equal(engine.updateLayoutPreferences({ ...base, preferences: { favoriteToolIds: ["tool.search"] } }).error, "Space storage could not be read");
+    storage.failReads = false;
+    assert.equal(engine.getLayoutPreferences(created.space.id).revision, 1);
+
+    setAccountScope(null);
+    const anonymous = new SpaceCreationEngine();
+    assert.match(anonymous.updateLayoutPreferences({ accountScope: "anonymous", spaceId: "space_forged", expectedRevision: 0, preferences: { widgetIds: ["notes"] } }).error, /account scope is required/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space storage events refresh current-account preferences and ignore invalid or foreign snapshots", () => withStorage((storage, windowTarget) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-layout-sync-owner");
+    const source = new SpaceCreationEngine();
+    const preview = source.previewNaturalLanguageRequest({ prompt: "Create a space called Focus work" });
+    const created = source.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    const observer = new SpaceCreationEngine();
+    const changes = [];
+    observer.subscribe((event) => changes.push(event));
+    const request = { accountScope: created.space.accountScope, spaceId: created.space.id, expectedRevision: 0 };
+    source.updateLayoutPreferences({ ...request, preferences: { favoriteToolIds: ["tool.focus"] } });
+    const key = getAccountStorageKey("hey_spaces");
+    const dispatchStorage = (eventKey) => windowTarget.dispatchEvent({ type: "storage", key: eventKey, newValue: null, storageArea: storage });
+    dispatchStorage(key);
+    assert.deepEqual(observer.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.focus"]);
+    assert.ok(changes.includes("storage_synced"));
+
+    dispatchStorage(getAccountStorageKey("hey_spaces", "account:another-user"));
+    assert.deepEqual(observer.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.focus"]);
+
+    const persisted = storage.getItem(key);
+    storage.clear();
+    dispatchStorage(null);
+    assert.deepEqual(observer.getSpaces(), []);
+    storage.setItem(key, persisted);
+    dispatchStorage(key);
+    assert.deepEqual(observer.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.focus"]);
+
+    storage.setItem(key, "{ malformed");
+    dispatchStorage(key);
+    assert.equal(observer.getLayoutPreferences(created.space.id).error, "Space storage could not be read");
+    assert.equal(storage.values.get(key), "{ malformed");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("version 1 Space records load with empty preferences and are upgraded only by a successful save", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-layout-legacy-owner");
+    const key = getAccountStorageKey("hey_spaces");
+    storage.setItem(key, JSON.stringify({
+      contractVersion: 1,
+      accountScope: "account:space-layout-legacy-owner",
+      spaces: { legacy: { id: "legacy", accountScope: "account:space-layout-legacy-owner", name: "Legacy", visibility: "private", sharing: "off" } },
+    }));
+    const engine = new SpaceCreationEngine();
+    const preferences = engine.getLayoutPreferences("legacy");
+    assert.equal(preferences.success, true);
+    assert.equal(preferences.revision, 0);
+    assert.deepEqual(preferences.widgetIds, []);
+    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 1);
+
+    const saved = engine.updateLayoutPreferences({ accountScope: "account:space-layout-legacy-owner", spaceId: "legacy", expectedRevision: 0, preferences: { widgetIds: ["notes"] } });
+    assert.equal(saved.success, true);
+    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 2);
+    assert.deepEqual(new SpaceCreationEngine().getLayoutPreferences("legacy").widgetIds, ["notes"]);
   } finally { setAccountScope(previousScope); }
 }));
 
