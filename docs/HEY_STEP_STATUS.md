@@ -2,7 +2,7 @@
 
 Updated: 2026-10-15
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `9088733`; full Node suite 293/293, scoped ESLint, `git diff --check`, and production build passed. See `HEY_EXECUTION_HANDOFF.md` for the verification boundary.
+Latest verified implementation checkpoint: `9088733` (source); handoff checkpoint `def50bd`; full Node suite 293/293, scoped ESLint, `git diff --check`, and production build passed. See `HEY_EXECUTION_HANDOFF.md` for the verification boundary.
 
 ## Status rules
 

@@ -2,7 +2,7 @@
 
 Updated: 2026-10-15  
 Repository: `sakosalm2812-droid/hey`  
-Latest coordinator checkpoint: `9088733` on `codex/resume-emergency-2026-10-14`; full suite 293/293, scoped ESLint, build and diff check passed.
+Latest coordinator checkpoint: `def50bd` on `codex/resume-emergency-2026-10-14`; source through `9088733`; full suite 293/293, scoped ESLint, build and diff check passed.
 
 ## Session setup and current access
 
