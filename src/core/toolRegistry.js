@@ -109,9 +109,16 @@ function validateInput(input, schema) {
   return null;
 }
 
-export function registerTool(name, handler, metadata = {}) {
+function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   if (!name || typeof handler !== "function") {
     throw new TypeError("A tool name and function are required.");
+  }
+  const existing = tools.get(name);
+  if (existing) {
+    if (ownerToken && existing.ownerToken === ownerToken && existing.handler === handler) {
+      return describeTool(existing);
+    }
+    throw new Error(`Tool is already registered: ${name}. Unregister it before registering a replacement.`);
   }
 
   const safeMetadata = cloneMetadata(metadata);
@@ -132,6 +139,7 @@ export function registerTool(name, handler, metadata = {}) {
   const registered = Object.freeze({
     name,
     handler,
+    ownerToken,
     metadata: freezeRecursively({
       capabilities: [],
       permissions: [],
@@ -144,6 +152,18 @@ export function registerTool(name, handler, metadata = {}) {
   });
   tools.set(name, registered);
   return describeTool(registered);
+}
+
+export function registerTool(name, handler, metadata = {}) {
+  return registerToolWithOwner(name, handler, metadata);
+}
+
+/** Register a module-owned tool idempotently without adopting a colliding registration. */
+export function registerOwnedTool(name, handler, metadata, ownerToken) {
+  if (!ownerToken || (typeof ownerToken !== "object" && typeof ownerToken !== "function")) {
+    throw new TypeError("An opaque tool owner token is required.");
+  }
+  return registerToolWithOwner(name, handler, metadata, ownerToken);
 }
 
 export function unregisterTool(name) {
@@ -562,6 +582,7 @@ function isTransientFailure(value) {
 
 export default {
   registerTool,
+  registerOwnedTool,
   unregisterTool,
   getTool,
   listTools,

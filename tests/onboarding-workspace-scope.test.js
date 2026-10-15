@@ -9,15 +9,27 @@ class MemoryStorage {
   getItem(key) { return this.values.get(key) ?? null; }
   setItem(key, value) { this.values.set(key, String(value)); }
   removeItem(key) { this.values.delete(key); }
+  clear() { this.values.clear(); }
 }
 
 function withStorage(callback) {
   const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const storage = new MemoryStorage();
+  const windowListeners = new Map();
+  const windowTarget = {
+    innerWidth: 1280,
+    innerHeight: 800,
+    addEventListener(type, listener) {
+      if (!windowListeners.has(type)) windowListeners.set(type, new Set());
+      windowListeners.get(type).add(listener);
+    },
+    removeEventListener(type, listener) { windowListeners.get(type)?.delete(listener); },
+    dispatchEvent(event) { windowListeners.get(event.type)?.forEach((listener) => listener(event)); },
+  };
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { innerWidth: 1280, innerHeight: 800 } });
-  try { return callback(storage); }
+  Object.defineProperty(globalThis, "window", { configurable: true, value: windowTarget });
+  try { return callback(storage, windowTarget); }
   finally {
     if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage);
     else delete globalThis.localStorage;
@@ -52,6 +64,46 @@ test("onboarding and tutorial data remain private per account and reload from sc
     const restored = new OnboardingEngine();
     assert.deepEqual(restored.getProgress().starterSpaceSelections, ["personal", "work", "learning"]);
     assert.equal(restored.getCurrentStage(), "welcome");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("onboarding synchronizes same-account storage updates and ignores foreign or malformed events", () => withStorage((storage, windowTarget) => {
+  const previousScope = "spaces-test-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("onboarding-sync-owner");
+    const onboarding = new OnboardingEngine();
+    onboarding.setStarterSpaceSelections(["work"]);
+    const updates = [];
+    onboarding.subscribe((event, progress) => updates.push({ event, progress }));
+    const activeKey = getAccountStorageKey("hey_onboarding_progress");
+    const storageEvent = (key, newValue, storageArea = storage) => windowTarget.dispatchEvent({ type: "storage", key, newValue, storageArea });
+
+    storageEvent(activeKey, JSON.stringify({ locale: "fr", accessibility: { largeTargets: true }, starterSpaceSelections: ["personal", "learning"], permissionGranted: true }));
+    assert.equal(onboarding.getProgress().locale, "fr");
+    assert.deepEqual(onboarding.getProgress().starterSpaceSelections, ["personal", "learning"]);
+    assert.equal(onboarding.getProgress().permissionGranted, undefined);
+    assert.equal(updates.at(-1).event, "storage_synced");
+
+    storageEvent(getAccountStorageKey("hey_onboarding_progress", "account:other-account"), JSON.stringify({ locale: "de" }));
+    storageEvent(activeKey, "{");
+    storageEvent(activeKey, "x".repeat(100_001));
+    storageEvent(activeKey, JSON.stringify({ locale: "es" }), {});
+    assert.equal(onboarding.getProgress().locale, "fr");
+    assert.equal(updates.length, 1);
+
+    storage.clear();
+    windowTarget.dispatchEvent({ type: "storage", key: null, newValue: null, storageArea: storage });
+    assert.equal(onboarding.getProgress().locale, "en");
+    assert.deepEqual(onboarding.getProgress().starterSpaceSelections, []);
+    assert.equal(updates.at(-1).event, "storage_synced");
+    storageEvent(activeKey, JSON.stringify({ locale: "it" }));
+    storageEvent(activeKey, null);
+    assert.equal(onboarding.getProgress().locale, "en");
+    onboarding.destroy();
+    const updateCount = updates.length;
+    storageEvent(activeKey, JSON.stringify({ locale: "it" }));
+    assert.equal(updates.length, updateCount);
   } finally { setAccountScope(previousScope); }
 }));
 

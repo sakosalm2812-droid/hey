@@ -4,15 +4,16 @@ import test from "node:test";
 import { createAction, executeAction, undoAction, clearActions } from "../src/core/actionEngine.js";
 import supabaseClient from "../src/lib/supabase.js";
 
-const user = { id: "voiceos-test-user", plan: "elite", permissions: ["app.open"] };
+const user = { id: "voiceos-test-user", plan: "elite", permissions: ["app.open", "device.control"] };
 
-function installMandateResponse(t, response = { data: { authorized: true, mandateId: "mandate-voiceos-1", remainingUses: 0 }, error: null }) {
+function installMandateResponse(t, response = { data: { authorized: true, mandateId: "mandate-voiceos-1", remainingUses: 0 }, error: null }, expectedAction = "computer.app.open") {
   const previous = supabaseClient.functions;
   supabaseClient.functions = {
     async invoke(name, { body }) {
       assert.equal(name, "hey-mandate");
-      assert.equal(body.action, "computer.app.open");
+      assert.equal(body.action, expectedAction);
       assert.equal(body.resource, "app://calculator");
+      if (expectedAction === "computer.app.close") assert.match(body.idempotencyKey, /:undo$/);
       return response;
     },
   };
@@ -33,6 +34,22 @@ function strictOptions(verifyPostcondition) {
     resource: "app://calculator",
     verifyTargetBinding: async ({ resource, input }) => ({ verified: resource === "app://calculator" && input.appId === "calculator" }),
     verifyPostcondition,
+  };
+}
+
+function strictUndoOptions(verifyPostcondition) {
+  return {
+    ...strictOptions(verifyPostcondition),
+    undoCapability: "computer.app.close",
+    undoPermission: "device.control",
+    policy: {
+      mode: "bounded_full_execution",
+      enabled: true,
+      allowedActions: ["computer.app.close"],
+      resources: ["app://calculator"],
+      maxUses: 1,
+      expiresAt: Date.now() + 60_000,
+    },
   };
 }
 
@@ -186,7 +203,7 @@ test("strict computer action snapshots capability and resource before async targ
 });
 
 test("strict computer undo uses a frozen target and independent postcondition verifier", async (t) => {
-  installMandateResponse(t);
+  installMandateResponse(t, undefined, "computer.app.close");
   clearActions();
   const action = createAction({
     title: "Open Calculator",
@@ -202,11 +219,15 @@ test("strict computer undo uses a frozen target and independent postcondition ve
   let observedUndo = false;
   const undo = await undoAction(action.id, async (undoInput, context) => {
     assert.equal(Object.isFrozen(undoInput), true);
-    assert.equal(context.operation, undefined);
+    assert.equal(context.operation, "undo");
+    assert.equal(context.tool, "computer.app.close");
+    assert.equal(context.capability, "computer.app.close");
+    assert.equal(context.permission, "device.control");
     return { success: false, verified: false, claimedUndo: false };
-  }, strictOptions(async ({ input, operation, result, resource }) => {
+  }, strictUndoOptions(async ({ input, operation, result, resource, capability }) => {
     observedUndo = true;
     assert.equal(operation, "undo");
+    assert.equal(capability, "computer.app.close");
     assert.equal(input.appId, "calculator");
     assert.equal(resource, "app://calculator");
     assert.deepEqual(result, { success: false, verified: false, claimedUndo: false });
@@ -216,6 +237,116 @@ test("strict computer undo uses a frozen target and independent postcondition ve
   assert.equal(undo.success, true, undo.error);
   assert.equal(observedUndo, true);
   assert.equal(action.status, "undone");
+});
+
+test("strict undo fails closed when Trust Kernel policy rejects the reverse capability", async (t) => {
+  installMandateResponse(t, undefined, "computer.app.close");
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" }, undo: { appId: "calculator" } });
+  assert.equal((await executeAction(action.id, async () => ({ success: true, verified: true }), { user, confirmed: true })).success, true);
+  let bound = false;
+  let dispatched = false;
+  const options = strictUndoOptions(async () => ({ verified: true, evidence: { closed: true } }));
+  options.policy = { ...options.policy, allowedActions: ["computer.app.open"] };
+  options.verifyTargetBinding = async () => { bound = true; return { verified: true }; };
+
+  const result = await undoAction(action.id, async () => { dispatched = true; return { success: true, verified: true }; }, options);
+  assert.equal(result.success, false);
+  assert.equal(result.policyDecision.decision, "deny");
+  assert.match(result.error, /Trust Kernel denied/i);
+  assert.equal(bound, false);
+  assert.equal(dispatched, false);
+  assert.equal(action.status, "completed");
+});
+
+test("strict undo rejects hostile policy accessors before binding or mandate verification", async (t) => {
+  installMandateResponse(t, undefined, "computer.app.close");
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" }, undo: { appId: "calculator" } });
+  assert.equal((await executeAction(action.id, async () => ({ success: true, verified: true }), { user, confirmed: true })).success, true);
+  let getterCalls = 0;
+  let bound = false;
+  let dispatched = false;
+  const policy = { mode: "bounded_full_execution", allowedActions: ["computer.app.close"], resources: ["app://calculator"] };
+  Object.defineProperty(policy, "enabled", { enumerable: true, get() { getterCalls += 1; return true; } });
+  const options = strictUndoOptions(async () => ({ verified: true, evidence: { closed: true } }));
+  options.policy = policy;
+  options.verifyTargetBinding = async () => { bound = true; return { verified: true }; };
+
+  const result = await undoAction(action.id, async () => { dispatched = true; return { success: true, verified: true }; }, options);
+  assert.equal(result.success, false);
+  assert.match(result.error, /plain JSON/i);
+  assert.equal(getterCalls, 0);
+  assert.equal(bound, false);
+  assert.equal(dispatched, false);
+  assert.equal(action.status, "completed");
+});
+
+test("strict undo reserves its proposal before async target binding to block duplicate dispatch", async (t) => {
+  installMandateResponse(t, undefined, "computer.app.close");
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" }, undo: { appId: "calculator" } });
+  assert.equal((await executeAction(action.id, async () => ({ success: true, verified: true }), { user, confirmed: true })).success, true);
+  let releaseBinding;
+  let signalBinding;
+  const bindingStarted = new Promise((resolve) => { signalBinding = resolve; });
+  let bindingCalls = 0;
+  let dispatchCalls = 0;
+  const options = strictUndoOptions(async () => ({ verified: true, evidence: { closed: true } }));
+  options.verifyTargetBinding = () => {
+    bindingCalls += 1;
+    signalBinding();
+    return new Promise((resolve) => { releaseBinding = resolve; });
+  };
+
+  const first = undoAction(action.id, async () => {
+    dispatchCalls += 1;
+    return { success: true, verified: false };
+  }, options);
+  await bindingStarted;
+  const second = await undoAction(action.id, async () => {
+    dispatchCalls += 1;
+    return { success: true, verified: true };
+  }, options);
+  assert.equal(second.success, false);
+  assert.equal(bindingCalls, 1);
+  assert.equal(action.status, "undo_authorizing");
+  releaseBinding({ verified: true });
+
+  const firstResult = await first;
+  assert.equal(firstResult.success, true, firstResult.error);
+  assert.equal(dispatchCalls, 1);
+  assert.equal(action.status, "undone");
+});
+
+test("strict undo does not dispatch after its proposal is cancelled during target binding", async (t) => {
+  installMandateResponse(t, undefined, "computer.app.close");
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" }, undo: { appId: "calculator" } });
+  assert.equal((await executeAction(action.id, async () => ({ success: true, verified: true }), { user, confirmed: true })).success, true);
+  let releaseBinding;
+  let signalBinding;
+  const bindingStarted = new Promise((resolve) => { signalBinding = resolve; });
+  let dispatchCalls = 0;
+  const options = strictUndoOptions(async () => ({ verified: true, evidence: { closed: true } }));
+  options.verifyTargetBinding = () => new Promise((resolve) => {
+    releaseBinding = resolve;
+    signalBinding();
+  });
+
+  const undo = undoAction(action.id, async () => {
+    dispatchCalls += 1;
+    return { success: true, verified: true };
+  }, options);
+  await bindingStarted;
+  clearActions();
+  releaseBinding({ verified: true });
+
+  const result = await undo;
+  assert.equal(result.success, false);
+  assert.match(result.error, /no longer available/i);
+  assert.equal(dispatchCalls, 0);
+  assert.equal(action.status, "cancelled");
 });
 
 test("strict execution requires a resource-scoped mandate instead of a broad capability alone", async (t) => {
