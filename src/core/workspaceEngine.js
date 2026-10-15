@@ -2,6 +2,7 @@ import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { getSetting } from "./settingsRegistry.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 
 const WIDGET_STATES = Object.freeze({
   ACTIVE: "active",
@@ -73,34 +74,87 @@ const MIN_WIDGET_SIZE = { width: 200, height: 150 };
 const MAX_WIDGET_SIZE = { width: 1920, height: 1080 };
 const GRID_SIZE = 8;
 
-class WorkspaceEngine {
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeStoredWidget(id, value, scope) {
+  if (!isRecord(value) || value.id !== id || typeof value.family !== "string" || value.family.length > 64) return null;
+  if (value.accountScope && value.accountScope !== scope) return null;
+  const bounds = isRecord(value.bounds) ? value.bounds : {};
+  const numberOr = (input, fallback, min, max) => Number.isFinite(input) ? Math.min(max, Math.max(min, input)) : fallback;
+  return {
+    ...value,
+    id,
+    accountScope: scope,
+    title: typeof value.title === "string" ? value.title.slice(0, 120) : value.family,
+    state: Object.values(WIDGET_STATES).includes(value.state) ? value.state : WIDGET_STATES.ACTIVE,
+    bounds: {
+      x: numberOr(bounds.x, 0, 0, 100000),
+      y: numberOr(bounds.y, 0, 0, 100000),
+      width: numberOr(bounds.width, DEFAULT_WIDGET_SIZE.width, MIN_WIDGET_SIZE.width, MAX_WIDGET_SIZE.width),
+      height: numberOr(bounds.height, DEFAULT_WIDGET_SIZE.height, MIN_WIDGET_SIZE.height, MAX_WIDGET_SIZE.height),
+    },
+    settings: isRecord(value.settings) ? value.settings : {},
+    metadata: isRecord(value.metadata) ? value.metadata : { version: 1 },
+    zIndex: numberOr(value.zIndex, 1, -100000, 100000),
+  };
+}
+
+function normalizeStoredLayout(id, value, scope) {
+  if (!isRecord(value) || value.id !== id || !Array.isArray(value.widgets) || (value.accountScope && value.accountScope !== scope)) return null;
+  const widgets = value.widgets.filter((widget) => isRecord(widget)
+    && typeof widget.id === "string" && widget.id.length <= 100
+    && typeof widget.family === "string" && widget.family.length <= 64
+    && isRecord(widget.bounds)).slice(0, 200).map((widget) => ({
+      ...widget,
+      title: typeof widget.title === "string" ? widget.title.slice(0, 120) : widget.family,
+      bounds: Object.fromEntries(["x", "y", "width", "height"].map((key) => [key, Number.isFinite(widget.bounds[key]) ? widget.bounds[key] : 0])),
+      settings: isRecord(widget.settings) ? widget.settings : {},
+    }));
+  return { id, accountScope: scope, name: typeof value.name === "string" ? value.name.slice(0, 120) : "Layout", description: typeof value.description === "string" ? value.description.slice(0, 500) : "", widgets, createdAt: typeof value.createdAt === "string" ? value.createdAt.slice(0, 64) : null, updatedAt: typeof value.updatedAt === "string" ? value.updatedAt.slice(0, 64) : null };
+}
+
+export class WorkspaceEngine {
   constructor() {
     this.widgets = new Map();
     this.layouts = new Map();
     this.currentLayoutId = null;
     this.dragState = null;
     this.listeners = new Set();
-    this.load();
+    this.accountScope = getAccountScope();
+    this.load(this.accountScope);
+    this.unsubscribeAccountScope = subscribeAccountScope(() => {
+      this.accountScope = getAccountScope();
+      this.load(this.accountScope);
+      this.notify("account_scope_changed", { accountScope: this.accountScope });
+    });
   }
 
-  load() {
+  load(scope = getAccountScope()) {
+    this.widgets.clear();
+    this.layouts.clear();
+    this.currentLayoutId = null;
+    this.accountScope = scope;
     try {
-      const stored = safeStorage.getItem("hey_workspace");
+      const stored = safeStorage.getItem(getAccountStorageKey("hey_workspace", scope));
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed.widgets) {
-          Object.entries(parsed.widgets).forEach(([id, widget]) => {
-            this.widgets.set(id, widget);
-          });
-        }
-        if (parsed.layouts) {
-          Object.entries(parsed.layouts).forEach(([id, layout]) => {
-            this.layouts.set(id, layout);
-          });
-        }
-        this.currentLayoutId = parsed.currentLayoutId || null;
+        if (!isRecord(parsed)) return;
+        if (isRecord(parsed.widgets)) Object.entries(parsed.widgets).slice(0, 500).forEach(([id, widget]) => {
+          const normalized = normalizeStoredWidget(id, widget, scope);
+          if (normalized) this.widgets.set(id, normalized);
+        });
+        if (isRecord(parsed.layouts)) Object.entries(parsed.layouts).slice(0, 100).forEach(([id, layout]) => {
+          const normalized = normalizeStoredLayout(id, layout, scope);
+          if (normalized) this.layouts.set(id, normalized);
+        });
+        this.currentLayoutId = typeof parsed.currentLayoutId === "string" && this.layouts.has(parsed.currentLayoutId) ? parsed.currentLayoutId : null;
       }
     } catch (err) {
+      this.widgets.clear();
+      this.layouts.clear();
+      this.currentLayoutId = null;
       console.warn("Failed to load workspace:", err);
     }
   }
@@ -108,11 +162,12 @@ class WorkspaceEngine {
   save() {
     try {
       const data = {
+        accountScope: this.accountScope,
         widgets: Object.fromEntries(this.widgets),
         layouts: Object.fromEntries(this.layouts),
         currentLayoutId: this.currentLayoutId,
       };
-      safeStorage.setItem("hey_workspace", JSON.stringify(data));
+      safeStorage.setItem(getAccountStorageKey("hey_workspace", this.accountScope), JSON.stringify(data));
     } catch (err) {
       console.warn("Failed to save workspace:", err);
     }
@@ -124,6 +179,7 @@ class WorkspaceEngine {
     
     const widget = {
       id,
+      accountScope: this.accountScope,
       family,
       title: options.title || this.getFamilyTitle(family),
       state: WIDGET_STATES.ACTIVE,
@@ -473,6 +529,7 @@ class WorkspaceEngine {
     const id = generateLayoutId();
     const layout = {
       id,
+      accountScope: this.accountScope,
       name,
       description,
       widgets: this.getActiveWidgets().map(w => ({

@@ -2,6 +2,7 @@ import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { setSetting } from "./settingsRegistry.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 
 const ONBOARDING_STAGES = Object.freeze({
   WELCOME: "welcome",
@@ -93,32 +94,75 @@ const PRACTICE_TASKS = [
 const STORAGE_KEY = "hey_onboarding_progress";
 const TUTORIAL_STORAGE_KEY = "hey_tutorial_progress";
 
-class OnboardingEngine {
+const VALID_ONBOARDING_STAGES = new Set([...Object.values(ONBOARDING_STAGES)]);
+const VALID_PRACTICE_TASK_IDS = new Set(PRACTICE_TASKS.map(({ id }) => id));
+const MAX_STARTER_SPACE_SELECTIONS = 12;
+const STARTER_SPACE_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/i;
+
+function createInitialProgress() {
+  return {
+    currentStage: ONBOARDING_STAGES.WELCOME,
+    completedStages: [],
+    skippedStages: [],
+    startedAt: null,
+    completedAt: null,
+    practiceTaskId: null,
+    practiceTaskCompleted: false,
+    locale: "en",
+    accessibility: {},
+    starterSpaceSelections: [],
+    dismissedSuggestions: new Set(),
+  };
+}
+
+function normalizeProgress(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return createInitialProgress();
+  const base = createInitialProgress();
+  const strings = (list) => Array.isArray(list)
+    ? [...new Set(list.filter((item) => typeof item === "string" && item.length <= 100))]
+    : [];
+  const accessibility = value.accessibility && typeof value.accessibility === "object" && !Array.isArray(value.accessibility)
+    ? Object.fromEntries(Object.entries(value.accessibility).filter(([, flag]) => typeof flag === "boolean"))
+    : {};
+  return {
+    ...base,
+    currentStage: VALID_ONBOARDING_STAGES.has(value.currentStage) ? value.currentStage : base.currentStage,
+    completedStages: strings(value.completedStages).filter((stage) => VALID_ONBOARDING_STAGES.has(stage)),
+    skippedStages: strings(value.skippedStages).filter((stage) => VALID_ONBOARDING_STAGES.has(stage)),
+    startedAt: typeof value.startedAt === "string" && value.startedAt.length <= 64 ? value.startedAt : null,
+    completedAt: typeof value.completedAt === "string" && value.completedAt.length <= 64 ? value.completedAt : null,
+    practiceTaskId: VALID_PRACTICE_TASK_IDS.has(value.practiceTaskId) ? value.practiceTaskId : null,
+    practiceTaskCompleted: value.practiceTaskCompleted === true,
+    practiceTaskResult: typeof value.practiceTaskResult === "string" ? value.practiceTaskResult.slice(0, 1000) : undefined,
+    locale: typeof value.locale === "string" && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(value.locale) ? value.locale : base.locale,
+    accessibility,
+    starterSpaceSelections: Array.isArray(value.starterSpaceSelections)
+      ? [...new Set(value.starterSpaceSelections.filter((id) => typeof id === "string" && STARTER_SPACE_ID.test(id)))].slice(0, MAX_STARTER_SPACE_SELECTIONS)
+      : [],
+    dismissedSuggestions: new Set(strings(value.dismissedSuggestions)),
+  };
+}
+
+export class OnboardingEngine {
   constructor() {
-    this.progress = {
-      currentStage: ONBOARDING_STAGES.WELCOME,
-      completedStages: [],
-      skippedStages: [],
-      startedAt: null,
-      completedAt: null,
-      practiceTaskId: null,
-      practiceTaskCompleted: false,
-      locale: "en",
-      accessibility: {},
-      dismissedSuggestions: new Set(),
-    };
+    this.progress = createInitialProgress();
     this.listeners = new Set();
     this.load();
+    this.unsubscribeAccountScope = subscribeAccountScope(() => {
+      this.load();
+      this.notify("account_scope_changed", this.getProgress());
+    });
   }
 
   load() {
     try {
-      const stored = safeStorage.getItem(STORAGE_KEY);
+      const stored = safeStorage.getItem(getAccountStorageKey(STORAGE_KEY));
       if (stored) {
         const parsed = JSON.parse(stored);
-        this.progress = { ...this.progress, ...parsed, dismissedSuggestions: new Set(parsed.dismissedSuggestions || []) };
-      }
+        this.progress = normalizeProgress(parsed);
+      } else this.progress = createInitialProgress();
     } catch (err) {
+      this.progress = createInitialProgress();
       console.warn("Failed to load onboarding progress:", err);
     }
   }
@@ -126,14 +170,14 @@ class OnboardingEngine {
   save() {
     try {
       const data = { ...this.progress, dismissedSuggestions: Array.from(this.progress.dismissedSuggestions) };
-      safeStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      safeStorage.setItem(getAccountStorageKey(STORAGE_KEY), JSON.stringify(data));
     } catch (err) {
       console.warn("Failed to save onboarding progress:", err);
     }
   }
 
   getProgress() {
-    return { ...this.progress };
+    return { ...this.progress, completedStages: [...this.progress.completedStages], skippedStages: [...this.progress.skippedStages], accessibility: { ...this.progress.accessibility }, starterSpaceSelections: [...this.progress.starterSpaceSelections], dismissedSuggestions: new Set(this.progress.dismissedSuggestions) };
   }
 
   getCurrentStage() {
@@ -178,7 +222,12 @@ class OnboardingEngine {
       this.progress.completedAt = new Date().toISOString();
     }
     
-    Object.assign(this.progress, data);
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      if (typeof data.locale === "string" && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(data.locale)) this.progress.locale = data.locale;
+      if (data.accessibility && typeof data.accessibility === "object" && !Array.isArray(data.accessibility)) {
+        this.progress.accessibility = { ...this.progress.accessibility, ...Object.fromEntries(Object.entries(data.accessibility).filter(([key, value]) => /^[a-zA-Z][\w-]{0,47}$/.test(key) && typeof value === "boolean")) };
+      }
+    }
     this.save();
     this.notify("stage_completed", { stage: stageId, progress: this.progress });
     
@@ -215,6 +264,7 @@ class OnboardingEngine {
   }
 
   setLocale(locale) {
+    if (typeof locale !== "string" || !/^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(locale)) return { error: "Invalid locale" };
     this.progress.locale = locale;
     setSetting("language.primary", locale);
     this.save();
@@ -222,13 +272,26 @@ class OnboardingEngine {
   }
 
   setAccessibility(options) {
-    this.progress.accessibility = { ...this.progress.accessibility, ...options };
-    if (options.highContrast) setSetting("accessibility.high_contrast", true);
-    if (options.largeTargets) setSetting("accessibility.large_targets", true);
-    if (options.reducedMotion) setSetting("accessibility.reduced_motion", true);
-    if (options.dyslexiaFriendly) setSetting("accessibility.dyslexia_friendly", true);
+    if (!options || typeof options !== "object" || Array.isArray(options)) return this.getProgress();
+    const safeOptions = Object.fromEntries(Object.entries(options).filter(([key, value]) => /^[a-zA-Z][\w-]{0,47}$/.test(key) && typeof value === "boolean"));
+    this.progress.accessibility = { ...this.progress.accessibility, ...safeOptions };
+    if (safeOptions.highContrast) setSetting("accessibility.high_contrast", true);
+    if (safeOptions.largeTargets) setSetting("accessibility.large_targets", true);
+    if (safeOptions.reducedMotion) setSetting("accessibility.reduced_motion", true);
+    if (safeOptions.dyslexiaFriendly) setSetting("accessibility.dyslexia_friendly", true);
     this.save();
     return this.progress;
+  }
+
+  setStarterSpaceSelections(spaceIds) {
+    if (!Array.isArray(spaceIds)) return { error: "Starter space selections must be a list" };
+    const normalized = [...new Set(spaceIds.filter((id) => typeof id === "string" && STARTER_SPACE_ID.test(id)))];
+    if (normalized.length > MAX_STARTER_SPACE_SELECTIONS || normalized.length !== spaceIds.length) {
+      return { error: `Choose up to ${MAX_STARTER_SPACE_SELECTIONS} valid starter spaces` };
+    }
+    this.progress.starterSpaceSelections = normalized;
+    this.save();
+    return [...normalized];
   }
 
   selectPracticeTask(taskId) {
@@ -287,20 +350,32 @@ class OnboardingEngine {
   }
 }
 
-class TutorialEngine {
+export class TutorialEngine {
   constructor() {
     this.tutorials = new Map();
     this.progress = new Map();
     this.load();
+    this.unsubscribeAccountScope = subscribeAccountScope(() => this.load());
   }
 
   load() {
     try {
-      const stored = safeStorage.getItem(TUTORIAL_STORAGE_KEY);
+      this.progress.clear();
+      const stored = safeStorage.getItem(getAccountStorageKey(TUTORIAL_STORAGE_KEY));
       if (stored) {
         const parsed = JSON.parse(stored);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
         Object.entries(parsed).forEach(([key, value]) => {
-          this.progress.set(key, value);
+          if (!/^[a-z0-9][a-z0-9_.:-]{0,99}$/i.test(key) || !value || typeof value !== "object" || Array.isArray(value)) return;
+          const completedSteps = Array.isArray(value.completedSteps) ? value.completedSteps.filter((step) => Number.isInteger(step) && step >= 0 && step < 1000) : [];
+          this.progress.set(key, {
+            capabilityId: key,
+            startedAt: typeof value.startedAt === "string" ? value.startedAt.slice(0, 64) : null,
+            completedAt: typeof value.completedAt === "string" ? value.completedAt.slice(0, 64) : null,
+            currentStep: Number.isInteger(value.currentStep) && value.currentStep >= 0 ? Math.min(value.currentStep, 1000) : 0,
+            completedSteps: [...new Set(completedSteps)],
+            skipped: value.skipped === true,
+          });
         });
       }
     } catch (err) {
@@ -310,7 +385,7 @@ class TutorialEngine {
 
   save() {
     try {
-      safeStorage.setItem(TUTORIAL_STORAGE_KEY, JSON.stringify(Object.fromEntries(this.progress)));
+      safeStorage.setItem(getAccountStorageKey(TUTORIAL_STORAGE_KEY), JSON.stringify(Object.fromEntries(this.progress)));
     } catch (err) {
       console.warn("Failed to save tutorial progress:", err);
     }
@@ -420,6 +495,14 @@ export function setOnboardingLocale(locale) {
 
 export function setOnboardingAccessibility(options) {
   return onboardingEngine.setAccessibility(options);
+}
+
+export function setOnboardingStarterSpaces(spaceIds) {
+  return onboardingEngine.setStarterSpaceSelections(spaceIds);
+}
+
+export function getOnboardingStarterSpaces() {
+  return onboardingEngine.getProgress().starterSpaceSelections;
 }
 
 export function selectPracticeTask(taskId) {
