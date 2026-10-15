@@ -307,8 +307,31 @@ import {
   SEARCH_MODES
 } from "./filesEngine.js";
 
+import * as gestureRuntime from "./gestureEngine.js";
+
   export const HEY = {
     initialize: initializeHEY,
+
+    gestures: {
+      createProfile: gestureRuntime.createGestureProfile,
+      getProfile: gestureRuntime.getGestureProfile,
+      getProfiles: gestureRuntime.getAllGestureProfiles,
+      updateProfile: gestureRuntime.updateGestureProfile,
+      deleteProfile: gestureRuntime.deleteGestureProfile,
+      createBinding: gestureRuntime.createGestureBinding,
+      getBinding: gestureRuntime.getGestureBinding,
+      getBindingsForProfile: gestureRuntime.getGestureBindingsForProfile,
+      updateBinding: gestureRuntime.updateGestureBinding,
+      deleteBinding: gestureRuntime.deleteGestureBinding,
+      getCapability: gestureRuntime.getGestureRecognitionCapability,
+      start: gestureRuntime.startGestureRecognition,
+      pause: gestureRuntime.pauseGestureRecognition,
+      resume: gestureRuntime.resumeGestureRecognition,
+      stop: gestureRuntime.stopGestureRecognition,
+      getState: gestureRuntime.getGestureRecognitionState,
+      subscribe: gestureRuntime.subscribeToGestures,
+      states: gestureRuntime.GESTURE_STATES,
+    },
 
     computer: {
       registerTools: registerComputerTools,

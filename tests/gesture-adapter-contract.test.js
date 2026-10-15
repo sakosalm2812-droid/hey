@@ -309,6 +309,37 @@ test("hostile permission query accessors fail preflight closed without requestin
   assert.equal(cameraPromptCount, 0);
 });
 
+test("local detector preparation is consent-gated and camera stays closed when model startup fails", async () => {
+  const { engine, profile } = makeEngine();
+  let cameraPromptCount = 0;
+  let prepareCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() { cameraPromptCount += 1; throw new Error("unexpected prompt"); } } },
+  });
+  globalThis.document = { createElement: () => ({}) };
+  globalThis.requestAnimationFrame = () => 1;
+  engine.setRecognitionAdapter({
+    isReady() { return false; },
+    async prepare() { prepareCount += 1; throw Object.assign(new Error("model missing"), { code: "gesture_adapter_unavailable" }); },
+    async detect() { return null; },
+  });
+
+  const capability = await engine.getRecognitionCapability();
+  assert.equal(capability.adapterInstalled, true);
+  assert.equal(capability.adapterReady, false);
+  assert.equal(capability.recognitionStatus, "adapter_initialization_required");
+  assert.equal((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal(prepareCount, 0);
+
+  const result = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(result.code, "adapter_unavailable");
+  assert.equal(prepareCount, 1);
+  assert.equal(cameraPromptCount, 0);
+  assert.equal(engine.cameraCapabilityStatus, "supported");
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+});
+
 test("account switch during capability query prevents the later camera request", async () => {
   const { engine, profile } = makeEngine();
   engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });

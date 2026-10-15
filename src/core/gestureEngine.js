@@ -2,6 +2,7 @@ import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { getSetting } from "./settingsRegistry.js";
 import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
+import { createBundledHandGestureAdapter } from "../lib/bundledHandGestureAdapter.js";
 
 const GESTURES = Object.freeze({
   G01: { id: "G01", name: "open_palm_held", description: "Summon HEY/overview" },
@@ -421,12 +422,19 @@ export class GestureEngine {
     this.setCameraCapabilityStatus(status);
 
     const adapterInstalled = Boolean(this.recognitionAdapter && typeof this.recognitionAdapter.detect === "function");
+    let adapterReady = adapterInstalled;
+    try {
+      if (adapterInstalled && typeof this.recognitionAdapter.isReady === "function") adapterReady = this.recognitionAdapter.isReady() === true;
+    } catch { adapterReady = false; }
     return {
       status,
       cameraSupported,
       permission,
       adapterInstalled,
-      recognitionStatus: cameraSupported && adapterInstalled && status === "supported" ? "adapter_ready" : "unavailable",
+      adapterReady,
+      recognitionStatus: !cameraSupported || !adapterInstalled || status !== "supported"
+        ? "unavailable"
+        : adapterReady ? "adapter_ready" : "adapter_initialization_required",
       consentRequired: true,
       permissionPrompted: false,
       sessionState: this.recognitionState,
@@ -702,9 +710,23 @@ export class GestureEngine {
     this.recognitionAbortController = abortController;
     this.activeProfileId = profileId;
     this.recognitionState = GESTURE_STATES.CALIBRATING;
-    this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "requesting" });
+    this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", detector: "initializing" });
 
     try {
+      if (typeof this.recognitionAdapter.prepare === "function") {
+        const adapterReady = await this.recognitionAdapter.prepare({ signal: abortController.signal, profile });
+        if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
+          return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+        }
+        if (adapterReady === false) throw Object.assign(new Error("Gesture detector could not be initialized."), { code: "gesture_adapter_unavailable" });
+      }
+
+      if (getAccountScope() !== startingAccountScope || !this.profiles.has(profileId)) {
+        this.stopRecognition("account_changed");
+        return { success: false, error: "Gesture session ended after the account changed.", code: "account_changed" };
+      }
+
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "requesting", detector: "ready" });
       const stream = await globalThis.navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: profile.cameraId ? { exact: profile.cameraId } : undefined,
@@ -768,6 +790,14 @@ export class GestureEngine {
     } catch (error) {
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+      }
+      let errorCode = "";
+      try { errorCode = typeof error?.code === "string" ? error.code : ""; } catch { /* Host errors can be accessor-backed. */ }
+      if (errorCode === "gesture_adapter_unavailable") {
+        this.stopRecognition("adapter_initialization_failed");
+        this.recognitionState = GESTURE_STATES.ERROR;
+        this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: "adapter_unavailable" });
+        return { success: false, error: "The local hand detector could not be initialized.", code: "adapter_unavailable" };
       }
       const failure = classifyCameraFailure(error);
       this.setCameraCapabilityStatus(failure.status, failure.code);
@@ -1165,6 +1195,9 @@ export class GestureEngine {
 }
 
 export const gestureEngine = new GestureEngine();
+if (typeof globalThis.document?.createElement === "function") {
+  gestureEngine.setRecognitionAdapter(createBundledHandGestureAdapter());
+}
 subscribeAccountScope(() => gestureEngine.refreshAccountScope());
 
 export function createGestureProfile(input) {

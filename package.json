@@ -25,6 +25,7 @@
     "@fontsource/orbitron": "^5.3.0",
     "@fontsource/poppins": "^5.3.0",
     "@fontsource/rajdhani": "^5.3.0",
+    "@mediapipe/hands": "0.4.1675469240",
     "@supabase/supabase-js": "^2.110.7",
     "@tauri-apps/api": "^2.5.0",
     "framer-motion": "^12.42.2",

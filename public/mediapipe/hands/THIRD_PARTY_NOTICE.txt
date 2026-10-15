@@ -1,0 +1,2 @@
+Bundled runtime and model assets from @mediapipe/hands 0.4.1675469240.
+The package is licensed under Apache-2.0; see LICENSE.txt.
