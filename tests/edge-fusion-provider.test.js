@@ -93,6 +93,16 @@ test("fusion permission and exact provider entitlements are required before HTTP
   });
 });
 
+test("Gemini dispatch keeps the API key in a header and out of the request URL", async () => {
+  const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+  const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.equal(result.status, "complete");
+  const gemini = calls.find((call) => call.providerId === "gemini");
+  assert.ok(gemini, "independent checker should use the configured Gemini provider");
+  assert.equal(new URL(gemini.url).searchParams.has("key"), false);
+  assert.equal(gemini.init.headers["x-goog-api-key"], "fake-gemini-key");
+});
+
 test("malformed request identities cannot start a provider call", async () => {
   let calls = 0;
   const result = await runFusionChatRequest({
@@ -304,6 +314,11 @@ test("primary cannot forge checker provenance with its own verification claim", 
 
 test("Edge chat explains verification, time, cost, and provider-contract failures without leaking details", async () => {
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
+  assert.match(route, /models\/\$\{provider\.model\}:generateContent/);
+  assert.match(route, /models\/\$\{attempt\.model\}:generateContent/);
+  assert.match(route, /"x-goog-api-key": provider\.key/);
+  assert.match(route, /"x-goog-api-key": attempt\.key/);
+  assert.doesNotMatch(route, /generateContent\?key=\$\{(?:provider|attempt)\.key\}/);
   assert.match(route, /\["conflict", "inconclusive", "verification_unavailable", "time_budget_exhausted", "budget_exhausted", "provider_contract_invalid"\]\.includes\(fusion\.status\)/);
   assert.match(route, /fusion\.status === "verification_unavailable"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "time_budget_exhausted"[\s\S]*?no answer was delivered/i);

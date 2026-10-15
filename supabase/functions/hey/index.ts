@@ -91,9 +91,9 @@ async function callProvider(messages: Array<Record<string, string>>, maxTokens: 
     const remaining = Math.max(500, Math.min(18_000, deadline - Date.now()));
     try {
       const response = provider.id === "gemini"
-        ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${provider.key}`, {
+        ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-goog-api-key": provider.key },
           body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: messages.map((message) => `${message.role}: ${message.content}`).join("\n\n") }] }], generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 } }),
         }, remaining)
         : await fetchWithTimeout(provider.id === "openai" ? "https://api.openai.com/v1/chat/completions" : provider.id === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions", {
@@ -334,9 +334,9 @@ Deno.serve(async (request) => {
       try {
         let response: Response;
         if (attempt.id === "gemini") {
-          response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${attempt.model}:generateContent?key=${attempt.key}`, {
+          response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${attempt.model}:generateContent`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "x-goog-api-key": attempt.key },
             body: JSON.stringify({
               contents: [{ role: "user", parts: [
                 { inlineData: { mimeType, data: base64 } },

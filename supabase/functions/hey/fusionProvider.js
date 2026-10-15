@@ -159,8 +159,8 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
   if (candidateMessage) fusionMessages.push(candidateMessage);
 
   if (provider.id === "gemini") {
-    url = `${PROVIDER_ENDPOINTS.gemini}/${encodeURIComponent(provider.model)}:generateContent?key=${encodeURIComponent(attempt.key)}`;
-    headers = { "Content-Type": "application/json" };
+    url = `${PROVIDER_ENDPOINTS.gemini}/${encodeURIComponent(provider.model)}:generateContent`;
+    headers = { "Content-Type": "application/json", "x-goog-api-key": attempt.key };
     body = {
       contents: [{ role: "user", parts: [{ text: fusionMessages.map((item) => `${item.role}: ${item.content}`).join("\n\n") }] }],
       generationConfig: { maxOutputTokens: provider.maxOutputTokens, temperature: 0.2 },
