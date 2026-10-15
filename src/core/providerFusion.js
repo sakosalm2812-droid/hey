@@ -12,6 +12,8 @@ const MAX_MODELS = 2;
 const MAX_PROMPT_CHARS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
 const MAX_CONFLICTS = 16;
+const MAX_PROVIDER_TIMEOUT_MS = 20_000;
+const MAX_REQUEST_DURATION_MS = 40_000;
 
 function result(status, details = {}) {
   return { status, ...details };
@@ -82,6 +84,48 @@ function parseProviderOutput(output, maxCostUsd) {
     };
   } catch {
     return null;
+  }
+}
+
+function hasBoundAnswerEvidence(output) {
+  if (output.text !== output.text.trim()) return false;
+  const answerClaims = output.evidence.filter((item) => item.claimId.toLocaleLowerCase("en-US") === "answer");
+  return answerClaims.length === 1 && typeof answerClaims[0].value === "string" && answerClaims[0].value === output.text;
+}
+
+async function invokeWithTimeout(invoke, request, parentSignal, timeoutMs) {
+  const controller = new AbortController();
+  if (parentSignal?.aborted) throw new Error("Provider request cancelled");
+  let timeoutId;
+  let rejectAbort;
+  const abortPromise = new Promise((_, reject) => { rejectAbort = reject; });
+  const abortParent = () => {
+    controller.abort(parentSignal?.reason);
+    rejectAbort(new Error("Provider request cancelled"));
+  };
+  parentSignal?.addEventListener("abort", abortParent, { once: true });
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+    parentSignal?.removeEventListener("abort", abortParent);
+    throw new Error("Provider request cancelled");
+  }
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort(new Error("Provider timeout"));
+      const error = new Error("Provider timeout");
+      error.providerTimeout = true;
+      reject(error);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => invoke({ ...request, signal: controller.signal })),
+      abortPromise,
+      timeoutPromise,
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+    parentSignal?.removeEventListener("abort", abortParent);
   }
 }
 
@@ -166,6 +210,8 @@ export async function runProviderFusion({
   invoke,
   maxCostUsd = 0.05,
   minConfidence = 0.72,
+  providerTimeoutMs = MAX_PROVIDER_TIMEOUT_MS,
+  maxDurationMs = MAX_REQUEST_DURATION_MS,
 } = {}) {
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > MAX_PROMPT_CHARS) {
     return result("invalid_request", { reason: "prompt_invalid" });
@@ -188,6 +234,10 @@ export async function runProviderFusion({
   if (typeof isCurrent !== "function") return result("invalid_request", { reason: "scope_fence_required" });
   if (!Number.isFinite(maxCostUsd) || maxCostUsd < 0 || !Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
     return result("invalid_request", { reason: "budget_or_threshold_invalid" });
+  }
+  if (!Number.isSafeInteger(providerTimeoutMs) || providerTimeoutMs < 1 || providerTimeoutMs > MAX_PROVIDER_TIMEOUT_MS ||
+    !Number.isSafeInteger(maxDurationMs) || maxDurationMs < 1 || maxDurationMs > MAX_REQUEST_DURATION_MS) {
+    return result("invalid_request", { reason: "time_budget_invalid" });
   }
   if (signal?.aborted) return result("cancelled");
 
@@ -222,19 +272,30 @@ export async function runProviderFusion({
   if ((mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck) && selected.length < 2) {
     return result("unsupported_mode", { mode, reason: "independent_provider_unavailable" });
   }
+  if (selected.some((model) => typeof model.providerId !== "string" || !model.providerId.trim() || typeof model.id !== "string" || !model.id.trim())) {
+    return result("unsupported_mode", { mode, reason: "provider_provenance_unavailable" });
+  }
   const planned = selected;
+  const startedAt = performance.now();
   let reservedCostUsd = 0;
   let dispatchedCalls = 0;
   const outputs = [];
   let primaryFailed = false;
+  let independentCheckRequired = mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck;
   for (let index = 0; index < planned.length; index += 1) {
     const model = planned[index];
     const shouldCall = index === 0 || (primaryFailed || (
       mode === FUSION_MODES.FUSION || requireIndependentCheck ||
-      outputs[0]?.confidence < minConfidence || outputs[0]?.evidence.length === 0
+      mode === FUSION_MODES.HYBRID || outputs[0]?.confidence < minConfidence
     ));
     if (!shouldCall) break;
     if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
+    const elapsedMs = performance.now() - startedAt;
+    const remainingMs = maxDurationMs - elapsedMs;
+    if (remainingMs <= 0) {
+      return independentCheckRequired && outputs.length ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+        : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+    }
 
     const estimate = model.maxCostUsd;
     if (!Number.isFinite(estimate) || estimate < 0) {
@@ -248,17 +309,19 @@ export async function runProviderFusion({
     let raw;
     try {
       dispatchedCalls += 1;
-      raw = await invoke({
+      raw = await invokeWithTimeout(invoke, {
         providerId: model.providerId,
         modelId: model.id,
         prompt,
         accountScope,
-        signal,
         maxCostUsd: estimate,
         maxOutputChars: MAX_OUTPUT_CHARS,
-      });
-    } catch {
+      }, signal, Math.min(providerTimeoutMs, remainingMs));
+    } catch (error) {
       if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
+      if (error?.providerTimeout && outputs.length && independentCheckRequired) {
+        return result("verification_unavailable", { reason: "provider_timeout", calls: dispatchedCalls, reservedCostUsd });
+      }
       if (outputs.length) break;
       primaryFailed = true;
       continue;
@@ -268,6 +331,19 @@ export async function runProviderFusion({
     if (!parsedOutput) {
       return result("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });
     }
+    if (!parsedOutput.evidence.length) {
+      return result("inconclusive", { reason: "candidate_evidence_missing", calls: dispatchedCalls, reservedCostUsd });
+    }
+    if (index === 0 && !primaryFailed) {
+      if (mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck || parsedOutput.confidence < minConfidence) {
+        independentCheckRequired = true;
+        if (!hasBoundAnswerEvidence(parsedOutput)) {
+          return result("provider_contract_invalid", { reason: "candidate_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
+        }
+      }
+    } else if (independentCheckRequired && !hasBoundAnswerEvidence(parsedOutput)) {
+      return result("provider_contract_invalid", { reason: "checker_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
+    }
     outputs.push({
       providerId: model.providerId,
       modelId: model.id,
@@ -276,6 +352,9 @@ export async function runProviderFusion({
   }
 
   if (!outputs.length) return result("provider_unavailable", { calls: dispatchedCalls, reservedCostUsd });
+  if (independentCheckRequired && outputs.length < 2) {
+    return result("verification_unavailable", { reason: "independent_provider_failed", calls: dispatchedCalls, reservedCostUsd });
+  }
   const { conflicts, truncated: conflictsTruncated } = findConflicts(outputs);
   const independentlyChecked = outputs.length > 1;
   if (conflicts.length) {
@@ -299,16 +378,21 @@ export async function runProviderFusion({
   let synthesis = "primary_consensus";
   if (verifier && typeof synthesize === "function") {
     try {
-      answer = await synthesize(deepFreeze({
+      const remainingSynthesisMs = maxDurationMs - (performance.now() - startedAt);
+      if (remainingSynthesisMs <= 0) return result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+      answer = await invokeWithTimeout(() => synthesize(deepFreeze({
         primary: { text: primary.text, confidence: primary.confidence, evidence: primary.evidence },
         checker: { text: verifier.text, confidence: verifier.confidence, evidence: verifier.evidence },
-      }));
+      })), {}, signal, Math.min(providerTimeoutMs, remainingSynthesisMs));
     } catch {
       return result("synthesis_failed", { reason: "local_synthesizer_failed", calls: outputs.length, reservedCostUsd });
     }
     if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
     if (typeof answer !== "string" || !answer.trim() || answer.length > MAX_OUTPUT_CHARS) {
       return result("synthesis_invalid", { reason: "synthesized_answer_invalid", calls: outputs.length, reservedCostUsd });
+    }
+    if (independentCheckRequired && answer !== primary.text) {
+      return result("synthesis_invalid", { reason: "synthesized_answer_not_bound_to_verified_claim", calls: outputs.length, reservedCostUsd });
     }
     synthesis = "local_synthesizer";
   }
