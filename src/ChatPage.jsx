@@ -18,6 +18,7 @@ import {
 import { useAuth } from "./AuthContext.jsx";
 import {
   askHEY,
+  getHEYProviderCatalog,
   getHEYConversationMessages,
   listHEYConversations,
 } from "./lib/heyAI.js";
@@ -58,6 +59,8 @@ function ChatWorkspace() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
+  const [providerCatalog, setProviderCatalog] = useState({ status: "loading", providers: [], budgetUsd: null });
+  const [providerSelection, setProviderSelection] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatError, setChatError] = useState("");
   const [conversationsLoading, setConversationsLoading] = useState(true);
@@ -69,6 +72,33 @@ function ChatWorkspace() {
   const activeRequestControllerRef = useRef(null);
 
   useEffect(() => () => activeRequestControllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    if (!user?.id) {
+      setProviderCatalog({ status: "unavailable", providers: [], budgetUsd: null });
+      setProviderSelection(null);
+      return () => controller.abort();
+    }
+    setProviderCatalog({ status: "loading", providers: [], budgetUsd: null });
+    getHEYProviderCatalog({ signal: controller.signal }).then((catalog) => {
+      if (!active) return;
+      const providers = catalog.providers.filter((provider) =>
+        provider && typeof provider.providerId === "string" && typeof provider.modelId === "string" && provider.state === "configured"
+      );
+      setProviderCatalog({ status: providers.length ? "configured" : "unavailable", providers, budgetUsd: catalog.budgetUsd });
+      setProviderSelection((current) => current && providers.some((provider) =>
+        provider.providerId === current.providerId && provider.modelId === current.modelId
+      ) ? current : null);
+    }).catch(() => {
+      if (active && !controller.signal.aborted) setProviderCatalog({ status: "error", providers: [], budgetUsd: null });
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [user?.id]);
 
   const [mode, setMode] = useState("text");
   const [voiceState, setVoiceState] = useState("idle");
@@ -214,11 +244,14 @@ function ChatWorkspace() {
     activeRequestControllerRef.current = controller;
 
     try {
+      let responseProviderMetadata = null;
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
+        onProviderMetadata: (metadata) => { responseProviderMetadata = metadata; },
         confirmed,
         fusion: requestedFusion,
+        providerSelection: requestedFusion ? null : providerSelection,
         signal: controller.signal,
         onExecutionResult: (execution, originalMessage) => {
           if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
@@ -227,7 +260,7 @@ function ChatWorkspace() {
       });
       if (controller.signal.aborted) return;
 
-      setMessages((current) => [...current, { role: "hey", text: response }]);
+      setMessages((current) => [...current, { role: "hey", text: response, providerMetadata: responseProviderMetadata }]);
       await refreshConversations();
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -465,6 +498,7 @@ function ChatWorkspace() {
                   <ChatMessage
                     key={`${item.role}-${item.text}-${index}`}
                     role={item.role}
+                    providerMetadata={item.providerMetadata}
                     onCopy={() => copyMessage(item.text)}
                     onRetry={() => retryMessage(index)}
                     onPin={() => pinMessage(item.text)}
@@ -502,7 +536,13 @@ function ChatWorkspace() {
                 onSend={() => sendUserMessage(message)}
                 disabled={isSending}
                 fusionEnabled={fusionEnabled}
-                setFusionEnabled={setFusionEnabled}
+                setFusionEnabled={(enabled) => {
+                  setFusionEnabled(enabled);
+                  if (enabled) setProviderSelection(null);
+                }}
+                providerCatalog={providerCatalog}
+                providerSelection={providerSelection}
+                setProviderSelection={setProviderSelection}
                 onVoiceCall={toggleVoiceCall}
                 onDictationInsert={insertDictationTranscript}
               />

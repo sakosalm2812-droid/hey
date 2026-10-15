@@ -45,6 +45,20 @@ async function getHEYSession() {
   return session;
 }
 
+export async function getHEYProviderCatalog({ signal } = {}) {
+  if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
+  const session = await getHEYSession();
+  if (!session?.access_token) throw new Error("Sign in to see configured models.");
+  const response = await fetchWithRetry(`${getHEYApiUrl().replace(/\/$/, "")}/models`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  }, { timeoutMs: 15_000, retries: 1, signal });
+  const details = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(details.error || "Configured models could not be loaded.");
+  if (!Array.isArray(details.providers)) throw new Error("The model catalog response is invalid.");
+  return details;
+}
+
 export function withFusionRequestOptIn(payload, fusionEnabled = false) {
   const safePayload = { ...payload };
   delete safePayload.fusion;
@@ -57,6 +71,10 @@ export function isSameHEYAccount(requestSession, currentSession) {
 
 export function getHEYChatError(response, details = {}, fusion = false) {
   if (response.status === 401) return "Your session expired. Please sign in again.";
+  if (details.code === "provider_model_unavailable") return "That provider model is no longer configured. Refresh the model list and choose another option.";
+  if (details.code === "provider_request_unavailable") return "The selected provider could not complete this request. Choose another configured model or Automatic.";
+  if (details.code === "provider_unavailable") return "No AI provider is configured for HEY yet.";
+  if (details.code === "provider_budget_exhausted") return "This request exceeds the configured model budget. Shorten it or choose another model.";
   if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
   if (fusion && response.status === 409) return "The providers could not independently confirm an answer. No answer was delivered.";
   if (fusion && response.status === 503) return "Model fusion is unavailable because its provider permissions or pricing are not configured.";
@@ -126,7 +144,7 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false, fusion = false, signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onProviderMetadata, confirmed = false, fusion = false, providerSelection = null, signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
@@ -147,6 +165,31 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
       addConversationMessage({ role: "assistant", content: answer });
       return answer;
     }
+    const requestBody = withFusionRequestOptIn({
+      message,
+      requestId: crypto.randomUUID(),
+      system: `${HEY_SYSTEM}\n\n${brainResult.instruction}`,
+      context: brainResult.context,
+      memory: brainResult.memory,
+      analysis: brainResult.analysis,
+      intent: brainResult.intent,
+      agent: brainResult.agent,
+      agentTeam: brainResult.agents,
+      plan: brainResult.plan,
+      providerPlan: brainResult.providerPlan,
+      safety: brainResult.safety,
+      tools: brainResult.tools,
+      primaryTools: brainResult.primaryTools,
+      responseStyle: brainResult.responseStyle,
+      conversationId,
+    }, fusion);
+    if (!fusion && providerSelection?.providerId && providerSelection?.modelId) {
+      requestBody.providerSelection = {
+        providerId: providerSelection.providerId,
+        modelId: providerSelection.modelId,
+      };
+    }
+
     const response = await fetchWithRetry(getHEYApiUrl(), {
       method: 'POST',
       headers: {
@@ -155,24 +198,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
           ? { Authorization: `Bearer ${session.access_token}` }
           : {}),
       },
-      body: JSON.stringify(withFusionRequestOptIn({
-        message,
-        requestId: crypto.randomUUID(),
-        system: `${HEY_SYSTEM}\n\n${brainResult.instruction}`,
-        context: brainResult.context,
-        memory: brainResult.memory,
-        analysis: brainResult.analysis,
-        intent: brainResult.intent,
-        agent: brainResult.agent,
-        agentTeam: brainResult.agents,
-        plan: brainResult.plan,
-        providerPlan: brainResult.providerPlan,
-        safety: brainResult.safety,
-        tools: brainResult.tools,
-        primaryTools: brainResult.primaryTools,
-        responseStyle: brainResult.responseStyle,
-        conversationId,
-      }, fusion))
+      body: JSON.stringify(requestBody)
     }, { signal })
 
     if (!response.ok) {
@@ -186,6 +212,12 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
     if (!isSameHEYAccount(session, currentSession)) {
       throw new DOMException("The signed-in account changed while this request was running.", "AbortError");
     }
+    onProviderMetadata?.({
+      provider: data.provider,
+      model: data.model,
+      costUsd: data.costUsd,
+      fusion: data.fusion || null,
+    });
 
     if (data.conversationId && onConversationId) {
       onConversationId(data.conversationId);

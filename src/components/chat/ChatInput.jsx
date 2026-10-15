@@ -14,6 +14,9 @@ export default function ChatInput({
   onDictationInsert,
   fusionEnabled = false,
   setFusionEnabled,
+  providerCatalog = { status: "loading", providers: [], budgetUsd: null },
+  providerSelection = null,
+  setProviderSelection,
 }) {
   const { t } = useLocale();
   const { user } = useAuth();
@@ -47,8 +50,42 @@ export default function ChatInput({
     setValue((current) => current.trim() ? `${current.trim()} ${transcript}` : transcript);
   }
 
+  const selectedProviderValue = providerSelection
+    ? `${providerSelection.providerId}\u001f${providerSelection.modelId}`
+    : "";
+
   return (
     <div className="hey-chat-composer">
+      <label className="hey-chat-model-select">
+        <span>Model</span>
+        <select
+          aria-label="Choose a configured model"
+          value={selectedProviderValue}
+          disabled={disabled || fusionEnabled || providerCatalog.status === "loading"}
+          onChange={(event) => {
+            const provider = providerCatalog.providers.find((item) => `${item.providerId}\u001f${item.modelId}` === event.target.value);
+            setProviderSelection?.(provider ? { providerId: provider.providerId, modelId: provider.modelId } : null);
+          }}
+        >
+          <option value="">Automatic</option>
+          {providerCatalog.providers.map((provider) => (
+            <option key={`${provider.providerId}/${provider.modelId}`} value={`${provider.providerId}\u001f${provider.modelId}`}>
+              {provider.providerName} · {provider.modelId} · max ${provider.maxCostUsd}/request
+            </option>
+          ))}
+        </select>
+      </label>
+      <span className="hey-chat-model-status" aria-live="polite">
+        {fusionEnabled
+          ? "Fusion uses two server configured models."
+          : providerCatalog.status === "loading"
+            ? "Loading configured models…"
+            : providerCatalog.status === "error"
+              ? "The model list is unavailable. Automatic routing remains selected."
+              : providerCatalog.providers.length === 0
+                ? "No chat models with server keys and prices are configured."
+                : `The HEY server enforces a $${providerCatalog.budgetUsd} total request cap.`}
+      </span>
       <label className="hey-chat-fusion-opt-in">
         <input
           type="checkbox"

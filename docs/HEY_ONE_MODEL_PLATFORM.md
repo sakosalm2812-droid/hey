@@ -23,6 +23,14 @@ This is a validation/metadata seam only. It does not execute training or verify 
 
 This local permission contract does not replace server-side provider entitlement or credential checks. No provider was called by these tests.
 
+## Edge provider discovery and chat routing
+
+The authenticated Edge `GET /models` response lists only provider/model pairs with a server-held API key and a matching entry in `HEY_CHAT_PRICING_JSON`. It returns provider IDs, exact model IDs, the per-model request cap, and a `configured` state; that state confirms configuration, not a live provider health check. API keys and vendor error bodies never go to the browser. Chat can send Automatic or one exact pair from this catalog. The Edge handler resolves the selection against its current server configuration and does not silently switch to another model when an explicitly selected model is missing or fails.
+
+Normal chat needs the provider API key, optional provider model environment variable, and a verified per-model price record. `HEY_CHAT_PRICING_JSON` sets an overall request budget of at most USD 0.25 and each provider's per-request cap, with input/output prices per million tokens. The Edge handler caps estimated input at 32,000 tokens, reserves the input estimate, limits output tokens to the remaining cap, allows at most 1,200 output tokens per provider and 18 seconds per provider attempt within a 35-second request deadline, and requires bounded usage reporting before delivering the answer. Automatic routing can fall back to another configured and priced provider while keeping the aggregate reservation within the request budget. Fusion remains an explicit opt-in and uses its separate `HEY_FUSION_PRICING_JSON` two-provider budget, authenticated entitlement checks, and cancellation boundary.
+
+The provider list is discovered in the signed-in browser session, and selected provider/model IDs are sent with the chat request. The Edge route rechecks the exact pair against server configuration, carries request cancellation into the provider fetch, and returns the provider, model, and measured cost in response metadata. The current workspace has no provider API keys, chat prices, Supabase endpoint, or deployment token, so live availability and real inference remain unverified; mock-provider tests are not evidence of live access.
+
 `createInferenceRequest` creates a provider-neutral OpenAI-compatible message envelope, binds the selected profile, budget and privacy mode, and rejects an incompatible model before dispatch. A real serving adapter still needs to enforce this metadata server-side; a browser request contract is not a privacy boundary or a billing authorization.
 
 ## Reproducible verification

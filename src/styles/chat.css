@@ -91,6 +91,7 @@
 .hey-chat-message-actions button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .hey-chat-message-actions button:hover,
 .hey-chat-message-actions button.active { color: var(--accent-hover); background: var(--accent-glow-soft); }
+.hey-chat-provider-metadata { margin-top: 7px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
 .hey-chat-thinking { display: flex; align-items: center; gap: 5px; margin-left: 44px; color: var(--text-muted); font-size: 11px; }
 .hey-chat-thinking span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-hover); animation: hey-chat-pulse 1s ease-in-out infinite; }
 .hey-chat-thinking span:nth-child(2) { animation-delay: .15s; }
@@ -104,6 +105,11 @@
 .hey-chat-suggestions button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--glass-bg); color: var(--text-secondary); font-size: 10px; cursor: pointer; }
 .hey-chat-suggestions button:hover { border-color: var(--accent); color: var(--text-primary); }
 .hey-chat-composer { display: grid; gap: 8px; }
+.hey-chat-model-select { display: flex; align-items: center; gap: 8px; width: fit-content; color: var(--text-muted); font-size: 12px; }
+.hey-chat-model-select select { max-width: min(72vw, 360px); min-height: 30px; padding: 4px 26px 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--glass-bg); color: var(--text-primary); font: inherit; }
+.hey-chat-model-select select:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.hey-chat-model-select select:disabled { opacity: .6; }
+.hey-chat-model-status { color: var(--text-muted); font-size: 11px; }
 .hey-chat-fusion-opt-in { display: flex; align-items: center; gap: 8px; width: fit-content; color: var(--text-muted); font-size: 12px; cursor: pointer; }
 .hey-chat-fusion-opt-in input { accent-color: var(--accent); }
 .hey-chat-fusion-opt-in:has(input:disabled) { opacity: .6; cursor: default; }

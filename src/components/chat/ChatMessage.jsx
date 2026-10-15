@@ -5,6 +5,7 @@ import MarkdownResponse from './MarkdownResponse.jsx';
 export default function ChatMessage({
   role,
   children,
+  providerMetadata,
   onCopy,
   onRetry,
   onPin,
@@ -12,6 +13,15 @@ export default function ChatMessage({
   copied,
 }) {
   const isUser = role === "user";
+  const providerIds = typeof providerMetadata?.provider === "string" ? providerMetadata.provider.split(",") : [];
+  const modelIds = typeof providerMetadata?.model === "string" ? providerMetadata.model.split(",") : [];
+  const routedModels = providerIds.map((providerId, index) => {
+    const modelId = modelIds[index];
+    return modelId ? `${providerId} · ${modelId}` : providerId;
+  }).filter(Boolean).join(" + ");
+  const costLabel = Number.isFinite(providerMetadata?.costUsd)
+    ? ` · $${providerMetadata.costUsd === 0 ? "0" : providerMetadata.costUsd.toPrecision(3).replace(/\.?0+$/, "")}`
+    : "";
 
   return (
     <motion.article
@@ -25,6 +35,11 @@ export default function ChatMessage({
       <div className="hey-chat-message-body">
         <div className="hey-chat-message-label">{isUser ? "You" : "HEY"}</div>
         <div className="hey-chat-message-copy">{isUser ? children : <MarkdownResponse>{children}</MarkdownResponse>}</div>
+        {!isUser && routedModels && (
+          <div className="hey-chat-provider-metadata" aria-label="Provider routing details">
+            {providerMetadata?.fusion?.independentlyChecked ? "Fusion · " : "Model · "}{routedModels}{costLabel}
+          </div>
+        )}
         <div className="hey-chat-message-actions">
           <button type="button" onClick={onCopy} aria-label="Copy message" title="Copy message">
             {copied ? <Check size={14} /> : <Copy size={14} />}

@@ -2,6 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
+import {
+  listConfiguredProviders,
+  parseChatPricingConfig,
+  resolveProviderSelection,
+} from "./providerCatalog.js";
+import { callConfiguredProvider } from "./providerDispatch.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
@@ -55,13 +61,17 @@ function resolveAccountPlan(profile: Record<string, unknown> | null): AccountPro
   return "free";
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 30_000) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 30_000, parentSignal?: AbortSignal) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  const timeout = setTimeout(() => controller.abort(new DOMException("Provider request timed out.", "TimeoutError")), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", abortFromParent);
   }
 }
 
@@ -76,47 +86,6 @@ function getProviderAttempts() {
   return preferred
     ? [...configured.filter((provider) => provider.id === preferred), ...configured.filter((provider) => provider.id !== preferred)]
     : configured;
-}
-
-async function callProvider(messages: Array<Record<string, string>>, maxTokens: number, preferredProvider?: string) {
-  let lastError = "No AI provider is configured";
-  const attempts = getProviderAttempts();
-  const orderedAttempts = preferredProvider
-    ? [...attempts.filter((provider) => provider.id === preferredProvider), ...attempts.filter((provider) => provider.id !== preferredProvider)]
-    : attempts;
-
-  const deadline = Date.now() + 35_000;
-  for (const provider of orderedAttempts) {
-    if (Date.now() >= deadline) break;
-    const remaining = Math.max(500, Math.min(18_000, deadline - Date.now()));
-    try {
-      const response = provider.id === "gemini"
-        ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${provider.key}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: messages.map((message) => `${message.role}: ${message.content}`).join("\n\n") }] }], generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 } }),
-        }, remaining)
-        : await fetchWithTimeout(provider.id === "openai" ? "https://api.openai.com/v1/chat/completions" : provider.id === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${provider.key}`,
-            "Content-Type": "application/json",
-            ...(provider.id === "openrouter" ? { "HTTP-Referer": Deno.env.get("APP_URL") || "http://localhost:5173", "X-Title": "HEY" } : {}),
-          },
-          body: JSON.stringify({ model: provider.model, messages, temperature: 0.7, max_tokens: maxTokens }),
-        }, remaining);
-
-      const data = await response.json();
-      if (response.ok) return { data, providerId: provider.id, model: provider.model };
-      lastError = `${provider.id}: ${String(data?.error?.message || response.status)}`;
-      console.error("HEY provider error", lastError);
-    } catch (error) {
-      lastError = `${provider.id}: ${String(error)}`;
-      console.error("HEY provider request error", lastError);
-    }
-  }
-
-  throw new Error(lastError);
 }
 
 function shouldSearch(payload: Record<string, unknown>, message: string) {
@@ -231,13 +200,41 @@ Deno.serve(async (request) => {
 
   const healthPath = new URL(request.url).pathname.endsWith("/health");
   if (request.method === "GET" && healthPath) {
+    const providerPricing = parseChatPricingConfig(Deno.env.get("HEY_CHAT_PRICING_JSON") || "");
+    const configuredProviders = listConfiguredProviders(getProviderAttempts(), providerPricing);
     const ready = Boolean(
       Deno.env.get("SUPABASE_URL")
       && Deno.env.get("SUPABASE_ANON_KEY")
       && Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
-      && getProviderAttempts().length,
+      && configuredProviders.length,
     );
     return jsonResponse({ status: ready ? "ready" : "not_ready" }, ready ? 200 : 503);
+  }
+
+  const modelsPath = new URL(request.url).pathname.endsWith("/models");
+  if (request.method === "GET" && modelsPath) {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return jsonResponse({ error: "Provider discovery is not configured", code: "backend_unavailable" }, 503);
+    }
+    const token = getAuthToken(request);
+    if (!token) return jsonResponse({ error: "Authentication required" }, 401);
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { data: { user }, error: userError } = await authClient.auth.getUser(token);
+    if (userError || !user) return jsonResponse({ error: "Authentication required" }, 401);
+    const providerPricing = parseChatPricingConfig(Deno.env.get("HEY_CHAT_PRICING_JSON") || "");
+    const providers = listConfiguredProviders(getProviderAttempts(), providerPricing);
+    return jsonResponse({
+      providers,
+      defaultProvider: providers.some((provider) => provider.providerId === Deno.env.get("HEY_PROVIDER"))
+        ? Deno.env.get("HEY_PROVIDER")
+        : null,
+      state: providers.length ? "configured" : "unavailable",
+      budgetUsd: providerPricing?.budgetUsd ?? null,
+    });
   }
 
   if (request.method !== "POST") {
@@ -247,7 +244,7 @@ Deno.serve(async (request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !getProviderAttempts().length) {
+  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
     return jsonResponse({ error: "HEY backend is not configured" }, 500);
   }
 
@@ -296,6 +293,19 @@ Deno.serve(async (request) => {
   if (message.length > 8000) return jsonResponse({ error: "Message is too long" }, 413);
 
   const requestId = validRequestId(payload.requestId);
+  const providerAttempts = getProviderAttempts();
+  const chatPricingConfig = parseChatPricingConfig(Deno.env.get("HEY_CHAT_PRICING_JSON") || "");
+  const providerSelection = resolveProviderSelection(payload.providerSelection, providerAttempts, chatPricingConfig);
+  if (providerSelection.status === "invalid") {
+    return jsonResponse({ error: "The selected provider and model are invalid", code: "provider_selection_invalid" }, 400);
+  }
+  const fusionRequested = payload.fusion === true || payload.modelMode === "fusion" || payload.mode === "fusion";
+  if (fusionRequested && providerSelection.status === "selected") {
+    return jsonResponse({ error: "Choose either a specific model or Fusion for this request", code: "provider_selection_conflict" }, 400);
+  }
+  if (providerSelection.status === "unavailable") {
+    return jsonResponse({ error: "That provider model is no longer configured. Refresh the model list and choose another option.", code: "provider_model_unavailable" }, 503);
+  }
 
   if (payload.operation === "vision") {
     const image = payload.image;
@@ -600,7 +610,6 @@ Deno.serve(async (request) => {
     { role: "user", content: message },
   ];
 
-  const fusionRequested = payload.fusion === true || payload.modelMode === "fusion" || payload.mode === "fusion";
   let providerMetadata: Record<string, unknown>;
   let response: string;
   if (fusionRequested) {
@@ -654,20 +663,45 @@ Deno.serve(async (request) => {
     providerMetadata = {
       provider: fusion.providers.map((provider) => provider.providerId).join(","),
       model: fusion.providers.map((provider) => provider.modelId).join(","),
+      costUsd: fusion.costUsd,
       fusion: { independentlyChecked: true, confidence: fusion.confidence },
     };
   } else {
     let providerResult;
     try {
-      providerResult = await callProvider(messages, 1200);
+      const pricedAttempts = providerAttempts.filter((attempt) => chatPricingConfig?.providers.some((item) =>
+        item.providerId === attempt.id && item.modelId === attempt.model
+      ));
+      if (!chatPricingConfig || !pricedAttempts.length) {
+        return jsonResponse({ error: "No provider with valid pricing is configured for HEY", code: "provider_unavailable" }, 503);
+      }
+      providerResult = await callConfiguredProvider({
+        messages,
+        maxTokens: 1200,
+        attempts: pricedAttempts,
+        pricingConfig: chatPricingConfig,
+        selected: providerSelection.status === "selected" ? providerSelection : undefined,
+        signal: request.signal,
+        appUrl: Deno.env.get("APP_URL") || "http://localhost:5173",
+      });
     } catch (error) {
+      if (request.signal.aborted || error?.name === "AbortError") {
+        return jsonResponse({ error: "The provider request was cancelled", code: "request_cancelled" }, 499);
+      }
+      if (error?.providerBudgetExhausted) {
+        return jsonResponse({ error: "This request exceeds the configured model budget. Shorten it or choose another model.", code: "provider_budget_exhausted" }, 409);
+      }
       console.error("HEY provider error", error);
-      return jsonResponse({ error: "HEY could not reach an AI provider" }, 502);
+      return providerSelection.status === "selected"
+        ? jsonResponse({ error: "The selected provider could not complete this request. Choose another configured model or Automatic.", code: "provider_request_unavailable" }, 503)
+        : jsonResponse({ error: "HEY could not reach an AI provider" }, 502);
     }
     response = extractProviderText(providerResult.data);
     if (!response) return jsonResponse({ error: "HEY received an empty response" }, 502);
-    providerMetadata = { model: providerResult.model, provider: providerResult.providerId };
+    providerMetadata = { model: providerResult.model, provider: providerResult.providerId, costUsd: providerResult.costUsd };
   }
+
+  if (request.signal.aborted) return jsonResponse({ error: "The provider request was cancelled", code: "request_cancelled" }, 499);
 
   const answer = sources.length
     ? `${response}\n\nSources:\n${sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
@@ -681,6 +715,8 @@ Deno.serve(async (request) => {
     plan: payload.plan || null,
     agentTeam: payload.agentTeam || null,
   };
+
+  if (request.signal.aborted) return jsonResponse({ error: "The provider request was cancelled", code: "request_cancelled" }, 499);
 
   const { error: messageError } = await serviceSupabase.from("hey_messages").insert([
     { conversation_id: conversationId, user_id: user.id, role: "user", content: message },
