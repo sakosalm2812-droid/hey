@@ -132,6 +132,9 @@ test("a detector that exceeds its frame deadline aborts the session and releases
       return new Promise(() => {});
     },
   });
+  engine.gestureCooldowns.set(`${profile.id}:G01`, Date.now());
+  const executed = [];
+  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
 
   try {
     assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
@@ -141,7 +144,10 @@ test("a detector that exceeds its frame deadline aborts the session and releases
     assert.equal(camera.stopped, 1);
     assert.equal(adapterSignal.aborted, true);
     assert.equal(adapterErrors[0]?.code, "adapter_timeout");
+    assert.equal(engine.gestureCooldowns.size, 0);
+    assert.deepEqual(executed, []);
   } finally {
+    unsubscribe();
     engine.stopRecognition("test_cleanup");
     if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
     else globalThis.OffscreenCanvas = previousOffscreenCanvas;
@@ -152,6 +158,94 @@ test("detector deadlines reject invalid and unbounded configuration", () => {
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: 0 }), RangeError);
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: 10_001 }), RangeError);
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: Infinity }), RangeError);
+});
+
+test("gesture cooldown is bounded, suppresses repeated frames, and resets on pause and stop", () => {
+  const { engine, profile } = makeEngine();
+  const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const executed = [];
+  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.activeProfileId = profile.id;
+
+  try {
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    assert.equal(executed.length, 1);
+    assert.equal(engine.gestureCooldowns.size, 1);
+
+    assert.equal(engine.pauseRecognition(), true);
+    assert.equal(engine.gestureCooldowns.size, 0);
+    assert.equal(engine.resumeRecognition(), true);
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    assert.equal(executed.length, 2);
+
+    engine.stopRecognition("test_cleanup");
+    assert.equal(engine.gestureCooldowns.size, 0);
+    assert.equal(binding.enabled, true);
+  } finally {
+    unsubscribe();
+    engine.stopRecognition("test_cleanup");
+  }
+});
+
+test("gesture cooldown accepts only integer timings inside the configured range", () => {
+  const { engine, profile } = makeEngine();
+  assert.throws(() => engine.createProfile({ cooldownMs: 199 }), RangeError);
+  assert.throws(() => engine.createProfile({ cooldownMs: 2001 }), RangeError);
+  assert.throws(() => engine.createProfile({ cooldownMs: 200.5 }), RangeError);
+  assert.throws(() => engine.updateProfile(profile.id, { cooldownMs: -1 }), RangeError);
+  assert.throws(() => engine.updateProfile(profile.id, { cooldownMs: 2001 }), RangeError);
+  let cooldownGetterCalled = false;
+  const accessorUpdate = Object.defineProperty({}, "cooldownMs", {
+    enumerable: true,
+    get() { cooldownGetterCalled = true; return 350; },
+  });
+  assert.throws(() => engine.updateProfile(profile.id, accessorUpdate), TypeError);
+  assert.equal(cooldownGetterCalled, false);
+  assert.equal(engine.updateProfile(profile.id, { cooldownMs: 350 }).cooldownMs, 350);
+});
+
+test("a frame completing after pause and resume cannot trigger an action", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  camera.video.readyState = 2;
+  globalThis.requestAnimationFrame = () => 1;
+  const previousOffscreenCanvas = globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return {
+        drawImage() {},
+        getImageData() { return { data: new Uint8ClampedArray(4) }; },
+      };
+    }
+  };
+  let resolveDetection;
+  let detectStarted;
+  const pending = new Promise((resolve) => { resolveDetection = resolve; });
+  const started = new Promise((resolve) => { detectStarted = resolve; });
+  engine.setRecognitionAdapter({ detect() { detectStarted(); return pending; } });
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const executed = [];
+  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+    await started;
+    assert.equal(engine.pauseRecognition(), true);
+    assert.equal(engine.resumeRecognition(), true);
+    resolveDetection({ id: "G01", confidence: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(executed, []);
+    assert.equal(engine.gestureCooldowns.size, 0);
+  } finally {
+    unsubscribe();
+    engine.stopRecognition("test_cleanup");
+    if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
 });
 
 test("browser camera permission revocation stops the session and unregisters its observer", async () => {
@@ -177,6 +271,7 @@ test("browser camera permission revocation stops the session and unregisters its
 
   assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
   assert.equal(listeners.size, 1);
+  engine.gestureCooldowns.set(`${profile.id}:G01`, Date.now());
   permissionStatus.state = "denied";
   listeners.get("change")();
 
@@ -184,6 +279,7 @@ test("browser camera permission revocation stops the session and unregisters its
   assert.equal(camera.stopped, 1);
   assert.equal(adapterStops, 1);
   assert.equal(listeners.size, 0);
+  assert.equal(engine.gestureCooldowns.size, 0);
 });
 
 test("gesture bindings cannot publish an action outside their active consented session", () => {
