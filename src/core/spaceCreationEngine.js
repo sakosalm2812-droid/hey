@@ -135,11 +135,17 @@ export class SpaceCreationEngine {
   save() {
     if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; reload before saving" };
     try {
-      safeStorage.setItem(getAccountStorageKey(STORAGE_KEY, this.accountScope), JSON.stringify({
+      const key = getAccountStorageKey(STORAGE_KEY, this.accountScope);
+      const serialized = JSON.stringify({
         contractVersion: SPACE_CREATION_CONTRACT_VERSION,
         accountScope: this.accountScope,
         spaces: Object.fromEntries(this.spaces),
-      }));
+      });
+      // safeStorage intentionally absorbs browser storage exceptions. Verify the
+      // round trip here so callers never receive a persisted-success result when
+      // the canonical per-account store rejected the write.
+      safeStorage.setItem(key, serialized);
+      if (safeStorage.getItem(key) !== serialized) return { error: "Space could not be saved" };
       return { success: true };
     } catch {
       return { error: "Space could not be saved" };
@@ -203,6 +209,11 @@ export class SpaceCreationEngine {
       return { error: "Space limit reached" };
     }
 
+    // Consume before mutating or calling storage. Storage implementations can
+    // synchronously re-enter application code, so deletion after save would
+    // permit the same explicit confirmation to create a second Space.
+    this.previews.delete(previewId);
+
     const space = {
       id: createId(),
       accountScope: this.accountScope,
@@ -216,10 +227,8 @@ export class SpaceCreationEngine {
     const saved = this.save();
     if (saved.error) {
       this.spaces.delete(space.id);
-      this.previews.delete(previewId);
       return saved;
     }
-    this.previews.delete(previewId);
     const result = cloneSpace(space);
     this.notify("space_created", result);
     publish("spaces.private_space_created", result);

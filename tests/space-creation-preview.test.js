@@ -113,6 +113,7 @@ test("account changes invalidate previews and keep created Spaces isolated", () 
     const storedB = JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces")));
     assert.equal(storedB.accountScope, "account:space-isolation-b");
     assert.equal(Object.values(storedB.spaces)[0].name, "Private B");
+    assert.deepEqual(new SpaceCreationEngine().getSpaces().map((space) => space.name), ["Private B"]);
 
     setAccountScope("space-isolation-a");
     assert.deepEqual(engine.getSpaces(), []);
@@ -121,6 +122,65 @@ test("account changes invalidate previews and keep created Spaces isolated", () 
     const storedA = JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces")));
     assert.equal(storedA.accountScope, "account:space-isolation-a");
     assert.equal(Object.values(storedA.spaces)[0].name, "Private A");
+    assert.deepEqual(new SpaceCreationEngine().getSpaces().map((space) => space.name), ["Private A"]);
     assert.notEqual(getAccountStorageKey("hey_spaces", "account:space-isolation-a"), getAccountStorageKey("hey_spaces", "account:space-isolation-b"));
   } finally { setAccountScope(previousScope); }
+}));
+
+test("preview IDs are local to their engine and account scope is never caller supplied", () => withStorage(() => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-engine-owner-a");
+    const owner = new SpaceCreationEngine();
+    const otherEngine = new SpaceCreationEngine();
+    const preview = owner.previewNaturalLanguageRequest({ prompt: "Create a space called Account A" });
+    assert.equal(typeof preview.previewId, "string", JSON.stringify(preview));
+
+    assert.match(otherEngine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true }).error, /not found or already used/);
+    assert.match(owner.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true, accountScope: "account:space-engine-owner-b" }).error, /unsupported fields/);
+    assert.equal(owner.getSpaces().length, 0);
+
+    setAccountScope("space-engine-owner-b");
+    const accountB = new SpaceCreationEngine();
+    assert.match(accountB.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true }).error, /not found or already used/);
+    assert.deepEqual(accountB.getSpaces(), []);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("confirmation is consumed before reentrant persistence and failed writes are not reported as success", () => withStorage(() => {
+  const previousScope = "spaces-preview-previous";
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-reentrant-owner");
+    const engine = new SpaceCreationEngine();
+    const preview = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Exactly once" });
+    let reentrantResult;
+    const reentrantStorage = {
+      getItem: () => null,
+      setItem: () => {
+        reentrantResult = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+      },
+      removeItem: () => {},
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: reentrantStorage });
+
+    const result = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    assert.equal(result.error, "Space could not be saved");
+    assert.match(reentrantResult.error, /not found or already used/);
+    assert.deepEqual(engine.getSpaces(), []);
+
+    const failingStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: failingStorage });
+    const failedPreview = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Unpersisted" });
+    const failed = engine.confirmNaturalLanguagePreview({ previewId: failedPreview.previewId, confirm: true });
+    assert.equal(failed.error, "Space could not be saved");
+    assert.deepEqual(engine.getSpaces(), []);
+    assert.match(engine.confirmNaturalLanguagePreview({ previewId: failedPreview.previewId, confirm: true }).error, /not found or already used/);
+  } finally {
+    if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage);
+    else delete globalThis.localStorage;
+    setAccountScope(previousScope);
+  }
 }));
