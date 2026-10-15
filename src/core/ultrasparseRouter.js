@@ -14,11 +14,18 @@ const MAX_QUERY_LENGTH = 4096;
 const MAX_EXPERTS = 3;
 const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
 const TOKEN_EXPERT_INDEX = new Map();
+const TOKEN_EXPERT_MASK_INDEX = new Map();
+const MASK_INDEX_SUPPORTED = EXPERTS.every((expert) => expert.terms.length <= 31);
 
-for (const expert of EXPERTS) {
-  for (const term of expert.terms) {
+for (const [expertIndex, expert] of EXPERTS.entries()) {
+  for (const [termIndex, term] of expert.terms.entries()) {
     if (!TOKEN_EXPERT_INDEX.has(term)) TOKEN_EXPERT_INDEX.set(term, []);
     TOKEN_EXPERT_INDEX.get(term).push(expert.id);
+
+    if (MASK_INDEX_SUPPORTED) {
+      if (!TOKEN_EXPERT_MASK_INDEX.has(term)) TOKEN_EXPERT_MASK_INDEX.set(term, []);
+      TOKEN_EXPERT_MASK_INDEX.get(term).push({ expertIndex, bit: 1 << termIndex });
+    }
   }
 }
 
@@ -86,6 +93,32 @@ export function selectUltraSparseExpertsIndexed(input, { limit = 2 } = {}) {
   return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
 }
 
+/** Experimental bit-mask index; output is kept byte-for-byte equivalent to the linear baseline. */
+export function selectUltraSparseExpertsMasked(input, { limit = 2 } = {}) {
+  if (!MASK_INDEX_SUPPORTED) return selectUltraSparseExperts(input, { limit });
+  const normalized = selectionInput(input, limit);
+  if (!normalized) return { experts: [], matchedTerms: [], status: "invalid_input" };
+
+  const masks = new Array(EXPERTS.length).fill(0);
+  for (const token of normalized.tokenSet) {
+    for (const { expertIndex, bit } of TOKEN_EXPERT_MASK_INDEX.get(token) || []) {
+      masks[expertIndex] |= bit;
+    }
+  }
+
+  const ranked = [];
+  for (const [expertIndex, expert] of EXPERTS.entries()) {
+    const mask = masks[expertIndex];
+    if (mask === 0) continue;
+    const matchedTerms = [];
+    for (let termIndex = 0; termIndex < expert.terms.length; termIndex += 1) {
+      if ((mask & (1 << termIndex)) !== 0) matchedTerms.push(expert.terms[termIndex]);
+    }
+    ranked.push({ id: expert.id, score: matchedTerms.length, matchedTerms });
+  }
+  return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
+}
+
 /**
  * Connects the prototype expert labels to HEY's canonical provider plan.
  * The result is a routing proposal only; callers must still execute and
@@ -100,4 +133,4 @@ export function createUltraSparsePlan(input, { intent = "conversation", limit = 
   };
 }
 
-export default { selectUltraSparseExperts, selectUltraSparseExpertsIndexed, createUltraSparsePlan };
+export default { selectUltraSparseExperts, selectUltraSparseExpertsIndexed, selectUltraSparseExpertsMasked, createUltraSparsePlan };

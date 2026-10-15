@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   selectUltraSparseExperts,
   selectUltraSparseExpertsIndexed,
+  selectUltraSparseExpertsMasked,
 } from "../src/core/ultrasparseRouter.js";
 
 const workload = [
@@ -21,6 +22,7 @@ const timerOverheadSamples = smokeMode ? 50 : 10_000;
 const algorithms = [
   ["linear", selectUltraSparseExperts],
   ["indexed", selectUltraSparseExpertsIndexed],
+  ["masked", selectUltraSparseExpertsMasked],
 ];
 
 function summarize(samplesNs) {
@@ -35,6 +37,7 @@ function summarize(samplesNs) {
 }
 
 const selectionSamplesNs = Object.fromEntries(algorithms.map(([name]) => [name, []]));
+const memoryBefore = process.memoryUsage();
 for (let trial = 0; trial < trials; trial += 1) {
   for (let index = 0; index < warmup; index += 1) {
     const query = workload[index % workload.length];
@@ -42,7 +45,8 @@ for (let trial = 0; trial < trials; trial += 1) {
   }
   for (let index = 0; index < samplesPerTrial; index += 1) {
     const query = workload[(trial * samplesPerTrial + index) % workload.length];
-    const order = (trial + index) % 2 ? [...algorithms].reverse() : algorithms;
+    const offset = (trial + index) % algorithms.length;
+    const order = [...algorithms.slice(offset), ...algorithms.slice(0, offset)];
     for (const [name, select] of order) {
       const started = process.hrtime.bigint();
       select(query);
@@ -50,6 +54,7 @@ for (let trial = 0; trial < trials; trial += 1) {
     }
   }
 }
+const memoryAfter = process.memoryUsage();
 
 const emptyPairSamplesNs = [];
 for (let index = 0; index < timerOverheadSamples; index += 1) {
@@ -78,17 +83,28 @@ const report = {
       description: "Use a prebuilt token-to-expert inverted index.",
       perOperationSelectionLatency: summarize(selectionSamplesNs.indexed),
     },
+    masked: {
+      isDefault: false,
+      description: "Use a prebuilt token-to-expert bit-mask index with fixed per-expert accumulators.",
+      perOperationSelectionLatency: summarize(selectionSamplesNs.masked),
+    },
   },
   selectionOnly: true,
   modelLoadingIncluded: false,
   inferenceIncluded: false,
   emptyTimerPairLatency: summarize(emptyPairSamplesNs),
-  timingMethod: "Each operation is bracketed by process.hrtime.bigint(); each algorithm receives the same deterministic query sequence, calls alternate order to balance ordering effects, and empty timer-pair samples estimate timer overhead without subtraction.",
+  timingMethod: "Each operation is bracketed by process.hrtime.bigint(); each algorithm receives the same deterministic query sequence, call order rotates across algorithms to balance ordering effects, and empty timer-pair samples estimate timer overhead without subtraction.",
   node: process.version,
   platform: `${process.platform}-${process.arch}`,
   cpu: os.cpus()[0]?.model || "unknown",
   logicalCpuCount: os.cpus().length,
   totalMemoryBytes: os.totalmem(),
+  processMemoryBytes: {
+    before: memoryBefore.rss,
+    after: memoryAfter.rss,
+    delta: memoryAfter.rss - memoryBefore.rss,
+    note: "Whole-process RSS snapshots; not attributable to an algorithm or a per-operation allocation measurement.",
+  },
   note: "One local synthetic lexical workload; not a model quality, energy, memory-footprint, GPU, or production-performance result.",
 };
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

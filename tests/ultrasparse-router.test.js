@@ -6,6 +6,7 @@ import {
   createUltraSparsePlan,
   selectUltraSparseExperts,
   selectUltraSparseExpertsIndexed,
+  selectUltraSparseExpertsMasked,
 } from "../src/core/ultrasparseRouter.js";
 import { clearProviders } from "../src/core/providerRegistry.js";
 
@@ -22,7 +23,7 @@ test("selector rejects non-text input and leaves unsupported text unassigned", (
   assert.equal(selectUltraSparseExperts("hello there").status, "no_match");
 });
 
-test("experimental token index is exactly equivalent to the linear baseline on deterministic and hostile inputs", () => {
+test("experimental indexes are exactly equivalent to the linear baseline on deterministic and hostile inputs", () => {
   const terms = ["debug", "javascript", "source", "research", "math", "proof", "draft", "email", "plan", "project", "unrelated"];
   const queries = [
     "",
@@ -40,11 +41,15 @@ test("experimental token index is exactly equivalent to the linear baseline on d
   for (const query of queries) {
     for (const limit of [undefined, -1, 1, 2, 3, 999, 1.5, Number.NaN]) {
       const options = limit === undefined ? {} : { limit };
-      assert.deepEqual(selectUltraSparseExpertsIndexed(query, options), selectUltraSparseExperts(query, options), `query=${query.slice(0, 60)} limit=${limit}`);
+      const expected = selectUltraSparseExperts(query, options);
+      assert.deepEqual(selectUltraSparseExpertsIndexed(query, options), expected, `indexed query=${query.slice(0, 60)} limit=${limit}`);
+      assert.deepEqual(selectUltraSparseExpertsMasked(query, options), expected, `masked query=${query.slice(0, 60)} limit=${limit}`);
     }
   }
   for (const invalid of [null, undefined, 42, {}, ["code"]]) {
-    assert.deepEqual(selectUltraSparseExpertsIndexed(invalid), selectUltraSparseExperts(invalid));
+    const expected = selectUltraSparseExperts(invalid);
+    assert.deepEqual(selectUltraSparseExpertsIndexed(invalid), expected);
+    assert.deepEqual(selectUltraSparseExpertsMasked(invalid), expected);
   }
 });
 
@@ -78,10 +83,13 @@ test("benchmark smoke mode emits bounded latency percentiles and timer overhead"
   assert.equal(report.inferenceIncluded, false);
   assert.equal(report.algorithms.linear.perOperationSelectionLatency.samples, 50);
   assert.equal(report.algorithms.indexed.perOperationSelectionLatency.samples, 50);
+  assert.equal(report.algorithms.masked.perOperationSelectionLatency.samples, 50);
   assert.equal(report.emptyTimerPairLatency.samples, 50);
   for (const key of ["p50Microseconds", "p95Microseconds", "p99Microseconds"]) {
     assert.ok(Number.isFinite(report.algorithms.linear.perOperationSelectionLatency[key]));
     assert.ok(Number.isFinite(report.algorithms.indexed.perOperationSelectionLatency[key]));
+    assert.ok(Number.isFinite(report.algorithms.masked.perOperationSelectionLatency[key]));
     assert.ok(Number.isFinite(report.emptyTimerPairLatency[key]));
   }
+  assert.equal(report.processMemoryBytes.note.includes("not attributable"), true);
 });
