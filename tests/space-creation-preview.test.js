@@ -184,3 +184,32 @@ test("confirmation is consumed before reentrant persistence and failed writes ar
     setAccountScope(previousScope);
   }
 }));
+
+test("storage read failures surface as load errors and retry recovers previously saved Spaces", () => withStorage(() => {
+  const previousScope = "spaces-preview-previous";
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-storage-read-owner");
+    const owner = new SpaceCreationEngine();
+    const preview = owner.previewNaturalLanguageRequest({ prompt: "Create a space called Existing data" });
+    assert.equal(owner.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true }).success, true);
+
+    const unavailableStorage = {
+      getItem() { throw new Error("blocked by browser"); },
+      setItem() { throw new Error("blocked by browser"); },
+      removeItem() {},
+    };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: unavailableStorage });
+    const unreadable = new SpaceCreationEngine();
+    assert.throws(() => unreadable.getSpaces(), /storage could not be read/);
+    assert.match(unreadable.previewNaturalLanguageRequest({ prompt: "Create a space called Must not overwrite" }).error, /storage could not be read/);
+
+    Object.defineProperty(globalThis, "localStorage", previousStorage);
+    assert.deepEqual(unreadable.getSpaces().map((space) => space.name), ["Existing data"]);
+  } finally {
+    if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage);
+    else delete globalThis.localStorage;
+    setAccountScope(previousScope);
+  }
+}));

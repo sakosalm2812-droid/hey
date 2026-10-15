@@ -80,6 +80,15 @@ function cloneSpace(space) {
   return { ...space };
 }
 
+function readStorageItem(key) {
+  try {
+    const storage = globalThis.localStorage;
+    return storage ? storage.getItem(key) : null;
+  } catch {
+    throw new Error("Space storage could not be read");
+  }
+}
+
 function parseSpacePrompt(prompt) {
   if (typeof prompt !== "string") return { error: "Prompt must be text" };
   if (prompt.length > SPACE_CREATION_LIMITS.maxPromptLength) return { error: "Prompt is too long" };
@@ -106,6 +115,7 @@ export class SpaceCreationEngine {
     this.spaces = new Map();
     this.previews = new Map();
     this.listeners = new Set();
+    this.loadError = false;
     this.load(this.accountScope);
     this.unsubscribeAccountScope = subscribeAccountScope(() => {
       this.accountScope = getAccountScope();
@@ -118,8 +128,9 @@ export class SpaceCreationEngine {
   load(scope = getAccountScope()) {
     this.spaces.clear();
     this.accountScope = scope;
+    this.loadError = false;
     try {
-      const stored = safeStorage.getItem(getAccountStorageKey(STORAGE_KEY, scope));
+      const stored = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
       if (!stored) return;
       const parsed = JSON.parse(stored);
       if (!plainRecord(parsed) || parsed.accountScope !== scope || !plainRecord(parsed.spaces)) return;
@@ -129,6 +140,7 @@ export class SpaceCreationEngine {
       });
     } catch {
       this.spaces.clear();
+      this.loadError = true;
     }
   }
 
@@ -154,6 +166,10 @@ export class SpaceCreationEngine {
 
   getSpaces() {
     if (getAccountScope() !== this.accountScope) return [];
+    // A failed read is retried on demand so the page's retry action can recover
+    // after browser storage becomes available again.
+    if (this.loadError) this.load(this.accountScope);
+    if (this.loadError) throw new Error("Space storage could not be read");
     return [...this.spaces.values()].map(cloneSpace);
   }
 
@@ -162,6 +178,7 @@ export class SpaceCreationEngine {
     if (safeRequest.error) return safeRequest;
     if (this.accountScope === "anonymous") return { error: "An account scope is required to create a Space" };
     if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; retry the request" };
+    if (this.loadError) return { error: "Space storage could not be read; try again" };
     const parsed = parseSpacePrompt(safeRequest.value.prompt);
     if (parsed.error) return parsed;
     if (this.spaces.size >= SPACE_CREATION_LIMITS.maxSpacesPerAccount) return { error: "Space limit reached" };
@@ -194,6 +211,7 @@ export class SpaceCreationEngine {
       this.previews.clear();
       return { error: "Account scope changed; preview is no longer valid" };
     }
+    if (this.loadError) return { error: "Space storage could not be read; try again" };
     const pending = this.previews.get(previewId);
     if (!pending) return { error: "Preview not found or already used" };
     if (pending.accountScope !== this.accountScope) {
