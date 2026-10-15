@@ -613,12 +613,14 @@ Deno.serve(async (request) => {
       messages,
       signal: request.signal,
       isCurrent: () => !request.signal.aborted && user.id.length > 0,
-      getCurrentEntitlements: async () => {
-        const { data: latestProfile, error: latestProfileError } = await supabase
+      getCurrentEntitlements: async (accountId: string, signal?: AbortSignal) => {
+        if (accountId !== user.id) return [];
+        let latestProfileQuery = supabase
           .from("profiles")
           .select("entitlements")
-          .eq("id", user.id)
-          .maybeSingle();
+          .eq("id", accountId);
+        if (signal) latestProfileQuery = latestProfileQuery.abortSignal(signal);
+        const { data: latestProfile, error: latestProfileError } = await latestProfileQuery.maybeSingle();
         if (latestProfileError) throw latestProfileError;
         return Array.isArray(latestProfile?.entitlements) ? latestProfile.entitlements : [];
       },
