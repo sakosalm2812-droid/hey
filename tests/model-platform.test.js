@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
+import { attachEvaluationReport, clearProviders, listModels, registerProvider } from "../src/core/providerRegistry.js";
 import { selectModel, createProviderPlan } from "../src/core/providerRouter.js";
-import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, createModelRecord, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
+import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, createModelRecord, verifyEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
 import { HEY } from "../src/core/index.js";
 
 test("HEY exposes the validated model serving target contract", () => {
   assert.equal(HEY.modelPlatform.createAdapterServingTarget, createAdapterServingTarget);
   assert.equal(HEY.modelPlatform.createEvaluationReport, createEvaluationReport);
+  assert.equal(HEY.modelPlatform.verifyEvaluationReport, verifyEvaluationReport);
+  assert.equal(typeof HEY.providers.attachEvaluationReport, "function");
 });
 
 const HASH = "a".repeat(64);
@@ -45,6 +47,8 @@ function validEvaluationRun() {
     datasetSha256: "b".repeat(64),
     evaluatedAt: "2026-10-15T12:00:00.000Z",
     hardware: "fixture host; no model execution asserted",
+    runtime: "vllm-openai-compatible",
+    runtimeVersion: "0.9.2",
     runId: "run-2026-10-15-1",
     pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
     samples: Array.from({ length: 20 }, (_, index) => ({
@@ -57,16 +61,21 @@ function validEvaluationRun() {
   };
 }
 
-test("evaluation reports derive content-free model quality, p95 latency, and measured token cost", () => {
-  const report = createEvaluationReport(validEvaluationRun());
+test("evaluation reports derive content-free model quality, p95 latency, and measured token cost", async () => {
+  const report = await createEvaluationReport(validEvaluationRun());
   assert.equal(report.modelId, "hey/qwen-candidate");
   assert.equal(report.evaluation.qualityScore, 0.9);
   assert.equal(report.evaluation.latencyP95Ms, 190);
+  assert.equal(report.evaluation.runtime, "vllm-openai-compatible");
+  assert.equal(report.evaluation.runtimeVersion, "0.9.2");
   assert.equal(report.latencyP50Ms, 100);
   assert.equal(report.latencyP99Ms, 200);
   assert.equal(report.inputTokens, 2_000);
   assert.equal(report.outputTokens, 1_000);
   assert.equal(report.totalCostUsd, 0.004);
+  assert.match(report.evaluation.measurementsDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.match(report.reportDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(await verifyEvaluationReport(report), true);
   assert.equal(report.sampleCount, 20);
   assert.equal(report.passedCount, 18);
   assert.equal(report.failedCount, 2);
@@ -84,16 +93,16 @@ test("evaluation reports derive content-free model quality, p95 latency, and mea
   assert.equal(modelRecord.evaluation.qualityScore, 0.9);
 });
 
-test("evaluation report rejects mutable, duplicate, incomplete, and oversized measurement inputs", () => {
+test("evaluation report rejects mutable, duplicate, incomplete, and oversized measurement inputs", async () => {
   const getterRun = validEvaluationRun();
   let getterCalls = 0;
   Object.defineProperty(getterRun.samples[0], "latencyMs", { enumerable: true, get() { getterCalls += 1; return 10; } });
-  assert.throws(() => createEvaluationReport(getterRun), /accessor/i);
+  await assert.rejects(createEvaluationReport(getterRun), /accessor/i);
   assert.equal(getterCalls, 0);
 
   const duplicate = validEvaluationRun();
   duplicate.samples[1].caseId = duplicate.samples[0].caseId;
-  assert.throws(() => createEvaluationReport(duplicate), /unique/i);
+  await assert.rejects(createEvaluationReport(duplicate), /unique/i);
 
   for (const [change, pattern] of [
     [(run) => { run.samples[0].latencyMs = 0; }, /latencyMs/i],
@@ -106,18 +115,97 @@ test("evaluation report rejects mutable, duplicate, incomplete, and oversized me
   ]) {
     const invalid = validEvaluationRun();
     change(invalid);
-    assert.throws(() => createEvaluationReport(invalid), pattern);
+    await assert.rejects(createEvaluationReport(invalid), pattern);
   }
 
   const tooMany = validEvaluationRun();
   tooMany.samples = Array.from({ length: 1_001 }, (_, index) => ({
     caseId: `case-${index}`, passed: true, latencyMs: 1, inputTokens: 0, outputTokens: 0,
   }));
-  assert.throws(() => createEvaluationReport(tooMany), /between 1 and 1000/i);
+  await assert.rejects(createEvaluationReport(tooMany), /between 1 and 1000/i);
 
   const overflowingCost = validEvaluationRun();
   overflowingCost.pricing.outputUsdPerMillion = Number.MAX_VALUE;
-  assert.throws(() => createEvaluationReport(overflowingCost), /numeric range/i);
+  await assert.rejects(createEvaluationReport(overflowingCost), /numeric range/i);
+});
+
+test("evaluation report digests bind provenance and exact measurement values without exposing cases", async () => {
+  const original = await createEvaluationReport(validEvaluationRun());
+  const reorderedInput = validEvaluationRun();
+  reorderedInput.samples.reverse();
+  const reordered = await createEvaluationReport(reorderedInput);
+  assert.equal(reordered.reportDigest, original.reportDigest, "input ordering does not alter canonical evidence");
+
+  const mutations = [
+    (run) => { run.model.revision = "different-pinned-revision"; },
+    (run) => { run.model.weightSha256 = "c".repeat(64); },
+    (run) => { run.datasetSha256 = "d".repeat(64); },
+    (run) => { run.hardware = "other-host"; },
+    (run) => { run.runtime = "other-runtime"; },
+    (run) => { run.runtimeVersion = "0.9.3"; },
+    (run) => { run.runId = "other-run"; },
+    (run) => { run.evaluatedAt = "2026-10-15T12:00:01.000Z"; },
+    (run) => { run.samples[0].latencyMs = 11; },
+  ];
+  for (const [index, mutate] of mutations.entries()) {
+    const input = validEvaluationRun();
+    mutate(input);
+    const changed = await createEvaluationReport(input);
+    assert.notEqual(changed.reportDigest, original.reportDigest);
+    if (index === mutations.length - 1) assert.notEqual(changed.evaluation.measurementsDigest, original.evaluation.measurementsDigest);
+  }
+
+  const tampered = structuredClone(original);
+  tampered.evaluation.runtimeVersion = "0.9.99";
+  assert.equal(await verifyEvaluationReport(tampered), false);
+  const extended = { ...original, unboundField: "forged" };
+  assert.equal(await verifyEvaluationReport(extended), false);
+  let getterCalls = 0;
+  const hostile = Object.defineProperty({ ...original }, "reportDigest", {
+    enumerable: true,
+    get() { getterCalls += 1; return original.reportDigest; },
+  });
+  assert.equal(await verifyEvaluationReport(hostile), false);
+  assert.equal(getterCalls, 0);
+});
+
+test("provider registry attaches only verified evaluation evidence for its exact pinned model", async () => {
+  clearProviders();
+  const input = validEvaluationRun();
+  const provider = registerProvider({
+    id: "evaluation-fixture",
+    name: "Evaluation Fixture",
+    capabilities: ["chat"],
+    models: [{ id: input.model.id, revision: input.model.revision, weightSha256: input.model.weightSha256, priority: 1 }],
+  });
+  try {
+    const report = await createEvaluationReport(input);
+    const attached = await attachEvaluationReport(provider.id, input.model.id, report);
+    assert.equal(attached.routingEvidence.evaluationReportDigest, report.reportDigest);
+    assert.equal(listModels()[0].routingEvidence.qualityScore, report.evaluation.qualityScore);
+    assert.equal(selectModel({ profile: "fast" }).selected.id, input.model.id);
+
+    const mismatched = await createEvaluationReport({ ...validEvaluationRun(), model: { ...input.model, revision: "other-pinned-revision" } });
+    await assert.rejects(attachEvaluationReport(provider.id, input.model.id, mismatched), /does not match/i);
+    const tampered = structuredClone(report);
+    tampered.evaluation.datasetSha256 = "e".repeat(64);
+    await assert.rejects(attachEvaluationReport(provider.id, input.model.id, tampered), /digest verification/i);
+
+    const pending = attachEvaluationReport(provider.id, input.model.id, report);
+    provider.models[0] = { ...provider.models[0], revision: "swapped-during-verification" };
+    await assert.rejects(pending, /changed while/i);
+
+    let getterCalls = 0;
+    const hostileProvider = registerProvider({
+      id: "hostile-model-fixture",
+      name: "Hostile Model Fixture",
+      models: [Object.defineProperty({}, "id", { enumerable: true, get() { getterCalls += 1; return input.model.id; } })],
+    });
+    await assert.rejects(attachEvaluationReport(hostileProvider.id, input.model.id, report), /not registered/i);
+    assert.equal(getterCalls, 0);
+  } finally {
+    clearProviders();
+  }
 });
 
 test("model metadata binds immutable weights, tokenizer, license, runtime, and evaluation provenance", () => {

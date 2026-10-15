@@ -231,10 +231,10 @@ import { getMemoryNeighborhood, upsertMemoryNode, searchMemoryGraph, clearMemory
 import { createWorkflow, runWorkflow } from "./workflowEngine.js";
 import { createSkill, listSkills, getSkill, updateSkill, runSkill } from "./skillEngine.js";
 import { createMorningBriefing } from "./briefingEngine.js";
-import { registerProvider, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
+import { registerProvider, attachEvaluationReport, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
 import { selectModel, createProviderPlan } from "./providerRouter.js";
 import { FUSION_MODES, runProviderFusion } from "./providerFusion.js";
-import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
+import { createModelRecord, createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, verifyEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
 import { 
   initializeComputerControl, 
   executeComputerControl, 
@@ -653,6 +653,7 @@ import {
 
     providers: {
       register: registerProvider,
+      attachEvaluationReport,
       unregister: unregisterProvider,
       get: getProvider,
       all: listProviders,
@@ -667,6 +668,7 @@ import {
     modelPlatform: {
       createModelRecord,
       createEvaluationReport,
+      verifyEvaluationReport,
       createAdapterManifest,
       createAdapterServingTarget,
       createInferenceRequest,
