@@ -103,6 +103,38 @@
 .hey-chat-suggestions::-webkit-scrollbar { display: none; }
 .hey-chat-suggestions button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--glass-bg); color: var(--text-secondary); font-size: 10px; cursor: pointer; }
 .hey-chat-suggestions button:hover { border-color: var(--accent); color: var(--text-primary); }
+.hey-chat-composer { display: grid; gap: 8px; }
+.hey-dictation { display: grid; gap: 8px; min-width: 0; }
+.hey-dictation__controls { display: flex; min-height: 30px; align-items: center; }
+.hey-dictation__trigger,
+.hey-dictation__stop { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--glass-bg); color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
+.hey-dictation__trigger:hover { border-color: var(--accent); color: var(--text-primary); }
+.hey-dictation__trigger:focus-visible,
+.hey-dictation__stop:focus-visible,
+.hey-dictation__actions button:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.hey-dictation__trigger:disabled { cursor: not-allowed; opacity: .5; }
+.hey-dictation__stop { border-color: rgba(255,110,110,.38); color: #ffaaaa; background: rgba(255,72,72,.08); }
+.hey-dictation__stop i,
+.hey-dictation__active-label i { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #ff6b6b; box-shadow: 0 0 9px rgba(255,107,107,.65); animation: hey-dictation-pulse 1.2s ease-in-out infinite; }
+.hey-dictation__disclosure,
+.hey-dictation__result { display: grid; gap: 8px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(145deg, var(--glass-bg-strong), rgba(10,12,20,.88)); color: var(--text-secondary); }
+.hey-dictation__disclosure h3,
+.hey-dictation__result h3 { margin: 0; color: var(--text-primary); font-size: 12px; font-weight: 700; }
+.hey-dictation__disclosure p,
+.hey-dictation__status,
+.hey-dictation__unsupported { margin: 0; font-size: 11px; line-height: 1.55; }
+.hey-dictation__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.hey-dictation__actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 31px; padding: 0 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--glass-bg-strong); color: var(--text-primary); font: inherit; font-size: 10px; font-weight: 600; cursor: pointer; }
+.hey-dictation__actions button:first-child:not(.hey-dictation__quiet) { border-color: transparent; color: var(--on-accent); background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.hey-dictation__actions button:disabled { cursor: not-allowed; opacity: .5; }
+.hey-dictation__actions .hey-dictation__quiet { color: var(--text-secondary); background: transparent; }
+.hey-dictation__status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); }
+.hey-dictation__status button { padding: 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 10px; text-decoration: underline; cursor: pointer; }
+.hey-dictation__result-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hey-dictation__active-label { color: #ffaaaa; font-size: 10px; }
+.hey-dictation__transcript { margin: 0; padding: 9px 10px; border-radius: 9px; background: rgba(0,0,0,.16); color: var(--text-primary); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hey-dictation__unsupported { color: var(--text-muted); }
+@keyframes hey-dictation-pulse { 50% { opacity: .4; } }
 .hey-chat-input-shell { display: flex; align-items: end; gap: 10px; min-height: 58px; padding: 9px 10px 9px 16px; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: linear-gradient(145deg, rgba(255,255,255,.13), rgba(255,255,255,.045)); box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 12px 35px rgba(0,0,0,.15); backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%); }
 .hey-chat-input-shell textarea { flex: 1; min-width: 0; max-height: 150px; padding: 8px 0; resize: none; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; line-height: 1.45; }
 .hey-chat-input-shell textarea::placeholder { color: var(--text-muted); }

@@ -64,6 +64,7 @@ function ChatWorkspace() {
   const [copiedMessage, setCopiedMessage] = useState("");
   const [executionStatus, setExecutionStatus] = useState("");
   const [pendingExecution, setPendingExecution] = useState(null);
+  const skipNextDraftPersistenceRef = useRef(false);
 
   const [mode, setMode] = useState("text");
   const [voiceState, setVoiceState] = useState("idle");
@@ -73,6 +74,10 @@ function ChatWorkspace() {
   const voiceSessionRef = useRef(null);
 
   useEffect(() => {
+    if (skipNextDraftPersistenceRef.current) {
+      skipNextDraftPersistenceRef.current = false;
+      return;
+    }
     try { if (message) sessionStorage.setItem(draftKey, message); else sessionStorage.removeItem(draftKey); } catch { /* Draft remains in memory. */ }
   }, [message, draftKey]);
   useEffect(() => {
@@ -183,6 +188,11 @@ function ChatWorkspace() {
     setHistoryOpen(false);
     setVoiceTranscript("");
     setVoiceResponse("");
+  }
+
+  function insertDictationTranscript(transcript) {
+    skipNextDraftPersistenceRef.current = true;
+    setMessage((current) => current.trim() ? `${current.trim()} ${transcript}` : transcript);
   }
 
   async function sendUserMessage(userMessage, { confirmed = false, displayUserMessage = true } = {}) {
@@ -474,8 +484,8 @@ function ChatWorkspace() {
                 setValue={setMessage}
                 onSend={() => sendUserMessage(message)}
                 disabled={isSending}
-                conversationId={conversationId}
                 onVoiceCall={toggleVoiceCall}
+                onDictationInsert={insertDictationTranscript}
               />
               <p className="hey-chat-disclaimer">HEY can make mistakes. Check important information.</p>
             </footer>
