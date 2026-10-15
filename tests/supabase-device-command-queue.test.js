@@ -24,16 +24,19 @@ test("device queue adapter binds account/device scope and exports trusted-server
     enqueue_hey_device_command: { data: { created: true, command: row }, error: null },
     claim_hey_device_command: { data: { command: row, leaseToken }, error: null },
     ack_hey_device_command: { data: true, error: null },
+    fail_hey_device_command: { data: true, error: null },
   });
   const store = new SupabaseDeviceCommandQueueStore(client, { trustedServer: true });
   const expected = { commandId: row.commandId, deviceId: row.deviceId, envelope, state: "pending", attempts: 1, createdAt: Date.parse(row.createdAt) };
   assert.deepEqual(await store.enqueue(accountId, deviceId, "request-1", envelope), { created: true, command: expected });
   assert.deepEqual(await store.claimNext(accountId, deviceId, 5_000), { command: expected, leaseToken });
   assert.equal(await store.acknowledge(accountId, deviceId, commandId, leaseToken), true);
+  assert.equal(await store.recordFailure(accountId, deviceId, commandId, leaseToken), true);
   assert.deepEqual(calls, [
     { name: "enqueue_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_idempotency_key: "request-1", p_envelope: envelope } },
     { name: "claim_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_lease_ms: 5_000 } },
     { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
+    { name: "fail_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
   ]);
 });
 
@@ -42,6 +45,7 @@ test("queue rejects malformed identifiers, envelopes, accessors, oversized paylo
     enqueue_hey_device_command: { data: null, error: { message: "private account payload" } },
     claim_hey_device_command: { data: { command: row, leaseToken: "bad" }, error: null },
     ack_hey_device_command: { data: "true", error: null },
+    fail_hey_device_command: { data: { ok: true }, error: null },
   });
   const store = new SupabaseDeviceCommandQueueStore(client, { trustedServer: true });
   await assert.rejects(store.enqueue("other-account", deviceId, "key", envelope), /UUID/);
@@ -56,9 +60,22 @@ test("queue rejects malformed identifiers, envelopes, accessors, oversized paylo
   await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope), (error) => error.message === "Supabase device command enqueue failed.");
   await assert.rejects(store.claimNext(accountId, deviceId), /malformed/);
   await assert.rejects(store.acknowledge(accountId, deviceId, commandId, leaseToken), /malformed/);
+  await assert.rejects(store.recordFailure(accountId, deviceId, commandId, leaseToken), /malformed/);
   assert.equal(await store.acknowledge(accountId, "not-a-uuid", commandId, leaseToken), false);
+  assert.equal(await store.recordFailure("not-a-uuid", deviceId, commandId, leaseToken), false);
   assert.equal(JSON.stringify(client).includes("private account payload"), false);
   assert.equal(JSON.stringify(store).includes("private account payload"), false);
+});
+
+test("failure recording sends only scoped lease identifiers and accepts only a boolean RPC result", async () => {
+  const { client, calls } = fakeClient({ fail_hey_device_command: { data: false, error: null } });
+  const store = new SupabaseDeviceCommandQueueStore(client, { trustedServer: true });
+  assert.equal(await store.recordFailure(accountId, deviceId, commandId, leaseToken), false);
+  assert.deepEqual(calls, [{ name: "fail_hey_device_command", params: {
+    p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken,
+  } }]);
+  assert.equal(JSON.stringify(calls).includes("envelope"), false);
+  assert.equal(JSON.stringify(calls).includes("error"), false);
 });
 
 test("queue migration fences replay, cross-account access, stale leases and revoked devices", async () => {
@@ -86,4 +103,23 @@ test("queue migration fences replay, cross-account access, stale leases and revo
   assert.match(sql, /endpoint must authenticate/i);
   assert.match(sql, /the account, verify the applicable mandate, and authorize the target device/i);
   assert.doesNotMatch(sql, /p_error|error_message|exception_message/i);
+});
+
+test("retry migration uses bounded backoff, terminal attempts, live scoped leases and service-role-only RPCs", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261015000100_device_command_delivery_retries.sql", import.meta.url), "utf8");
+  assert.match(sql, /available_at timestamptz not null default clock_timestamp\(\)/i);
+  assert.match(sql, /available_at <= clock_timestamp\(\)/i);
+  assert.match(sql, /attempts < 5/i);
+  assert.match(sql, /attempts >= 5 then 'failed' else 'pending'/i);
+  assert.match(sql, /power\(2, greatest\(0, c\.attempts - 1\)\)::integer/i);
+  assert.match(sql, /least\(60,/i);
+  assert.match(sql, /attempts >= 5 and \(c\.lease_until is null or c\.lease_until <= clock_timestamp\(\)\)/i);
+  assert.match(sql, /c\.lease_token = p_lease_token and c\.lease_until > clock_timestamp\(\)/i);
+  assert.match(sql, /c\.id = p_command_id and c\.account_id = p_account_id and c\.device_id = p_device_id/i);
+  assert.match(sql, /d\.id = p_device_id and d\.user_id = p_account_id and d\.status <> 'revoked'/i);
+  assert.match(sql, /last_error = 'delivery_failed'/i);
+  assert.doesNotMatch(sql, /p_error|error_message|exception_message|command content/i);
+  assert.match(sql, /revoke all on function public\.fail_hey_device_command\(uuid, uuid, uuid, uuid\) from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.fail_hey_device_command\(uuid, uuid, uuid, uuid\) to service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.fail_hey_device_command\([^;]+\) to [^;]*authenticated/i);
 });

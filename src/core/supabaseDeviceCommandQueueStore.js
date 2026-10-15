@@ -70,7 +70,7 @@ function rpcData(result, operation) {
 
 function commandFromRow(row) {
   if (!row || typeof row !== "object" || !UUID.test(row.commandId)
-    || !UUID.test(row.deviceId) || !["pending", "acknowledged", "cancelled"].includes(row.state)
+    || !UUID.test(row.deviceId) || !["pending", "acknowledged", "cancelled", "failed"].includes(row.state)
     || !Number.isSafeInteger(row.attempts) || row.attempts < 0
     || typeof row.createdAt !== "string" || !Number.isFinite(Date.parse(row.createdAt))
     || (row.lastError !== null && row.lastError !== undefined && row.lastError !== "delivery_failed")) {
@@ -114,6 +114,15 @@ export class SupabaseDeviceCommandQueueStore {
       if (typeof value !== "string" || !UUID.test(value)) return false;
     }
     const data = rpcData(await this.client.rpc("ack_hey_device_command", { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken }), "acknowledgement");
+    if (typeof data !== "boolean") throw new Error("Supabase device command response was malformed.");
+    return data;
+  }
+
+  async recordFailure(accountId, deviceId, commandId, leaseToken) {
+    for (const value of [accountId, deviceId, commandId, leaseToken]) {
+      if (typeof value !== "string" || !UUID.test(value)) return false;
+    }
+    const data = rpcData(await this.client.rpc("fail_hey_device_command", { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken }), "failure recording");
     if (typeof data !== "boolean") throw new Error("Supabase device command response was malformed.");
     return data;
   }
