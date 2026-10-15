@@ -6,7 +6,7 @@ Latest verified starting baseline: `3fe674d09fc14d449726699583946f5e68149ac6` on
 
 ## Session setup and current access
 
-The local Codex task launcher exposed no saved local Git project for this repository. `list_projects` returned only ChatGPT projects, and this session cannot bind a new repository task to one of them as a local Git worktree. No standalone local Codex chats are claimed as created. Eleven independent local Git worktrees and branches have been prepared from the verified baseline. Chats 01–06 are complete and integrated after coordinator review; Chats 07–09 are active GPT-6 Luna / High collaboration agents in isolated worktrees. They are subagents of the coordinator task, not separate Codex chats. Chats 10–11 remain ready worktrees and prompts; launch them as agent capacity frees.
+The local Codex task launcher exposed no saved local Git project for this repository. `list_projects` returned only ChatGPT projects, and this session cannot bind a new repository task to one of them as a local Git worktree. No standalone local Codex chats are claimed as created. Eleven independent local Git worktrees and branches were prepared from the verified baseline. Chats 02–11 have delivered local commits and are integrated after coordinator review. Chat 01 has an active follow-up for the visible consented dictation flow; its UI changes remain uncommitted in its isolated worktree. These are collaboration subagent task references, not separate Codex chat IDs.
 
 For a standalone Codex task, select **Local**, **GPT-6 Luna**, **High**, then open the exact worktree path below. If the local picker cannot open a worktree directly, add `sakosalm2812-droid/hey` as a local Codex project and select the listed branch. Paste the matching startup prompt. Verify the branch and commit in the opened checkout before editing. The coordinator owns central integration and review.
 
@@ -18,17 +18,17 @@ All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`.
 
 | Chat | Branch | Local worktree | State |
 |---:|---|---|---|
-| 01 | `codex/specialist-01-frontend-director` | `work/hey-specialists/01-frontend-director` | Complete, commit `7ed14b6`, integrated at `3441472` |
+| 01 | `codex/specialist-01-frontend-director` | `work/hey-specialists/01-frontend-director` | Active follow-up `/root/specialist_frontend_director`; latest commit `61edfaa`, uncommitted dictation UI and test files in this worktree |
 | 02 | `codex/specialist-02-spaces-onboarding` | `work/hey-specialists/02-spaces-onboarding` | Complete, commit `0f7cd74`, integrated at `79fffcd` |
 | 03 | `codex/specialist-03-tool-library` | `work/hey-specialists/03-tool-library` | Complete, commit `f7ef830`, integrated at `22b8c4c`; coordinator hardening `7834e96` |
 | 04 | `codex/specialist-04-edge-everywhere` | `work/hey-specialists/04-edge-everywhere` | Complete, commit `a5eed49`, integrated at `75470b4` |
 | 05 | `codex/specialist-05-gesture-control` | `work/hey-specialists/05-gesture-control` | Complete, commit `b42e625`, integrated at `a7e88f8` |
 | 06 | `codex/specialist-06-flow-dictation` | `work/hey-specialists/06-flow-dictation` | Complete, commit `5a8668e`, integrated at `cc60f76` |
-| 07 | `codex/specialist-07-voiceos-control` | `work/hey-specialists/07-voiceos-control` | Active Luna/High subagent `/root/specialist_voiceos_control` |
-| 08 | `codex/specialist-08-teacher-experience` | `work/hey-specialists/08-teacher-experience` | Active Luna/High subagent `/root/specialist_teacher_experience` |
-| 09 | `codex/specialist-09-hey-one-models` | `work/hey-specialists/09-hey-one-models` | Active Luna/High subagent `/root/specialist_hey_one_models` |
-| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | Prepared; waiting for an agent slot |
-| 11 | `codex/specialist-11-fusion-models` | `work/hey-specialists/11-fusion-models` | Prepared; waiting for an agent slot |
+| 07 | `codex/specialist-07-voiceos-control` | `work/hey-specialists/07-voiceos-control` | Complete `/root/specialist_voiceos_control`; worker `272e931`, integrated `3b28402`, coordinator hardening `539d9c1` |
+| 08 | `codex/specialist-08-teacher-experience` | `work/hey-specialists/08-teacher-experience` | Complete `/root/specialist_teacher_experience`; worker `7d225b3`, integrated `597a8ee` |
+| 09 | `codex/specialist-09-hey-one-models` | `work/hey-specialists/09-hey-one-models` | Complete `/root/specialist_hey_one_models`; worker `e95bd15` and follow-up `7124051`, integrated `1b4f2a4` and `6a75531` |
+| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | Complete `/root/specialist_ultrasparse_research`; worker `95dcb59` and follow-up `49bc181`, integrated `0226c9a` and `37b9cdc` |
+| 11 | `codex/specialist-11-fusion-models` | `work/hey-specialists/11-fusion-models` | Complete `/root/specialist_fusion_models`; worker `90005af` and attack fix `12a0bc2`, integrated `358d549` and `f73d65d` |
 
 ## Ready-to-paste startup prompts
 
