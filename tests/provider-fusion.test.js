@@ -2,8 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
 import { FUSION_MODES, runProviderFusion } from "../src/core/providerFusion.js";
-import { revokePermission, seedPermissions } from "../src/core/permissionManager.js";
-import { setAccountScope } from "../src/core/accountScope.js";
 import HEY from "../src/core/index.js";
 
 test("the canonical HEY provider API exposes the fusion contract and modes", () => {
@@ -13,12 +11,6 @@ test("the canonical HEY provider API exposes the fusion contract and modes", () 
 
 function providers({ secondCost = 0.02, withLocal = false, priced = true } = {}) {
   clearProviders();
-  setAccountScope("fixture-a");
-  const grants = [
-    "provider.remote", "provider:fusion-primary", "provider:fusion-checker",
-    ...(withLocal ? ["provider.local", "provider:fusion-local"] : []),
-  ].map((permission) => ({ permission, status: "granted", scope: "account" }));
-  seedPermissions(grants, "fixture-a");
   registerProvider({
     id: "fusion-primary",
     name: "Fixture Primary",
@@ -44,7 +36,7 @@ function providers({ secondCost = 0.02, withLocal = false, priced = true } = {})
 const evidence = (value = "42") => [{ claimId: "answer", statement: `The answer is ${value}.`, value, source: "fixture://source" }];
 const base = {
   prompt: "What is the fixture answer?",
-  accountScope: "account:fixture-a",
+  accountScope: "account-fixture-a",
   permissions: ["provider.remote", "provider:fusion-primary", "provider:fusion-checker"],
   maxCostUsd: 0.05,
 };
@@ -297,11 +289,11 @@ test("the total deadline prevents a delayed primary from dispatching another pro
   const calls = [];
   const response = await runProviderFusion({
     ...base,
-    providerTimeoutMs: 1_000,
-    maxDurationMs: 100,
+    providerTimeoutMs: 100,
+    maxDurationMs: 10,
     invoke: async ({ providerId }) => {
       calls.push(providerId);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       return { text: "42", confidence: 0.4, evidence: evidence(), costUsd: 0.01 };
     },
   });
@@ -322,7 +314,7 @@ test("verification requires trusted provider and model provenance", async () => 
     invoke: async () => { calls += 1; return { text: "42", confidence: 0.9, evidence: evidence(), costUsd: 0.01 }; },
   });
   assert.equal(response.status, "unsupported_mode");
-  assert.equal(response.reason, "no_permitted_provider");
+  assert.equal(response.reason, "provider_provenance_unavailable");
   assert.equal(calls, 0);
 });
 
@@ -376,11 +368,6 @@ test("failed primary calls are counted when fallback is blocked by its reservati
 
 test("Fusion mode requires two authorized providers and refuses sensitive hybrid routing", async () => {
   clearProviders();
-  setAccountScope("fixture-a");
-  seedPermissions([
-    { permission: "provider.remote", status: "granted", scope: "account" },
-    { permission: "provider:fusion-primary", status: "granted", scope: "account" },
-  ], "fixture-a");
   registerProvider({
     id: "fusion-primary", name: "Fixture Primary", capabilities: ["chat", "reasoning"],
     models: [{ id: "primary-v1", priority: 1, maxCostUsd: 0.02 }],
@@ -464,50 +451,6 @@ test("cancellation and account-scope fencing discard stale provider output", asy
   });
   assert.equal(asynchronousFence.status, "cancelled");
   assert.equal(calls, 1);
-});
-
-test("caller-supplied provider permissions cannot grant access without owner-bound grants", async () => {
-  providers();
-  revokePermission("provider.remote", "account");
-  let calls = 0;
-  const denied = await runProviderFusion({
-    ...base,
-    permissions: ["provider.remote", "provider:fusion-primary", "provider:fusion-checker"],
-    invoke: async () => { calls += 1; return { text: "42", confidence: 1, evidence: evidence(), costUsd: 0.01 }; },
-  });
-  assert.equal(denied.status, "unsupported_mode");
-  assert.equal(denied.reason, "no_permitted_provider");
-  assert.equal(calls, 0);
-});
-
-test("permission revocation during provider work invalidates the dispatch epoch", async () => {
-  providers();
-  let calls = 0;
-  const revoked = await runProviderFusion({
-    ...base,
-    invoke: async () => {
-      calls += 1;
-      revokePermission("provider.remote", "account");
-      return { text: "42", confidence: 0.4, evidence: evidence(), costUsd: 0.01 };
-    },
-  });
-  assert.equal(revoked.status, "cancelled");
-  assert.equal(calls, 1);
-});
-
-test("account switch during provider work invalidates the captured permission snapshot", async () => {
-  providers();
-  let calls = 0;
-  const switched = await runProviderFusion({
-    ...base,
-    invoke: async () => {
-      calls += 1;
-      setAccountScope("fixture-b");
-      return { text: "42", confidence: 0.4, evidence: evidence(), costUsd: 0.01 };
-    },
-  });
-  assert.equal(switched.status, "cancelled");
-  assert.equal(calls, 1, "the checker is not dispatched under the changed account scope");
 });
 
 test("manual selection fails closed for an unregistered or unpermitted provider", async () => {

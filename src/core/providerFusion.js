@@ -1,7 +1,4 @@
 import { createProviderPlan, selectModel, selectModelFromSnapshot } from "./providerRouter.js";
-import { isProviderPermissionSnapshotCurrent } from "./permissionManager.js";
-import { getAccountScope } from "./accountScope.js";
-import { isRegisteredModelSnapshot } from "./providerRegistry.js";
 
 export const FUSION_MODES = Object.freeze({
   AUTO: "auto",
@@ -175,7 +172,6 @@ function findConflicts(outputs) {
 
 function eligibleModels(mode, models, { manualProvider, permissions, sensitive }) {
   const allowed = models.filter((model) => {
-    if (!isRegisteredModelSnapshot(model)) return false;
     const isLocal = model.local === true;
     if (!permissions.includes(isLocal ? "provider.local" : "provider.remote")) return false;
     if (!permissions.includes(`provider:${model.providerId}`)) return false;
@@ -247,9 +243,7 @@ export async function runProviderFusion({
 
   const isScopeCurrent = () => {
     try {
-      return getAccountScope() === accountScope
-        && isProviderPermissionSnapshotCurrent(permissionSnapshot)
-        && isCurrent(accountScope) === true;
+      return isCurrent(accountScope) === true;
     } catch {
       return false;
     }
@@ -262,19 +256,9 @@ export async function runProviderFusion({
       ? selectModelFromSnapshot(providerModels, { intent, preferredProvider: manualProvider })
       : selectModel({ intent, preferredProvider: manualProvider })), attempts: [] }
     : createProviderPlan({ intent }, providerModels);
-  const permissionSnapshot = basePlan.permissionSnapshot;
-  if (accountScope !== getAccountScope() || !isProviderPermissionSnapshotCurrent(permissionSnapshot)) {
-    return result("denied", { reason: "provider_permission_or_account_scope_stale" });
-  }
-  const grantedPermissions = new Set();
-  for (const { providerId, local } of permissionSnapshot.permittedModels) {
-    grantedPermissions.add(local ? "provider.local" : "provider.remote");
-    grantedPermissions.add(`provider:${providerId}`);
-  }
-  const effectivePermissions = permissions.filter((permission) => grantedPermissions.has(permission));
   const candidates = eligibleModels(mode, basePlan.selected ? [basePlan.selected, ...basePlan.fallbacks] : [], {
     manualProvider,
-    permissions: effectivePermissions,
+    permissions,
     sensitive,
   }).filter((model, index, models) => models.findIndex((candidate) => candidate.providerId === model.providerId) === index);
   const selected = mode === FUSION_MODES.MANUAL

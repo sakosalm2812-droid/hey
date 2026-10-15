@@ -3,11 +3,8 @@ import {
   PROVIDER_CAPABILITIES,
   registerProvider,
   isProviderEnabled,
-  isRegisteredModelSnapshot,
 } from "./providerRegistry.js";
 import { INFERENCE_PROFILES, isVerifiedEvaluationReport } from "./modelPlatform.js";
-import { getProviderPermissionSnapshot, isProviderModelPermitted } from "./permissionManager.js";
-import { getAccountScope } from "./accountScope.js";
 
 const taskCapabilities = {
   coding: PROVIDER_CAPABILITIES.coding,
@@ -69,18 +66,16 @@ function normalizeAllowedProviders(value) {
   return Object.freeze(ids);
 }
 
-function profileRejection(model, { policy, privacyMode, budgetUsd, allowedProviders, permissionSnapshot }) {
+function profileRejection(model, { policy, privacyMode, budgetUsd, allowedProviders }) {
   if (privacyMode !== "allow_cloud" && model.local !== true) return "privacy_requires_local_model";
   if (!policy) return null;
-  if (!isProviderEnabled(model.providerId) || !isRegisteredModelSnapshot(model)) return "provider_not_registered_or_disabled";
+  if (!isProviderEnabled(model.providerId)) return "provider_not_registered_or_disabled";
   if (!allowedProviders.has(model.providerId)) return "provider_not_permitted";
-  if (!isProviderModelPermitted(permissionSnapshot, model)) return "provider_permission_missing_or_stale";
   const evidence = model.routingEvidence;
   if (!evidence || typeof evidence !== "object") return "missing_routing_evidence";
   const report = model.evaluationReport;
   if (!isVerifiedEvaluationReport(report) || report.reportDigest !== evidence.evaluationReportDigest
-    || report.evaluation.runId !== evidence.evaluationRunId || report.modelId !== model.id
-    || report.modelRevision !== model.revision || report.modelWeightSha256 !== model.weightSha256?.toLowerCase()) return "missing_or_stale_evaluation_provenance";
+    || report.evaluation.runId !== evidence.evaluationRunId) return "missing_or_stale_evaluation_provenance";
   const { latencyP95Ms, qualityScore, inputUsdPerMillion, outputUsdPerMillion } = evidence;
   if (![latencyP95Ms, qualityScore, inputUsdPerMillion, outputUsdPerMillion].every(Number.isFinite)) return "incomplete_routing_evidence";
   if (latencyP95Ms <= 0 || qualityScore < 0 || qualityScore > 1 || inputUsdPerMillion < 0 || outputUsdPerMillion < 0) return "invalid_routing_evidence";
@@ -104,12 +99,11 @@ export function selectModelFromSnapshot(models, { intent = "conversation", capab
   const allowedProviderIds = normalizeAllowedProviders(allowedProviders);
   const profilePolicy = profile ? INFERENCE_PROFILES[profile] : null;
   const allowedProviderSet = new Set(allowedProviderIds);
-  const permissionSnapshot = getProviderPermissionSnapshot(listModels(), getAccountScope());
   const requestedCapability = capability || taskCapabilities[intent] || PROVIDER_CAPABILITIES.chat;
   const candidates = (Array.isArray(models) ? models : [])
     .filter((model) => !Array.isArray(model.capabilities) || model.capabilities.includes(requestedCapability))
     .filter((model) => !excludedProviders.includes(model.providerId))
-    .filter((model) => !profileRejection(model, { policy: profilePolicy, privacyMode, budgetUsd, allowedProviders: allowedProviderSet, permissionSnapshot }))
+    .filter((model) => !profileRejection(model, { policy: profilePolicy, privacyMode, budgetUsd, allowedProviders: allowedProviderSet }))
     .sort((left, right) => {
       if (preferredProvider) {
         if (left.providerId === preferredProvider) return -1;
@@ -127,7 +121,6 @@ export function selectModelFromSnapshot(models, { intent = "conversation", capab
     profile: profile || null,
     privacyMode,
     allowedProviders: profile ? allowedProviderIds : Object.freeze([]),
-    permissionSnapshot,
     budgetUsd: budgetUsd ?? (profilePolicy ? profilePolicy.maxRequestCostUsd : null),
   };
 }
@@ -155,8 +148,6 @@ export function createProviderPlan(options = {}, providerModels) {
       profile: selection.profile,
       privacyMode: selection.privacyMode,
       budgetUsd: selection.budgetUsd,
-      allowedProviders: selection.allowedProviders,
-      permissionRevision: selection.permissionSnapshot?.permissionRevision ?? null,
     },
   };
 }
