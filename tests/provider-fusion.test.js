@@ -213,6 +213,20 @@ test("primary outage falls back to the next permitted provider within the same c
   assert.deepEqual(response.providers.map(({ providerId }) => providerId), ["fusion-checker"]);
 });
 
+test("a fallback cannot deliver text that its own answer evidence does not bind", async () => {
+  providers();
+  const response = await runProviderFusion({
+    ...base,
+    invoke: async ({ providerId }) => {
+      if (providerId === "fusion-primary") throw new Error("primary unavailable");
+      return { text: "Spoofed fallback", confidence: 0.9, evidence: evidence("42"), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "provider_contract_invalid");
+  assert.equal(response.reason, "fallback_answer_not_bound_to_evidence");
+  assert.equal(response.answer, undefined);
+});
+
 test("fallback outage reports the actual dispatched call count without leaking provider errors", async () => {
   providers();
   const response = await runProviderFusion({ ...base, invoke: async () => { throw new Error("private endpoint and prompt details"); } });
