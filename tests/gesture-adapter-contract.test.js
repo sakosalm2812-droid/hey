@@ -234,15 +234,103 @@ test("camera permission denial leaves recognition inactive and reports no availa
   engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { mediaDevices: { async getUserMedia() { throw new Error("Permission denied"); } } },
+    value: { mediaDevices: { async getUserMedia() { const error = new Error("denied"); error.name = "NotAllowedError"; throw error; } } },
   });
   globalThis.document = { createElement: () => ({}) };
   globalThis.requestAnimationFrame = () => 1;
 
   const result = await engine.startRecognition(profile.id, { consent: true });
   assert.equal(result.success, false);
-  assert.equal(result.code, "camera_or_adapter_error");
+  assert.equal(result.code, "camera_permission_denied");
+  assert.equal(engine.cameraCapabilityStatus, "permission_denied");
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+});
+
+test("capability preflight reads camera permission without prompting and reports missing detector honestly", async () => {
+  const { engine } = makeEngine();
+  let cameraPromptCount = 0;
+  let permissionQueryCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { cameraPromptCount += 1; throw new Error("must not prompt"); } },
+      permissions: { async query(descriptor) { permissionQueryCount += 1; assert.deepEqual(descriptor, { name: "camera" }); return { state: "prompt" }; } },
+    },
+  });
+  globalThis.document = { createElement: () => ({}) };
+  globalThis.requestAnimationFrame = () => 1;
+
+  const capability = await engine.getRecognitionCapability();
+
+  assert.equal(capability.status, "supported");
+  assert.equal(capability.cameraSupported, true);
+  assert.equal(capability.permission, "prompt");
+  assert.equal(capability.adapterInstalled, false);
+  assert.equal(capability.recognitionStatus, "unavailable");
+  assert.equal(capability.consentRequired, true);
+  assert.equal(capability.permissionPrompted, false);
+  assert.equal(cameraPromptCount, 0);
+  assert.equal(permissionQueryCount, 1);
+});
+
+test("capability preflight reports unavailable browser APIs without a camera prompt", async () => {
+  const { engine } = makeEngine();
+  let cameraPromptCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() { cameraPromptCount += 1; } } },
+  });
+  delete globalThis.document;
+
+  const capability = await engine.getRecognitionCapability();
+
+  assert.equal(capability.status, "unavailable");
+  assert.equal(capability.cameraSupported, false);
+  assert.equal(capability.recognitionStatus, "unavailable");
+  assert.equal(cameraPromptCount, 0);
+});
+
+test("hostile permission query accessors fail preflight closed without requesting camera", async () => {
+  const { engine } = makeEngine();
+  let cameraPromptCount = 0;
+  const permissions = Object.defineProperty({}, "query", { get() { throw new Error("hostile query accessor"); } });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() { cameraPromptCount += 1; } }, permissions },
+  });
+  globalThis.document = { createElement: () => ({}) };
+  globalThis.requestAnimationFrame = () => 1;
+
+  const capability = await engine.getRecognitionCapability();
+
+  assert.equal(capability.cameraSupported, true);
+  assert.equal(capability.permission, "unknown");
+  assert.equal(capability.permissionPrompted, false);
+  assert.equal(cameraPromptCount, 0);
+});
+
+test("account switch during capability query prevents the later camera request", async () => {
+  const { engine, profile } = makeEngine();
+  engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });
+  let finishPermissionQuery;
+  let cameraPromptCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { cameraPromptCount += 1; throw new Error("unexpected request"); } },
+      permissions: { query() { return new Promise((resolve) => { finishPermissionQuery = resolve; }); } },
+    },
+  });
+  globalThis.document = { createElement: () => ({}) };
+  globalThis.requestAnimationFrame = () => 1;
+
+  const pendingStart = engine.startRecognition(profile.id, { consent: true });
+  setAccountScope("gesture-contract-account-switched");
+  finishPermissionQuery({ state: "prompt" });
+
+  assert.equal((await pendingStart).code, "account_changed");
+  assert.equal(cameraPromptCount, 0);
+  setAccountScope("gesture-contract-test");
 });
 
 test("camera capture fails closed when this platform has no browser capture capability", async () => {
@@ -456,6 +544,8 @@ test("browser camera permission revocation stops the session and unregisters its
   listeners.get("change")();
 
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.cameraCapabilityStatus, "revoked");
+  assert.equal((await engine.getRecognitionCapability()).status, "revoked");
   assert.equal(camera.stopped, 1);
   assert.equal(adapterStops, 1);
   assert.equal(listeners.size, 0);
@@ -495,6 +585,7 @@ test("stop during pending camera permission cancels startup and releases the lat
   engine.setRecognitionAdapter({ async detect() { return null; } });
 
   const pending = engine.startRecognition(profile.id, { consent: true });
+  await Promise.resolve(); // Let the read-only capability preflight reach getUserMedia.
   engine.stopRecognition("user_emergency_stop");
   resolveCamera(stream);
 
@@ -529,8 +620,10 @@ test("late camera permission from a cancelled startup cannot replace a newer ses
   engine.setRecognitionAdapter({ async detect() { return null; } });
 
   const staleStart = engine.startRecognition(profile.id, { consent: true });
+  await Promise.resolve(); // Let the read-only capability preflight reach getUserMedia.
   engine.stopRecognition("user_emergency_stop");
   const currentStart = engine.startRecognition(profile.id, { consent: true });
+  await Promise.resolve();
   const currentStream = makeStream();
   pendingStreams[1](currentStream);
   assert.equal((await currentStart).success, true);
