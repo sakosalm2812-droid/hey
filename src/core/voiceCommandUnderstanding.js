@@ -68,11 +68,11 @@ function safePreview(command) {
 
 function classifySnapshot({ text, confidence }, scope) {
   const normalized = text.trim();
-  if (confidence < MIN_CONFIDENCE) {
-    return deepFreeze({ type: "Ask", confidence, status: "clarification_required", reason: "low_confidence", preview: { text: normalized, accountScope: scope }, requiresPreview: true, requiresConfirmation: true, accountScope: scope });
-  }
   if (CANCEL_TERMS.test(normalized)) {
     return deepFreeze({ type: "Command", confidence, status: "denied", reason: "user_cancelled", preview: { action: "cancel", text: normalized, accountScope: scope }, requiresPreview: false, requiresConfirmation: false, accountScope: scope });
+  }
+  if (confidence < MIN_CONFIDENCE) {
+    return deepFreeze({ type: "Ask", confidence, status: "clarification_required", reason: "low_confidence", preview: { text: normalized, accountScope: scope }, requiresPreview: true, requiresConfirmation: true, accountScope: scope });
   }
 
   const dictateMatch = normalized.match(/^(?:dictate|transcribe|write down)\s*[:,]?\s*(.*)$/i);

@@ -2,6 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
+import HEY, { understandVoiceCommand as publicUnderstandVoiceCommand } from "../src/core/index.js";
+
+test("voice command understanding is exposed through the canonical HEY API without execution behavior", async () => {
+  assert.equal(publicUnderstandVoiceCommand, understandVoiceCommand);
+  assert.equal(HEY.voice.understandCommand, understandVoiceCommand);
+  setAccountScope("voice-api-account");
+  try {
+    const preview = await HEY.voice.understandCommand("open notes");
+    assert.equal(preview.type, "Command");
+    assert.equal(preview.status, "preview_required");
+    assert.equal(preview.success, undefined);
+    assert.equal(preview.verified, undefined);
+  } finally {
+    setAccountScope(null);
+  }
+});
 
 test("voice understanding classifies dictate, edit, command, and ask into inert previews", async () => {
   setAccountScope("voice-understanding-a");
@@ -95,6 +111,11 @@ test("low confidence, malformed accessors, sparse arrays, and explicit denial fa
     const denied = await understandVoiceCommand("Do not do that");
     assert.equal(denied.status, "denied");
     assert.equal(denied.reason, "user_cancelled");
+
+    const lowConfidenceStop = await understandVoiceCommand({ text: "Stop", confidence: 0.1 });
+    assert.equal(lowConfidenceStop.status, "denied");
+    assert.equal(lowConfidenceStop.reason, "user_cancelled");
+    assert.equal(lowConfidenceStop.requiresConfirmation, false);
   } finally {
     setAccountScope(null);
   }
