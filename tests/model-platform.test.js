@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
 import { selectModel, createProviderPlan } from "../src/core/providerRouter.js";
-import { createAdapterManifest, createInferenceRequest, createModelRecord, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
+import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createModelRecord, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
 
 const HASH = "a".repeat(64);
 const VALID_MODEL = {
@@ -45,7 +45,7 @@ test("model metadata binds immutable weights, tokenizer, license, runtime, and e
 });
 
 test("LoRA and QLoRA adapter manifests record portable, content-addressed provenance", () => {
-  const manifest = createAdapterManifest({
+  const adapterInput = {
     method: "qlora",
     baseModelId: "Qwen/Qwen3-4B",
     baseModelRevision: "9b".repeat(20),
@@ -59,10 +59,38 @@ test("LoRA and QLoRA adapter manifests record portable, content-addressed proven
     quantization: "4-bit NF4, double quantization; configuration only",
     serving: { format: "PEFT", protocol: "OpenAI-compatible chat completions", runtimes: ["vLLM", "Transformers"] },
     evaluationRunId: "eval-not-run-fixture",
-  });
+  };
+  const manifest = createAdapterManifest(adapterInput);
   assert.equal(manifest.method, "qlora");
   assert.deepEqual(manifest.serving.runtimes, ["vLLM", "Transformers"]);
   assert.ok(Object.isFrozen(manifest.serving));
+
+  const servingTarget = createAdapterServingTarget(manifest, {
+    runtime: "vLLM",
+    runtimeVersion: "0.9.2",
+    protocol: "OpenAI-compatible chat completions",
+    baseModelId: "Qwen/Qwen3-4B",
+    baseModelRevision: "9b".repeat(20),
+  });
+  assert.equal(servingTarget.adapterArtifactSha256, HASH);
+  assert.equal(servingTarget.runtimeVersion, "0.9.2");
+  assert.ok(Object.isFrozen(servingTarget));
+  assert.throws(() => createAdapterServingTarget(manifest, {
+    runtime: "llama.cpp", runtimeVersion: "b5000", protocol: "OpenAI-compatible chat completions",
+    baseModelId: "Qwen/Qwen3-4B", baseModelRevision: "9b".repeat(20),
+  }), /does not declare compatibility/i);
+  assert.throws(() => createAdapterServingTarget(manifest, {
+    runtime: "vLLM", runtimeVersion: "latest", protocol: "OpenAI-compatible chat completions",
+    baseModelId: "Qwen/Qwen3-4B", baseModelRevision: "9b".repeat(20),
+  }), /pinned/i);
+  assert.throws(() => createAdapterServingTarget(manifest, {
+    runtime: "vLLM", runtimeVersion: "0.9.2", protocol: "custom endpoint",
+    baseModelId: "Qwen/Qwen3-4B", baseModelRevision: "9b".repeat(20),
+  }), /protocol does not match/i);
+  assert.throws(() => createAdapterServingTarget(manifest, {
+    runtime: "vLLM", runtimeVersion: "0.9.2", protocol: "OpenAI-compatible chat completions",
+    baseModelId: "Qwen/Qwen3-4B", baseModelRevision: "different-immutable-revision",
+  }), /base model does not match/i);
   assert.throws(() => createAdapterManifest({ method: "qlora", baseModelId: "x", baseModelRevision: "latest" }), /SHA-256/i);
   assert.throws(() => createAdapterManifest({
     method: "lora", baseModelId: "x", baseModelRevision: "r1", adapterArtifactSha256: HASH,

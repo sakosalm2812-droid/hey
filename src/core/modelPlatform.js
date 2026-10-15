@@ -192,6 +192,38 @@ export function createAdapterManifest(input) {
   return Object.freeze(manifest);
 }
 
+/**
+ * Validate a concrete serving target against adapter provenance before a
+ * deployment is configured. This is a metadata check only; it does not probe
+ * the server or claim that the adapter was trained or loaded successfully.
+ */
+export function createAdapterServingTarget(manifestInput, targetInput) {
+  const manifest = createAdapterManifest(manifestInput);
+  const target = snapshotObject(targetInput, "Adapter serving target");
+  const runtime = requireText(target.runtime, "Serving runtime");
+  const runtimeVersion = requireText(target.runtimeVersion, "Serving runtime version");
+  const protocol = requireText(target.protocol, "Serving protocol");
+  const baseModelId = requireText(target.baseModelId, "Serving base model id");
+  const baseModelRevision = requireText(target.baseModelRevision, "Serving base model revision");
+  if (/^(main|master|latest|stable)$/i.test(runtimeVersion)) throw new TypeError("Serving runtime version must be pinned, not a moving tag.");
+  if (/^(main|master|latest|stable)$/i.test(baseModelRevision)) throw new TypeError("Serving base model revision must be immutable.");
+  if (!manifest.serving.runtimes.includes(runtime)) throw new Error("Adapter does not declare compatibility with this serving runtime.");
+  if (manifest.serving.protocol !== protocol) throw new Error("Serving protocol does not match the adapter portability contract.");
+  if (manifest.baseModelId !== baseModelId || manifest.baseModelRevision !== baseModelRevision) {
+    throw new Error("Serving base model does not match the adapter provenance.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    runtime,
+    runtimeVersion,
+    protocol,
+    baseModelId,
+    baseModelRevision,
+    adapterArtifactSha256: manifest.adapterArtifactSha256,
+    adapterConfigSha256: manifest.adapterConfigSha256,
+  });
+}
+
 /** Build a constrained request for the existing OpenAI-compatible serving seam. */
 export function createInferenceRequest(options = {}) {
   const source = snapshotObject(options, "Inference request options");
