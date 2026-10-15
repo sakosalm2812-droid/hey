@@ -168,6 +168,11 @@ import {
   verifyTeacherAssessmentArtifact,
   saveTeacherAssessmentArtifact,
   exportTeacherAssessmentMarkdown,
+  exportTeacherAnswerKeyMarkdown,
+  buildTeacherWorksheetArtifact,
+  verifyTeacherWorksheetArtifact,
+  saveTeacherWorksheetArtifact,
+  exportTeacherWorksheetMarkdown,
 } from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
@@ -878,6 +883,11 @@ import {
       verifyAssessmentArtifact: verifyTeacherAssessmentArtifact,
       saveAssessmentArtifact: saveTeacherAssessmentArtifact,
       exportAssessmentMarkdown: exportTeacherAssessmentMarkdown,
+      exportAnswerKeyMarkdown: exportTeacherAnswerKeyMarkdown,
+      buildWorksheetArtifact: buildTeacherWorksheetArtifact,
+      verifyWorksheetArtifact: verifyTeacherWorksheetArtifact,
+      saveWorksheetArtifact: saveTeacherWorksheetArtifact,
+      exportWorksheetMarkdown: exportTeacherWorksheetMarkdown,
     },
 
     live: {

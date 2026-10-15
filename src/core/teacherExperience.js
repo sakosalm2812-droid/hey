@@ -6,22 +6,28 @@ const REQUEST_FIELDS = new Set([
   "workspaceId", "currentAccountScope", "currentWorkspaceId", "createdAt",
 ]);
 const ASSESSMENT_REQUEST_FIELDS = new Set(["title", "directions", "questions", "createdAt"]);
+const WORKSHEET_ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
 const REFERENCE_FIELDS = new Set(["title", "url"]);
 const ACTIVITY_FIELDS = new Set(["title", "instructions", "minutes"]);
 const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
-const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "points"]);
+const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "teacherAnswer", "points"]);
+const WORKSHEET_QUESTION_FIELDS = new Set(["prompt", "points"]);
 const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
-const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "studentDataPolicy", "provenance", "safety", "verification"]);
+const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
 const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
+const WORKSHEET_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "promptsPresent", "sourceAssessmentBound", "teacherKeySeparated"]);
 const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "currentAccountScope", "currentWorkspaceId"]);
 const SAVE_OPTION_FIELDS = new Set(["createArtifact"]);
 const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
+const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
-  "studentAnswers", "grades", "roster", "names", "email", "phone", "dateOfBirth",
+  "studentAnswers", "studentName", "learnerName", "studentId", "learnerId", "studentEmail",
+  "studentPhone", "studentNumber", "studentResponses", "learnerResponses", "answers",
+  "grades", "roster", "names", "email", "phone", "dateOfBirth", "date_of_birth",
 ]);
 const GRADE_BANDS = new Set([
   "pre-k", "kindergarten", "1-2", "3-5", "6-8", "9-12", "adult", "mixed",
@@ -92,17 +98,21 @@ function requiredText(value, label, maxLength = 500) {
   return value.trim();
 }
 
-function scanText(value, label) {
-  const text = requiredText(value, label, 4000);
+function scanText(value, label, maxLength = 4000) {
+  const text = requiredText(value, label, maxLength);
   if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text)
     || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(text)) {
     throw new Error(`${label} appears to contain student contact information; remove personal data and try again`);
   }
+  if (/\b(?:student|learner)\s+(?:name|id)\s*[:#]\s*[A-Z0-9][A-Z0-9_-]*\b/i.test(text)
+    || /\b(?:student|learner)\s+(?:named|called)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/i.test(text)) {
+    throw new Error(`${label} appears to contain student-identifying information; remove personal data and try again`);
+  }
   return text;
 }
 
-function scanAssessmentText(value, label) {
-  const text = scanText(value, label);
+function scanAssessmentText(value, label, maxLength = 4000) {
+  const text = scanText(value, label, maxLength);
   if (/<\/?[a-z][^>]*>|<!--|<!doctype|\b(?:javascript|vbscript)\s*:|\bdata\s*:\s*text\/html/i.test(text)) {
     throw new Error(`${label} cannot contain HTML or active markup`);
   }
@@ -123,6 +133,7 @@ function normalizeAssessmentQuestions(questions, lessonObjectives) {
       objective,
       prompt: scanAssessmentText(question.prompt, `Assessment question ${index + 1} prompt`),
       expectedLearning: scanAssessmentText(question.expectedLearning, `Assessment question ${index + 1} success criteria`),
+      teacherAnswer: scanAssessmentText(question.teacherAnswer, `Assessment question ${index + 1} teacher answer`),
       points: question.points,
     });
   });
@@ -169,8 +180,17 @@ function detectSafetyReview(lesson) {
 function detectAssessmentSafetyReview(assessment) {
   const text = [assessment.title, assessment.sourceLessonTitle, assessment.subject, assessment.directions,
     ...assessment.learningObjectives,
-    ...assessment.questions.map((question) => `${question.prompt} ${question.expectedLearning}`)].join("\n");
+    ...assessment.questions.map((question) => `${question.prompt} ${question.expectedLearning} ${question.teacherAnswer}`)].join("\n");
   if (["pre-k", "kindergarten", "1-2", "3-5", "6-8"].includes(assessment.gradeBand)) {
+    return SENSITIVE_CONTENT.filter(({ pattern }) => pattern.test(text)).map(({ category }) => category);
+  }
+  return [];
+}
+
+function detectWorksheetSafetyReview(worksheet) {
+  const text = [worksheet.title, worksheet.sourceAssessmentTitle, worksheet.subject, worksheet.directions,
+    ...worksheet.questions.map((question) => question.prompt)].join("\n");
+  if (["pre-k", "kindergarten", "1-2", "3-5", "6-8"].includes(worksheet.gradeBand)) {
     return SENSITIVE_CONTENT.filter(({ pattern }) => pattern.test(text)).map(({ category }) => category);
   }
   return [];
@@ -454,6 +474,7 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
       accountScope,
       workspaceId,
       studentDataPolicy: "not_collected",
+      audience: "teacher_only",
       provenance: {
         generatedBy: "HEY Teacher Assessment Workflow",
         method: "structured_from_verified_teacher_lesson",
@@ -529,6 +550,7 @@ export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, 
       if (!content.learningObjectives.includes(question.objective)) throw new Error("Assessment question targets an unlisted objective");
       scanAssessmentText(question.prompt, `Assessment question ${index + 1} prompt`);
       scanAssessmentText(question.expectedLearning, `Assessment question ${index + 1} success criteria`);
+      scanAssessmentText(question.teacherAnswer, `Assessment question ${index + 1} teacher answer`);
       if (!Number.isInteger(question.points) || question.points < 1 || question.points > 10) throw new Error("Invalid assessment question points");
       totalPoints += question.points;
     });
@@ -558,6 +580,7 @@ export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, 
     accountScope: typeof accountScope === "string" && artifact?.metadata?.accountScope === accountScope,
     workspace: typeof workspaceId === "string" && artifact?.metadata?.workspaceId === workspaceId,
     studentDataPolicy: artifact?.metadata?.studentDataPolicy === "not_collected",
+    audience: artifact?.metadata?.audience === "teacher_only",
     provenance: artifact?.metadata?.provenance?.generatedBy === "HEY Teacher Assessment Workflow"
       && artifact?.metadata?.provenance?.method === "structured_from_verified_teacher_lesson"
       && artifact?.metadata?.provenance?.factualClaimsVerified === false
@@ -571,6 +594,173 @@ export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, 
     contentDigest,
     safetyGradeMatchesContent: artifact?.metadata?.safety?.gradeBand === artifact?.content?.gradeBand,
     objectives: Array.isArray(artifact?.content?.learningObjectives) && artifact.content.learningObjectives.length > 0,
+    questions: Array.isArray(artifact?.content?.questions) && artifact.content.questions.length > 0,
+    safetyReview: Array.isArray(detectedSafetyReview)
+      && artifact?.metadata?.safety?.reviewRequired === (detectedSafetyReview.length > 0)
+      && JSON.stringify(artifact?.metadata?.safety?.reviewReasons) === JSON.stringify(detectedSafetyReview),
+  };
+  return Object.freeze({ valid: Object.values(checks).every(Boolean), checks });
+}
+
+export async function buildTeacherWorksheetArtifact(assessmentArtifact, context) {
+  if (!assessmentArtifact || typeof assessmentArtifact !== "object" || !BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(assessmentArtifact)) {
+    throw new Error("Worksheet requires an assessment built in the active Teacher runtime");
+  }
+  let stableAssessment;
+  let stableContext;
+  try {
+    stableAssessment = snapshotLessonData(assessmentArtifact);
+    stableContext = snapshotLessonData(context);
+    assertOnlyDataFields(stableContext, "Teacher worksheet context", SAVE_CONTEXT_FIELDS);
+  } catch {
+    throw new Error("Worksheet source and context must be safe, bounded data");
+  }
+  const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
+  const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
+    throw new Error("Worksheet account and workspace must match the active context");
+  }
+  const sourceVerification = await verifyTeacherAssessmentArtifact(assessmentArtifact, { accountScope, workspaceId });
+  if (!sourceVerification.valid) throw new Error("Worksheet source assessment failed verification for the active account and workspace");
+
+  const assessment = stableAssessment.content;
+  const content = {
+    type: "teacher_worksheet",
+    title: scanAssessmentText(assessment.title, "Worksheet title"),
+    sourceAssessmentTitle: assessment.title,
+    sourceAssessmentDigest: stableAssessment.metadata.verification.contentDigest,
+    parentSafetyReviewReasons: [...stableAssessment.metadata.safety.reviewReasons],
+    subject: scanAssessmentText(assessment.subject, "Subject"),
+    gradeBand: assessment.gradeBand,
+    directions: scanAssessmentText(assessment.directions, "Worksheet directions"),
+    questions: Object.freeze(assessment.questions.map((question, index) => Object.freeze({
+      prompt: scanAssessmentText(question.prompt, `Worksheet question ${index + 1} prompt`),
+      points: question.points,
+    }))),
+  };
+  const reviewReasons = [...new Set([...content.parentSafetyReviewReasons, ...detectWorksheetSafetyReview(content)])];
+  const contentDigest = await digestLesson(content);
+  const artifact = {
+    type: "document",
+    title: content.title,
+    description: `${content.subject} · ${content.gradeBand} · ${content.questions.length} questions`,
+    content,
+    metadata: {
+      workflow: "teacher_worksheet",
+      accountScope,
+      workspaceId,
+      studentDataPolicy: "not_collected",
+      audience: "student",
+      provenance: {
+        generatedBy: "HEY Teacher Worksheet Workflow",
+        method: "derived_from_teacher_assessment_without_answer_key",
+        sourceAssessmentDigest: content.sourceAssessmentDigest,
+        createdAt: new Date().toISOString(),
+        factualClaimsVerified: false,
+      },
+      safety: {
+        gradeBand: content.gradeBand,
+        reviewRequired: reviewReasons.length > 0,
+        reviewReasons,
+        teacherReviewRequiredBeforeUse: true,
+      },
+      verification: {
+        valid: true,
+        checks: {
+          accountWorkspaceBound: true,
+          studentDataAbsent: true,
+          promptsPresent: true,
+          sourceAssessmentBound: true,
+          teacherKeySeparated: true,
+        },
+        contentDigest,
+      },
+    },
+  };
+  const frozenArtifact = freezeDeep(artifact);
+  BUILT_TEACHER_WORKSHEET_ARTIFACTS.add(frozenArtifact);
+  return frozenArtifact;
+}
+
+export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId } = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact)) {
+    return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
+  }
+  try {
+    artifact = snapshotLessonData(artifact);
+  } catch {
+    return Object.freeze({ valid: false, checks: Object.freeze({ safeSnapshot: false }) });
+  }
+  let contentShapeSafe = false;
+  let detectedSafetyReview = null;
+  try {
+    assertOnlyDataFields(artifact, "Worksheet artifact", WORKSHEET_ARTIFACT_FIELDS);
+    assertOnlyDataFields(artifact.metadata, "Worksheet metadata", METADATA_FIELDS);
+    assertOnlyDataFields(artifact.metadata.provenance, "Worksheet provenance", new Set([
+      "generatedBy", "method", "sourceAssessmentDigest", "createdAt", "factualClaimsVerified",
+    ]));
+    assertOnlyDataFields(artifact.metadata.safety, "Worksheet safety metadata", new Set([
+      "gradeBand", "reviewRequired", "reviewReasons", "teacherReviewRequiredBeforeUse",
+    ]));
+    assertOnlyDataFields(artifact.metadata.verification, "Worksheet verification", VERIFICATION_FIELDS);
+    assertOnlyDataFields(artifact.metadata.verification.checks, "Worksheet verification checks", WORKSHEET_VERIFICATION_CHECK_FIELDS);
+    const content = artifact.content;
+    assertOnlyDataFields(content, "Worksheet content", new Set([
+      "type", "title", "sourceAssessmentTitle", "sourceAssessmentDigest", "parentSafetyReviewReasons",
+      "subject", "gradeBand", "directions", "questions",
+    ]));
+    if (content.type !== "teacher_worksheet" || !GRADE_BANDS.has(content.gradeBand)) throw new Error("Invalid worksheet type or grade band");
+    scanAssessmentText(content.title, "Worksheet title");
+    scanAssessmentText(content.sourceAssessmentTitle, "Source assessment title");
+    scanAssessmentText(content.subject, "Subject", 120);
+    scanAssessmentText(content.directions, "Worksheet directions");
+    if (!/^sha256:[a-f0-9]{64}$/.test(content.sourceAssessmentDigest || "")) throw new Error("Invalid source assessment digest");
+    assertDenseArray(content.questions, "Worksheet questions", 20);
+    if (content.questions.length < 1) throw new Error("Worksheet must contain at least one question");
+    let totalPoints = 0;
+    content.questions.forEach((question, index) => {
+      assertOnlyDataFields(question, `Worksheet question ${index + 1}`, WORKSHEET_QUESTION_FIELDS);
+      scanAssessmentText(question.prompt, `Worksheet question ${index + 1} prompt`);
+      if (!Number.isInteger(question.points) || question.points < 1 || question.points > 10) throw new Error("Invalid worksheet question points");
+      totalPoints += question.points;
+    });
+    if (totalPoints > 100) throw new Error("Worksheet total points cannot exceed 100");
+    const parentReasons = content.parentSafetyReviewReasons;
+    assertDenseArray(parentReasons, "Parent safety review reasons", SENSITIVE_CONTENT.length);
+    if (parentReasons.some((reason) => !SENSITIVE_CONTENT.some((entry) => entry.category === reason))) throw new Error("Invalid parent safety review reason");
+    detectedSafetyReview = [...new Set([...parentReasons, ...detectWorksheetSafetyReview(content)])];
+    contentShapeSafe = true;
+  } catch {
+    // Imported, mutated, and otherwise malformed worksheet payloads fail verification.
+  }
+  let contentDigest;
+  try {
+    contentDigest = typeof artifact?.metadata?.verification?.contentDigest === "string"
+      && /^sha256:[a-f0-9]{64}$/.test(artifact.metadata.verification.contentDigest)
+      && await digestLesson(artifact.content) === artifact.metadata.verification.contentDigest;
+  } catch {
+    contentDigest = false;
+  }
+  const checks = {
+    workflow: artifact?.metadata?.workflow === "teacher_worksheet",
+    artifactType: artifact?.type === "document",
+    titleMatchesContent: artifact?.title === artifact?.content?.title,
+    contentShapeSafe,
+    accountScope: typeof accountScope === "string" && artifact?.metadata?.accountScope === accountScope,
+    workspace: typeof workspaceId === "string" && artifact?.metadata?.workspaceId === workspaceId,
+    studentDataPolicy: artifact?.metadata?.studentDataPolicy === "not_collected",
+    audience: artifact?.metadata?.audience === "student",
+    provenance: artifact?.metadata?.provenance?.generatedBy === "HEY Teacher Worksheet Workflow"
+      && artifact?.metadata?.provenance?.method === "derived_from_teacher_assessment_without_answer_key"
+      && artifact?.metadata?.provenance?.factualClaimsVerified === false
+      && artifact?.metadata?.provenance?.sourceAssessmentDigest === artifact?.content?.sourceAssessmentDigest
+      && Number.isFinite(Date.parse(artifact?.metadata?.provenance?.createdAt || "")),
+    teacherReviewRequired: artifact?.metadata?.safety?.teacherReviewRequiredBeforeUse === true,
+    verificationEvidence: artifact?.metadata?.verification?.valid === true
+      && WORKSHEET_VERIFICATION_CHECK_FIELDS.size === Object.keys(artifact?.metadata?.verification?.checks || {}).length
+      && [...WORKSHEET_VERIFICATION_CHECK_FIELDS].every((field) => artifact.metadata.verification.checks[field] === true),
+    contentDigest,
+    safetyGradeMatchesContent: artifact?.metadata?.safety?.gradeBand === artifact?.content?.gradeBand,
     questions: Array.isArray(artifact?.content?.questions) && artifact.content.questions.length > 0,
     safetyReview: Array.isArray(detectedSafetyReview)
       && artifact?.metadata?.safety?.reviewRequired === (detectedSafetyReview.length > 0)
@@ -639,7 +829,14 @@ export async function saveTeacherLessonArtifact(artifact, context, options = {})
 export async function saveTeacherAssessmentArtifact(artifact, context, options = {}) {
   return saveTeacherArtifact(
     artifact, context, options, BUILT_TEACHER_ASSESSMENT_ARTIFACTS, verifyTeacherAssessmentArtifact,
-    "assessment", "hey.teacher.assessment.v1", ["teacher", "assessment"],
+    "assessment", "hey.teacher.assessment.v1", ["teacher", "assessment", "answer-key"],
+  );
+}
+
+export async function saveTeacherWorksheetArtifact(artifact, context, options = {}) {
+  return saveTeacherArtifact(
+    artifact, context, options, BUILT_TEACHER_WORKSHEET_ARTIFACTS, verifyTeacherWorksheetArtifact,
+    "worksheet", "hey.teacher.worksheet.v1", ["teacher", "student-worksheet"],
   );
 }
 
@@ -711,11 +908,12 @@ export async function exportTeacherAssessmentMarkdown(artifact, { accountScope, 
     `# ${escapeMarkdown(content.title)}`, "", `**Subject:** ${escapeMarkdown(content.subject)}  `,
     `**Grade band:** ${escapeMarkdown(content.gradeBand)}  `,
     `**Based on lesson:** ${escapeMarkdown(content.sourceLessonTitle)}`, "",
-    "## Directions", escapeMarkdown(content.directions), "", "## Learning objectives",
-    ...content.learningObjectives.map((objective) => `- ${escapeMarkdown(objective)}`), "",
-    "## Questions", ...content.questions.flatMap((question, index) => [
+    "**Audience:** teacher only; do not distribute this file to learners.", "",
+    "## Directions", escapeMarkdown(content.directions), "", "## Teacher answer key",
+    ...content.questions.flatMap((question, index) => [
       `### ${index + 1}. ${escapeMarkdown(question.prompt)} (${question.points} points)`,
       `**Objective:** ${escapeMarkdown(question.objective)}`,
+      `**Answer:** ${escapeMarkdown(question.teacherAnswer)}`,
       `**Success criteria:** ${escapeMarkdown(question.expectedLearning)}`, "",
     ]),
     "## Provenance and review",
@@ -728,7 +926,50 @@ export async function exportTeacherAssessmentMarkdown(artifact, { accountScope, 
       `- Safety review time: ${new Date(safetyReview.reviewedAt).toISOString()}`,
     ] : []),
   ];
-  return Object.freeze({ filename: "assessment.md", mimeType: "text/markdown", content: lines.join("\n") });
+  return Object.freeze({ filename: "teacher-answer-key.md", mimeType: "text/markdown", content: lines.join("\n") });
+}
+
+export const exportTeacherAnswerKeyMarkdown = exportTeacherAssessmentMarkdown;
+
+export async function exportTeacherWorksheetMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact)) {
+    throw new Error("Only a worksheet artifact built in the active Teacher runtime can be exported");
+  }
+  const verification = await verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId });
+  if (!verification.valid) throw new Error("Worksheet artifact failed verification for the active account and workspace");
+  let stableArtifact;
+  let stableSafetyReview;
+  try {
+    stableArtifact = snapshotLessonData(artifact);
+    stableSafetyReview = safetyReview === undefined ? undefined : snapshotLessonData(safetyReview);
+  } catch {
+    throw new Error("Worksheet artifact failed verification for the active account and workspace");
+  }
+  if (stableArtifact.metadata.safety.reviewRequired) {
+    if (!isPlainRecord(stableSafetyReview)) throw new Error("Teacher safety review is required for the active account and workspace before exporting this worksheet");
+    assertOnlyDataFields(stableSafetyReview, "Teacher safety review", new Set(["accountScope", "workspaceId", "reviewerId", "reviewedAt"]));
+    if (stableSafetyReview.accountScope !== accountScope
+      || stableSafetyReview.workspaceId !== workspaceId
+      || typeof stableSafetyReview.reviewerId !== "string" || !stableSafetyReview.reviewerId.trim()
+      || !Number.isFinite(Date.parse(stableSafetyReview.reviewedAt || ""))) {
+      throw new Error("Teacher safety review is required for the active account and workspace before exporting this worksheet");
+    }
+  }
+  const { content, metadata } = stableArtifact;
+  const lines = [
+    `# ${escapeMarkdown(content.title)}`, "", `**Subject:** ${escapeMarkdown(content.subject)}  `,
+    `**Grade band:** ${escapeMarkdown(content.gradeBand)}  `, "",
+    "## Directions", escapeMarkdown(content.directions), "", "## Questions",
+    ...content.questions.flatMap((question, index) => [
+      `### ${index + 1}. ${escapeMarkdown(question.prompt)} (${question.points} points)`, "",
+    ]),
+    "## Provenance and review",
+    "- Curriculum alignment and factual claims: not independently verified",
+    `- Student personal data: ${metadata.studentDataPolicy}`,
+    "- Teacher review required before classroom use: yes",
+    ...(metadata.safety.reviewRequired ? ["- Required safety review is complete for this export: yes"] : []),
+  ];
+  return Object.freeze({ filename: "student-worksheet.md", mimeType: "text/markdown", content: lines.join("\n") });
 }
 
 export default {
@@ -740,4 +981,9 @@ export default {
   verifyTeacherAssessmentArtifact,
   saveTeacherAssessmentArtifact,
   exportTeacherAssessmentMarkdown,
+  exportTeacherAnswerKeyMarkdown,
+  buildTeacherWorksheetArtifact,
+  verifyTeacherWorksheetArtifact,
+  saveTeacherWorksheetArtifact,
+  exportTeacherWorksheetMarkdown,
 };
