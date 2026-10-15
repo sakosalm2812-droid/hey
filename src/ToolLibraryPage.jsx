@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Check, CircleHelp, LockKeyhole, Search, ShieldAlert, Wrench } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Check, CircleHelp, LockKeyhole, Pin, Search, ShieldAlert, Star, Wrench } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
+import { useAuth } from "./AuthContext.jsx";
+import { getAccountScope } from "./core/accountScope.js";
+import { getToolLibraryPreferenceView } from "./lib/toolLibraryPreferenceView.js";
 import "./ToolLibraryPage.css";
 
 const STATUS_DETAILS = {
@@ -13,6 +16,12 @@ const STATUS_DETAILS = {
 
 function describeName(name) {
   return name.split(".").map((word) => word.replaceAll(/[_-]/g, " ")).join(" / ");
+}
+
+function preferenceFailureMessage(status) {
+  if (status === "account_required") return "Your account preference scope is not ready. Reload the Tools catalog after signing in.";
+  if (status === "invalid_store") return "Saved tool preferences are invalid and could not be loaded.";
+  return "Tool preferences could not be loaded from browser storage.";
 }
 
 function CapabilityDetails({ capabilities, errors }) {
@@ -32,7 +41,15 @@ function CapabilityDetails({ capabilities, errors }) {
   );
 }
 
-function ToolCard({ tool, interfaceLevel }) {
+function ToolCard({
+  tool,
+  interfaceLevel,
+  isFavorite,
+  isPinned,
+  canManagePreferences,
+  onToggleFavorite,
+  onTogglePin,
+}) {
   const status = STATUS_DETAILS[tool.status] || STATUS_DETAILS.unsupported;
   const StatusIcon = status.Icon;
   const capabilityErrors = tool.capabilities
@@ -40,13 +57,35 @@ function ToolCard({ tool, interfaceLevel }) {
     .map((capability) => capability.error);
 
   return (
-    <article className="tool-library__card" aria-labelledby={`tool-${encodeURIComponent(tool.name)}`}>
+    <article id={`tool-card-${encodeURIComponent(tool.name)}`} className="tool-library__card" aria-labelledby={`tool-${encodeURIComponent(tool.name)}`}>
       <div className="tool-library__card-heading">
         <div className="tool-library__tool-icon" aria-hidden="true"><Wrench size={18} /></div>
-        <span className={`tool-library__status ${status.className}`}>
-          <StatusIcon size={14} aria-hidden="true" />
-          {status.label}
-        </span>
+        <div className="tool-library__card-actions">
+          <span className={`tool-library__status ${status.className}`}>
+            <StatusIcon size={14} aria-hidden="true" />
+            {status.label}
+          </span>
+          <button
+            type="button"
+            className="tool-library__preference-button"
+            aria-label={`${isFavorite ? "Remove" : "Add"} ${describeName(tool.name)} ${isFavorite ? "from" : "to"} favorites`}
+            aria-pressed={isFavorite}
+            disabled={!canManagePreferences}
+            onClick={() => onToggleFavorite(tool.name)}
+          >
+            <Star size={16} aria-hidden="true" fill={isFavorite ? "currentColor" : "none"} />
+          </button>
+          <button
+            type="button"
+            className="tool-library__preference-button"
+            aria-label={`${isPinned ? "Unpin" : "Pin"} ${describeName(tool.name)}`}
+            aria-pressed={isPinned}
+            disabled={!canManagePreferences}
+            onClick={() => onTogglePin(tool.name)}
+          >
+            <Pin size={16} aria-hidden="true" fill={isPinned ? "currentColor" : "none"} />
+          </button>
+        </div>
       </div>
       <h2 id={`tool-${encodeURIComponent(tool.name)}`}>{describeName(tool.name)}</h2>
       {interfaceLevel === "advanced" && <p className="tool-library__tool-name">{tool.name}</p>}
@@ -86,38 +125,122 @@ function ToolCard({ tool, interfaceLevel }) {
 
 export default function ToolLibraryPage() {
   const { level: interfaceLevel } = useInterfaceLevel();
+  const { user } = useAuth();
+  const accountId = user?.id ? String(user.id) : null;
   const [tools, setTools] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [activeView, setActiveView] = useState("all");
+  const [preferenceState, setPreferenceState] = useState({ status: "loading", accountId: null, preferences: null });
+  const [preferenceError, setPreferenceError] = useState("");
+  const requestRef = useRef(0);
+
+  const preferenceView = getToolLibraryPreferenceView({
+    accountId,
+    activeScope: getAccountScope(),
+    state: preferenceState,
+  });
+  const preferenceStatus = preferenceView.status;
+  const preferenceReady = preferenceView.ready;
+  const preferenceLoading = preferenceStatus === "loading";
+  const preferences = preferenceView.preferences;
+  const displayedView = preferenceReady ? activeView : "all";
 
   const loadCatalog = useCallback(async () => {
+    const request = ++requestRef.current;
+    const requestedAccountId = accountId;
     setLoading(true);
     setError("");
+    setPreferenceError("");
+    setPreferenceState({ status: requestedAccountId ? "loading" : "account_required", accountId: requestedAccountId, preferences: null });
     try {
       // Let the loading state render before catalog discovery runs.
       await new Promise((resolve) => window.setTimeout(resolve, 0));
+      if (requestRef.current !== request) return;
       HEY.initialize();
       const catalog = HEY.tools.catalog({ platform: "web" });
       if (!Array.isArray(catalog)) throw new TypeError("Tool catalog returned an invalid response.");
+      if (requestRef.current !== request) return;
       setTools(catalog);
+      if (!requestedAccountId || getAccountScope() !== `account:${requestedAccountId}`) {
+        setPreferenceState({ status: "account_required", accountId: requestedAccountId, preferences: null });
+      } else {
+        const result = HEY.tools.preferences.load();
+        if (requestRef.current !== request) return;
+        setPreferenceState({
+          status: result.success ? "ready" : result.status,
+          accountId: requestedAccountId,
+          preferences: result.success ? result.preferences : null,
+        });
+      }
     } catch {
+      if (requestRef.current !== request) return;
       setError("The tool catalog could not be loaded. Try again in a moment.");
       setTools([]);
+      setPreferenceState({ status: "unavailable", accountId: requestedAccountId, preferences: null });
     } finally {
-      setLoading(false);
+      if (requestRef.current === request) setLoading(false);
     }
-  }, []);
+  }, [accountId]);
 
   useEffect(() => {
-    loadCatalog();
+    void loadCatalog();
+    return () => {
+      requestRef.current += 1;
+    };
   }, [loadCatalog]);
+
+  function updatePreference(name, kind) {
+    if (!preferenceReady || !accountId || getAccountScope() !== `account:${accountId}`) {
+      setPreferenceError("Your account changed. Reload the Tools catalog before changing preferences.");
+      return;
+    }
+
+    setPreferenceError("");
+    try {
+      const current = kind === "favorite"
+        ? preferences.favorites.includes(name)
+        : preferences.pinned.includes(name);
+      const result = kind === "favorite"
+        ? HEY.tools.preferences.setFavorite(name, !current)
+        : HEY.tools.preferences.setPinned(name, !current);
+
+      if (!result?.success) {
+        setPreferenceError("Your tool preference could not be saved. Check browser storage and try again.");
+        return;
+      }
+      if (getAccountScope() !== `account:${accountId}`) {
+        setPreferenceState({ status: "account_required", accountId: null, preferences: null });
+        setPreferenceError("Your account changed before the preference was saved. Reload the Tools catalog.");
+        return;
+      }
+      setPreferenceState({ status: "ready", accountId, preferences: result.preferences });
+    } catch {
+      setPreferenceError("Your tool preference could not be saved. Check browser storage and try again.");
+    }
+  }
 
   const filteredTools = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) return tools;
     return tools.filter((tool) => `${tool.name} ${tool.permissions.join(" ")} ${tool.capabilities.map((item) => item.capability || "").join(" ")}`.toLowerCase().includes(normalizedQuery));
   }, [query, tools]);
+
+  const visibleTools = !preferenceReady || activeView === "all"
+    ? filteredTools
+    : filteredTools.filter((tool) => {
+      const selected = activeView === "favorites" ? preferences.favorites : preferences.pinned;
+      return selected.includes(tool.name);
+    });
+
+  const recentEntries = preferences.recent
+    .map((entry) => ({ ...entry, tool: tools.find((tool) => tool.name === entry.name) }))
+    .filter((entry) => entry.tool);
+
+  function formatRecentDate(value) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  }
 
   return (
     <section className="tool-library" aria-labelledby="tool-library-title">
@@ -143,6 +266,36 @@ export default function ToolLibraryPage() {
         <p>Platform: <strong>Web</strong></p>
       </div>
 
+      <section className="tool-library__preference-panel" aria-labelledby="tool-library-views-title">
+        <div className="tool-library__preference-toolbar">
+          <h2 id="tool-library-views-title">Your tool views</h2>
+          <div className="tool-library__view-tabs" role="group" aria-label="Filter tools">
+            <button type="button" aria-pressed={displayedView === "all"} onClick={() => setActiveView("all")}>All <span>{tools.length}</span></button>
+            <button type="button" aria-pressed={displayedView === "favorites"} disabled={!preferenceReady} onClick={() => setActiveView("favorites")}>Favorites <span>{preferences.favorites.length}</span></button>
+            <button type="button" aria-pressed={displayedView === "pinned"} disabled={!preferenceReady} onClick={() => setActiveView("pinned")}>Pinned <span>{preferences.pinned.length}</span></button>
+          </div>
+        </div>
+
+        {preferenceLoading && <p className="tool-library__preference-status" role="status">Loading account-scoped tool preferences…</p>}
+        {!error && !preferenceLoading && !preferenceReady && <p className="tool-library__preference-error" role="alert">{preferenceFailureMessage(preferenceStatus)}</p>}
+        {preferenceError && <p className="tool-library__preference-error" role="alert">{preferenceError}</p>}
+
+        <div className="tool-library__recent" aria-labelledby="tool-library-recent-title">
+          <h3 id="tool-library-recent-title">Recently used</h3>
+          {preferenceReady && recentEntries.length === 0 && <p role="status">Tools you use will appear here.</p>}
+          {preferenceReady && recentEntries.length > 0 && (
+            <ul>
+              {recentEntries.map((entry) => (
+                <li key={entry.name}>
+                  <span>{describeName(entry.name)}</span>
+                  <time dateTime={entry.usedAt}>{formatRecentDate(entry.usedAt)}</time>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
+
       {loading && (
         <div className="tool-library__message" role="status" aria-live="polite">
           <span className="tool-library__spinner" aria-hidden="true" />
@@ -165,13 +318,30 @@ export default function ToolLibraryPage() {
         </div>
       )}
 
-      {!loading && !error && tools.length > 0 && filteredTools.length === 0 && (
-        <div className="tool-library__message" role="status"><p>No tools match “{query}”. Try a different search.</p></div>
+      {!loading && !error && tools.length > 0 && visibleTools.length === 0 && (
+        <div className="tool-library__message">
+          {displayedView === "favorites" && preferences.favorites.length === 0
+            ? <><p role="status">No favorites yet. Browse all tools and use the star button to add one.</p><button type="button" className="tool-library__retry" onClick={() => setActiveView("all")}>Browse all tools</button></>
+            : displayedView === "pinned" && preferences.pinned.length === 0
+              ? <><p role="status">No pinned tools yet. Browse all tools and use the pin button to add one.</p><button type="button" className="tool-library__retry" onClick={() => setActiveView("all")}>Browse all tools</button></>
+              : <p role="status">No tools match “{query}”. Try a different search or view.</p>}
+        </div>
       )}
 
-      {!loading && !error && filteredTools.length > 0 && (
+      {!loading && !error && visibleTools.length > 0 && (
         <div className="tool-library__grid">
-          {filteredTools.map((tool) => <ToolCard key={tool.name} tool={tool} interfaceLevel={interfaceLevel} />)}
+          {visibleTools.map((tool) => (
+            <ToolCard
+              key={tool.name}
+              tool={tool}
+              interfaceLevel={interfaceLevel}
+              isFavorite={preferences.favorites.includes(tool.name)}
+              isPinned={preferences.pinned.includes(tool.name)}
+              canManagePreferences={preferenceReady}
+              onToggleFavorite={(name) => updatePreference(name, "favorite")}
+              onTogglePin={(name) => updatePreference(name, "pinned")}
+            />
+          ))}
         </div>
       )}
     </section>

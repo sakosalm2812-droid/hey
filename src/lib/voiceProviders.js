@@ -3,6 +3,8 @@ import { resolveUtteranceVoice, stripWakePhrase } from "../core/heyVoiceSettings
 import { getAccountScope, subscribeAccountScope } from "../core/accountScope.js";
 
 const browserSpeechProviders = new WeakSet();
+const MAX_DICTATION_PHRASES = 64;
+const MAX_DICTATION_VOCABULARY = 32;
 
 export function createBrowserSpeechProvider(environment = globalThis) {
   const Recognition = environment.SpeechRecognition || environment.webkitSpeechRecognition;
@@ -10,11 +12,18 @@ export function createBrowserSpeechProvider(environment = globalThis) {
 
   const provider = {
     kind: "browser",
-    start({ onTranscript, onError, onEnd, language = "en-US" }) {
+    start({ onTranscript, onError, onEnd, language = "en-US", vocabulary = [] }) {
       const recognition = new Recognition();
       recognition.lang = normalizeSpeechLanguage(language);
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
+      const phrases = normalizeDictationVocabulary(vocabulary, recognition.lang);
+      try {
+        const Phrase = environment.SpeechRecognitionPhrase;
+        if (phrases.length && typeof Phrase === "function") {
+          recognition.phrases = phrases.map((phrase) => new Phrase(phrase, 1));
+        }
+      } catch { /* Contextual phrase biasing is experimental and may be unsupported. */ }
       recognition.onresult = (event) => onTranscript(event.results?.[0]?.[0]?.transcript?.trim() || "");
       recognition.onerror = (event) => onError(event.error || "speech_recognition_failed");
       recognition.onend = onEnd;
@@ -72,42 +81,115 @@ function hasControlCharacters(value) {
   });
 }
 
-/**
- * Apply an in-memory, user-supplied dictation vocabulary to one transcript.
- * Sources are matched as whole Unicode words/phrases, case-insensitively, in
- * one pass so a replacement can never trigger another replacement. This
- * helper deliberately does not persist either the vocabulary or transcript.
- */
-export function applyDictationCorrections(transcript, corrections = []) {
-  if (typeof transcript !== "string") return "";
-  if (!Array.isArray(corrections) || corrections.length > 64) {
-    throw new TypeError("Dictation corrections must be an array of at most 64 entries.");
+function readDenseArray(value, name, maxLength) {
+  if (Array.isArray(value) && value.length > maxLength) {
+    throw new TypeError(`${name} must have at most ${maxLength} entries.`);
   }
-  if (corrections.length === 0) return transcript;
-
-  const bySource = new Map();
-  for (const correction of corrections) {
-    if (!correction || typeof correction !== "object" || Array.isArray(correction)) {
-      throw new TypeError("Each dictation correction must have a source and replacement.");
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError(`${name} must be a bounded plain array.`);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string" || (key !== "length" && !/^(0|[1-9]\d*)$/u.test(key)))) {
+    throw new TypeError(`${name} cannot contain custom array properties.`);
+  }
+  const result = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      throw new TypeError(`${name} cannot be sparse or contain accessors.`);
     }
-    const { from, to } = correction;
+    result.push(descriptor.value);
+  }
+  return result;
+}
+
+function readCorrection(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Each dictation correction must have a source and replacement.");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError("Dictation correction must be a plain data object.");
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string" || !["from", "to"].includes(key))) {
+    throw new TypeError("Dictation correction contains an unsupported property.");
+  }
+  const from = Object.getOwnPropertyDescriptor(value, "from");
+  const to = Object.getOwnPropertyDescriptor(value, "to");
+  if (!from?.enumerable || !Object.hasOwn(from, "value") || !to?.enumerable || !Object.hasOwn(to, "value")) {
+    throw new TypeError("Dictation corrections cannot contain accessors or hidden properties.");
+  }
+  return { from: from.value, to: to.value };
+}
+
+function phraseKey(value, language) {
+  return value.normalize("NFC").toLocaleUpperCase(language).toLocaleLowerCase(language).normalize("NFC");
+}
+
+function normalizeDictationCorrections(input, language = "en-US") {
+  const locale = normalizeSpeechLanguage(language);
+  const entries = readDenseArray(input, "Dictation corrections", MAX_DICTATION_PHRASES);
+  const seen = new Set();
+  const normalized = entries.map((entry) => {
+    const { from, to } = readCorrection(entry);
     if (typeof from !== "string" || typeof to !== "string"
       || !from.trim() || from.length > 80 || to.length > 160
       || hasControlCharacters(from) || hasControlCharacters(to)) {
       throw new TypeError("Dictation correction entries must contain short, plain text.");
     }
-    const key = from.trim().toLowerCase();
-    if (bySource.has(key)) throw new TypeError("Dictation correction sources must be unique.");
-    bySource.set(key, { from: from.trim(), to });
-  }
+    const source = from.trim();
+    const key = phraseKey(source, locale);
+    if (seen.has(key)) throw new TypeError("Dictation correction sources must be unique.");
+    seen.add(key);
+    return Object.freeze({ from: source, to });
+  });
+  return Object.freeze(normalized);
+}
 
-  const alternatives = [...bySource.values()]
-    .sort((left, right) => right.from.length - left.from.length)
-    .map(({ from }) => from.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
-  const matcher = new RegExp(`(^|[^\\p{L}\\p{N}_])(${alternatives.join("|")})(?=$|[^\\p{L}\\p{N}_])`, "giu");
-  return transcript.replace(matcher, (match, prefix, source) => {
-    const replacement = bySource.get(source.trim().toLowerCase())?.to;
-    return `${prefix}${replacement ?? source}`;
+function normalizeDictationVocabulary(input, language = "en-US", corrections = []) {
+  const locale = normalizeSpeechLanguage(language);
+  const entries = readDenseArray(input, "Dictation vocabulary", MAX_DICTATION_VOCABULARY);
+  const seen = new Set(corrections.map(({ from }) => phraseKey(from, locale)));
+  const normalized = entries.map((entry) => {
+    if (typeof entry !== "string" || !entry.trim() || entry.length > 80 || hasControlCharacters(entry)) {
+      throw new TypeError("Dictation vocabulary phrases must be short, plain text.");
+    }
+    const phrase = entry.trim();
+    const key = phraseKey(phrase, locale);
+    if (seen.has(key)) throw new TypeError("Dictation vocabulary phrases must not conflict with corrections or each other.");
+    seen.add(key);
+    return phrase;
+  });
+  if (normalized.length + corrections.length > MAX_DICTATION_PHRASES) {
+    throw new TypeError(`Combined dictation corrections and vocabulary must not exceed ${MAX_DICTATION_PHRASES} entries.`);
+  }
+  return Object.freeze(normalized);
+}
+
+function escapedLiteralPattern(value, language) {
+  return [...value.normalize("NFC")].map((character) => {
+    const variants = new Set([character, character.toLocaleLowerCase(language), character.toLocaleUpperCase(language)]);
+    return `(?:${[...variants].map((variant) => variant.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})`;
+  }).join("");
+}
+
+/**
+ * Apply bounded in-memory phrase corrections to one transcript.
+ * Sources are matched as whole Unicode words/phrases, case-insensitively, in
+ * one pass so a replacement can never trigger another replacement. This
+ * helper deliberately does not persist either the vocabulary or transcript.
+ */
+export function applyDictationCorrections(transcript, corrections = [], language = "en-US") {
+  if (typeof transcript !== "string") return "";
+  const locale = normalizeSpeechLanguage(language);
+  const entries = [...normalizeDictationCorrections(corrections, locale)]
+    .sort((left, right) => [...right.from].length - [...left.from].length);
+  if (entries.length === 0) return transcript;
+
+  const alternatives = entries.map(({ from }) => `(${escapedLiteralPattern(from, locale)})`);
+  const matcher = new RegExp(`(^|[^\\p{L}\\p{N}_])(?:${alternatives.join("|")})(?=$|[^\\p{L}\\p{N}_])`, "gu");
+  return transcript.replace(matcher, (match, prefix, ...captures) => {
+    const index = captures.findIndex((source) => source !== undefined);
+    return `${prefix}${index >= 0 ? entries[index].to : match.slice(prefix.length)}`;
   });
 }
 
@@ -218,11 +300,12 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
  * Browser speech recognition may send audio to the browser vendor; callers
  * should disclose that before asking the user to consent.
  */
-export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, onMetrics, corrections = [], language = "en-US" } = {}) {
+export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, onMetrics, corrections = [], vocabulary = [], language = "en-US" } = {}) {
   // Validate once when the session is created. The immutable snapshot keeps
   // later caller mutation from changing what an active microphone session emits.
-  applyDictationCorrections("", corrections);
-  const correctionSnapshot = corrections.map(({ from, to }) => ({ from: from.trim(), to }));
+  const sessionLanguage = normalizeSpeechLanguage(language);
+  const correctionSnapshot = normalizeDictationCorrections(corrections, sessionLanguage);
+  const vocabularySnapshot = normalizeDictationVocabulary(vocabulary, sessionLanguage, correctionSnapshot);
   const state = createVoiceState();
   const startingScope = getAccountScope();
   let recognition = null;
@@ -350,7 +433,8 @@ export function createDictationSession({ speechProvider, environment = globalThi
     currentAttempt.providerRequestedAt = now();
     try {
       recognition = speechProvider.start({
-        language: normalizeSpeechLanguage(language),
+        language: sessionLanguage,
+        vocabulary: vocabularySnapshot,
         onTranscript: (transcript) => {
           const text = typeof transcript === "string" ? transcript.trim() : "";
           if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) return;
@@ -360,7 +444,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
           }
           currentAttempt.transcriptCount = Math.min(1000, currentAttempt.transcriptCount + 1);
           if (currentAttempt.firstTranscriptAt === null) currentAttempt.firstTranscriptAt = now();
-          onTranscript?.(applyDictationCorrections(text, correctionSnapshot));
+          onTranscript?.(applyDictationCorrections(text, correctionSnapshot, sessionLanguage));
         },
         onError: (error) => {
           if (currentGeneration === generation && !destroyed) {
