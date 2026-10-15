@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createAction, executeAction, clearActions } from "../src/core/actionEngine.js";
+import { createAction, executeAction, undoAction, clearActions } from "../src/core/actionEngine.js";
 import supabaseClient from "../src/lib/supabase.js";
 
 const user = { id: "voiceos-test-user", plan: "elite", permissions: ["app.open"] };
@@ -150,6 +150,72 @@ test("input retargeting while mandate verification is pending cannot change the 
   const result = await execution;
   assert.equal(dispatchedTarget, "calculator");
   assert.equal(result.success, true);
+});
+
+test("strict computer action snapshots capability and resource before async target binding", async (t) => {
+  installMandateResponse(t);
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+  let releaseBinding;
+  let signalBindingStarted;
+  const bindingStarted = new Promise((resolve) => { signalBindingStarted = resolve; });
+  const options = strictOptions(async ({ resource }) => ({
+    verified: resource === "app://calculator",
+    evidence: { resource },
+  }));
+  options.verifyTargetBinding = () => new Promise((resolve) => {
+    releaseBinding = resolve;
+    signalBindingStarted();
+  });
+
+  const execution = executeAction(action.id, async (_input, context) => {
+    assert.equal(context.tool, "computer.app.open");
+    assert.equal(context.resource, "app://calculator");
+    return { success: false, verified: false };
+  }, options);
+
+  await bindingStarted;
+  action.tool = "computer.settings.open";
+  action.permission = "settings.open";
+  options.resource = "app://settings";
+  releaseBinding({ verified: true });
+  const result = await execution;
+
+  assert.equal(result.success, true, result.error);
+  assert.equal(action.verification.resource, "app://calculator");
+});
+
+test("strict computer undo uses a frozen target and independent postcondition verifier", async (t) => {
+  installMandateResponse(t);
+  clearActions();
+  const action = createAction({
+    title: "Open Calculator",
+    tool: "computer.app.open",
+    permission: "app.open",
+    riskLevel: "low",
+    input: { appId: "calculator" },
+    undo: { appId: "calculator" },
+  });
+  const executed = await executeAction(action.id, async () => ({ success: true, verified: true }), { user, confirmed: true });
+  assert.equal(executed.success, true);
+
+  let observedUndo = false;
+  const undo = await undoAction(action.id, async (undoInput, context) => {
+    assert.equal(Object.isFrozen(undoInput), true);
+    assert.equal(context.operation, undefined);
+    return { success: false, verified: false, claimedUndo: false };
+  }, strictOptions(async ({ input, operation, result, resource }) => {
+    observedUndo = true;
+    assert.equal(operation, "undo");
+    assert.equal(input.appId, "calculator");
+    assert.equal(resource, "app://calculator");
+    assert.deepEqual(result, { success: false, verified: false, claimedUndo: false });
+    return { verified: true, evidence: { appClosed: true } };
+  }));
+
+  assert.equal(undo.success, true, undo.error);
+  assert.equal(observedUndo, true);
+  assert.equal(action.status, "undone");
 });
 
 test("strict execution requires a resource-scoped mandate instead of a broad capability alone", async (t) => {
