@@ -25,4 +25,6 @@ This is a validation/metadata seam only. It does not execute training or verify 
 
 ## Reproducible verification
 
-The deterministic tests use fixture measurements and fake providers. They cover metadata/hash rejection, adapter manifest completeness, profile gates, fallback, cost-budget exhaustion, local-only selection, and inference-request privacy rejection. No LLM was run and no quality/latency result was measured.
+`HEY.modelPlatform.createEvaluationReport` summarizes at most 1,000 caller-supplied evaluation cases. It derives pass-rate quality, nearest-rank p50/p95/p99 latency, token totals, and cost from explicit per-million-token prices, and binds the summary to model revision/weight hash, suite/dataset revision, hardware label, timestamp, and run ID. It returns no per-case identifiers or content and its evaluation summary can be passed to `createModelRecord`. Inputs are observations supplied by the caller: the function does not execute a model, validate labels, authenticate measurements, or verify that a declared weight hash matches a file. Reports are therefore reproducible metadata, not independently verified benchmark evidence.
+
+The deterministic tests use fixture measurements and fake providers. They cover metadata/hash rejection, adapter manifest completeness, profile gates, fallback, cost-budget exhaustion, local-only selection, inference-request privacy rejection, and aggregation bounds/hostile inputs. No LLM was run and no quality/latency result was measured for a real model.

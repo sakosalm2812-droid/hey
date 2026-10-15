@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildTeacherLessonArtifact,
   exportTeacherLessonMarkdown,
+  saveTeacherLessonArtifact,
   verifyTeacherLessonArtifact,
 } from "../src/core/teacherExperience.js";
 
@@ -41,6 +42,71 @@ test("teacher workflow creates a scoped, provenance-bearing Forge-compatible exp
   assert.match(exported.content, /Teacher review required before classroom use: yes/);
   assert.ok(Object.isFrozen(artifact.content.activities[0]));
   assert.throws(() => { artifact.metadata.safety.reviewRequired = false; }, TypeError);
+});
+
+test("verified lessons are stored through the shared Forge artifact contract with scope and review provenance", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  let saved;
+  const result = await saveTeacherLessonArtifact(lesson, {
+    accountScope: "account:teacher-1",
+    workspaceId: "school-space",
+    currentAccountScope: "account:teacher-1",
+    currentWorkspaceId: "school-space",
+  }, {
+    createArtifact: async (input) => {
+      saved = input;
+      return { id: "forge-artifact-1", ...input, status: "draft" };
+    },
+  });
+
+  assert.equal(result.id, "forge-artifact-1");
+  assert.equal(saved.projectId, "school-space");
+  assert.equal(saved.type, "document");
+  assert.equal(saved.metadata.artifactContract, "hey.teacher.lesson.v1");
+  assert.equal(saved.metadata.accountScope, "account:teacher-1");
+  assert.equal(saved.metadata.workspaceId, "school-space");
+  assert.equal(saved.metadata.verification.contentDigest, lesson.metadata.verification.contentDigest);
+  assert.deepEqual(saved.tags, ["teacher", "lesson-plan"]);
+  assert.equal(saved.metadata.safety.teacherReviewRequiredBeforeUse, true);
+});
+
+test("shared artifact save rejects scope mismatches, tampering, and hostile context without persisting", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  let createCalls = 0;
+  const createArtifact = async () => { createCalls += 1; };
+  const context = {
+    accountScope: "account:teacher-1",
+    workspaceId: "school-space",
+    currentAccountScope: "account:teacher-1",
+    currentWorkspaceId: "school-space",
+  };
+  await assert.rejects(saveTeacherLessonArtifact(lesson, { ...context, currentAccountScope: "account:other" }, { createArtifact }), /must match the active context/);
+  await assert.rejects(saveTeacherLessonArtifact(lesson, { ...context, workspaceId: "personal-space" }, { createArtifact }), /must match the active context/);
+  await assert.rejects(saveTeacherLessonArtifact({ ...lesson, content: { ...lesson.content, title: "Edited after verification" } }, context, { createArtifact }), /Only a lesson artifact built in the active Teacher runtime/);
+
+  let getterCalled = false;
+  const hostileContext = { ...context };
+  Object.defineProperty(hostileContext, "currentWorkspaceId", { enumerable: true, get() { getterCalled = true; return "school-space"; } });
+  await assert.rejects(saveTeacherLessonArtifact(lesson, hostileContext, { createArtifact }), /failed verification/);
+  assert.equal(getterCalled, false);
+  assert.equal(createCalls, 0);
+
+  let optionGetterCalled = false;
+  const hostileOptions = {};
+  Object.defineProperty(hostileOptions, "createArtifact", { enumerable: true, get() { optionGetterCalled = true; return createArtifact; } });
+  await assert.rejects(saveTeacherLessonArtifact(lesson, context, hostileOptions), /failed verification/);
+  assert.equal(optionGetterCalled, false);
+  assert.equal(createCalls, 0);
+});
+
+test("shared artifact creation failures are returned to the caller", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  await assert.rejects(saveTeacherLessonArtifact(lesson, {
+    accountScope: "account:teacher-1",
+    workspaceId: "school-space",
+    currentAccountScope: "account:teacher-1",
+    currentWorkspaceId: "school-space",
+  }, { createArtifact: async () => { throw new Error("artifact service unavailable"); } }), /artifact service unavailable/);
 });
 
 test("teacher lesson artifact cannot be used across account or workspace boundaries", async () => {
