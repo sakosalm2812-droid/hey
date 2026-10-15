@@ -223,6 +223,7 @@ import { createSkill, listSkills, getSkill, updateSkill, runSkill } from "./skil
 import { createMorningBriefing } from "./briefingEngine.js";
 import { registerProvider, unregisterProvider, getProvider, listProviders, listModels, clearProviders } from "./providerRegistry.js";
 import { selectModel, createProviderPlan } from "./providerRouter.js";
+import { createModelRecord, createAdapterManifest, createInferenceRequest, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "./modelPlatform.js";
 import { 
   initializeComputerControl, 
   executeComputerControl, 
@@ -638,6 +639,14 @@ import {
       clear: clearProviders,
       select: selectModel,
       plan: createProviderPlan,
+    },
+
+    modelPlatform: {
+      createModelRecord,
+      createAdapterManifest,
+      createInferenceRequest,
+      profiles: INFERENCE_PROFILES,
+      openCandidates: OPEN_MODEL_CANDIDATES,
     },
 
     memoryInbox: {
