@@ -159,7 +159,16 @@ import { createLiveSession, startLiveSession, addLiveSource, switchLiveSource, r
 import { createDynamicIsland, getDynamicIsland, getDefaultDynamicIsland, listDynamicIslands, updateDynamicIslandSettings, addIslandActivity, updateIslandActivity, removeIslandActivity, dismissIslandActivity, pinIslandActivity, unpinIslandActivity, setIslandState, toggleIslandExpanded, handleIslandInteraction, addIslandModule, removeIslandModule, updateIslandModule, enableIslandModule, disableIslandModule, getVisibleIslandActivities, cleanupExpiredIslandActivities, completeIslandActivity, errorIslandActivity, destroyDynamicIsland, ISLAND_STATES, ACTIVITY_TYPES } from "./dynamicIsland.js";
 import { startBackgroundHelper, stopBackgroundHelper, pauseBackgroundHelper, resumeBackgroundHelper, getBackgroundHelperState, isBackgroundCapabilityEnabled, enableBackgroundCapability, disableBackgroundCapability, runBackgroundTask, cancelBackgroundTask, handleBackgroundCloseBehavior, HELPER_STATES, BACKGROUND_CAPABILITIES } from "./backgroundHelper.js";
 import { validateForgeArtifact, createForgePreview } from "./forgeEngine.js";
-import { buildTeacherLessonArtifact, verifyTeacherLessonArtifact, saveTeacherLessonArtifact, exportTeacherLessonMarkdown } from "./teacherExperience.js";
+import {
+  buildTeacherLessonArtifact,
+  verifyTeacherLessonArtifact,
+  saveTeacherLessonArtifact,
+  exportTeacherLessonMarkdown,
+  buildTeacherAssessmentArtifact,
+  verifyTeacherAssessmentArtifact,
+  saveTeacherAssessmentArtifact,
+  exportTeacherAssessmentMarkdown,
+} from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
 import { getDeviceId, getDeviceName, renameDevice, startFabric, listPeers, requestHandoff, getHandoffBundle, clearHandoffBundle, acceptHandoff, producePairCode, registerPairCode, getPairCode } from "./deviceFabric.js";
@@ -865,6 +874,10 @@ import {
       verifyLessonArtifact: verifyTeacherLessonArtifact,
       saveLessonArtifact: saveTeacherLessonArtifact,
       exportLessonMarkdown: exportTeacherLessonMarkdown,
+      buildAssessmentArtifact: buildTeacherAssessmentArtifact,
+      verifyAssessmentArtifact: verifyTeacherAssessmentArtifact,
+      saveAssessmentArtifact: saveTeacherAssessmentArtifact,
+      exportAssessmentMarkdown: exportTeacherAssessmentMarkdown,
     },
 
     live: {
