@@ -4,12 +4,16 @@ import test from "node:test";
 import {
   buildTeacherAssessmentArtifact,
   buildTeacherLessonArtifact,
+  buildTeacherWorksheetArtifact,
   exportTeacherAssessmentMarkdown,
   exportTeacherLessonMarkdown,
+  exportTeacherWorksheetMarkdown,
   saveTeacherAssessmentArtifact,
   saveTeacherLessonArtifact,
+  saveTeacherWorksheetArtifact,
   verifyTeacherAssessmentArtifact,
   verifyTeacherLessonArtifact,
+  verifyTeacherWorksheetArtifact,
 } from "../src/core/teacherExperience.js";
 import HEY from "../src/core/index.js";
 
@@ -45,6 +49,7 @@ const assessmentInput = (overrides = {}) => ({
     objective: "Place unit fractions on a number line",
     prompt: "Where does 1/4 belong on the number line?",
     expectedLearning: "Learner places 1/4 between 0 and 1/2 and explains why.",
+    teacherAnswer: "One quarter is one of four equal parts; mark it one quarter of the way from zero to one.",
     points: 2,
   }],
   createdAt: "2026-10-15T09:00:00.000Z",
@@ -154,7 +159,8 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
   });
   assert.equal(saved.projectId, "school-space");
   assert.equal(saved.metadata.artifactContract, "hey.teacher.assessment.v1");
-  assert.deepEqual(saved.tags, ["teacher", "assessment"]);
+  assert.equal(saved.metadata.audience, "teacher_only");
+  assert.deepEqual(saved.tags, ["teacher", "assessment", "answer-key"]);
   assert.equal(saved.metadata.safety.teacherReviewRequiredBeforeUse, true);
   await assert.rejects(saveTeacherAssessmentArtifact(assessment, teacherContext(), {
     createArtifact: async () => { throw new Error("Forge assessment store unavailable"); },
@@ -164,35 +170,87 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
     accountScope: "account:teacher-1",
     workspaceId: "school-space",
   });
-  assert.equal(exported.filename, "assessment.md");
+  assert.equal(exported.filename, "teacher-answer-key.md");
+  assert.match(exported.content, /teacher only; do not distribute/);
+  assert.match(exported.content, /One quarter is one of four equal parts/);
   assert.match(exported.content, /Teacher review required before classroom use: yes/);
   assert.match(exported.content, /Student personal data: not_collected/);
   assert.match(exported.content, /Success criteria:/);
   assert.equal(typeof HEY.teacher.buildAssessmentArtifact, "function");
   assert.equal(typeof HEY.teacher.saveAssessmentArtifact, "function");
   assert.equal(typeof HEY.teacher.exportAssessmentMarkdown, "function");
+  assert.equal(typeof HEY.teacher.buildWorksheetArtifact, "function");
+  assert.equal(typeof HEY.teacher.saveWorksheetArtifact, "function");
+  assert.equal(typeof HEY.teacher.exportWorksheetMarkdown, "function");
+  assert.equal(typeof HEY.teacher.exportAnswerKeyMarkdown, "function");
+
+  const worksheet = await buildTeacherWorksheetArtifact(assessment, teacherContext());
+  assert.equal((await verifyTeacherWorksheetArtifact(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  })).valid, true);
+  assert.equal(worksheet.metadata.audience, "student");
+  assert.deepEqual(Object.keys(worksheet.content.questions[0]).sort(), ["points", "prompt"]);
+  assert.doesNotMatch(JSON.stringify(worksheet), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
+  let savedWorksheet;
+  await saveTeacherWorksheetArtifact(worksheet, teacherContext(), {
+    createArtifact: async (input) => { savedWorksheet = input; return { id: "worksheet-forge-1", ...input }; },
+  });
+  assert.equal(savedWorksheet.metadata.artifactContract, "hey.teacher.worksheet.v1");
+  assert.equal(savedWorksheet.metadata.audience, "student");
+  assert.deepEqual(savedWorksheet.tags, ["teacher", "student-worksheet"]);
+  const worksheetExport = await exportTeacherWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  });
+  assert.equal(worksheetExport.filename, "student-worksheet.md");
+  assert.match(worksheetExport.content, /Where does 1\/4 belong/);
+  assert.doesNotMatch(worksheetExport.content, /One quarter is one of four equal parts|Learner places 1\/4|Success criteria|Answer:/);
+  assert.match(worksheetExport.content, /Curriculum alignment and factual claims: not independently verified/);
+  await assert.rejects(saveTeacherWorksheetArtifact(worksheet, { ...teacherContext(), currentAccountScope: "account:other" }, {
+    createArtifact: async () => { throw new Error("must not persist across accounts"); },
+  }), /must match the active context/);
+  await assert.rejects(saveTeacherWorksheetArtifact(worksheet, teacherContext(), {
+    createArtifact: async () => { throw new Error("worksheet Forge store unavailable"); },
+  }), /worksheet Forge store unavailable/);
+  const forgedWorksheet = { ...worksheet, content: { ...worksheet.content, questions: [{
+    ...worksheet.content.questions[0], teacherAnswer: "hidden key",
+  }] } };
+  assert.equal((await verifyTeacherWorksheetArtifact(forgedWorksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  })).valid, false);
+  await assert.rejects(exportTeacherWorksheetMarkdown(forgedWorksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  }), /Only a worksheet artifact built in the active Teacher runtime/);
 });
 
 test("assessment inputs reject student data, accessors, unsafe markup, and objectives outside the lesson", async () => {
   const lesson = await buildTeacherLessonArtifact(lessonInput());
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ studentAnswers: ["private"] }), teacherContext()), /Student personal data is not accepted/);
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
-    objective: "Other objective", prompt: "Question", expectedLearning: "Criteria", points: 1,
+    objective: "Other objective", prompt: "Question", expectedLearning: "Criteria", teacherAnswer: "Answer", points: 1,
   }] }), teacherContext()), /must target a lesson objective/);
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
-    objective: "Place unit fractions on a number line", prompt: "<script>alert(1)</script>", expectedLearning: "Criteria", points: 1,
+    objective: "Place unit fractions on a number line", prompt: "<script>alert(1)</script>", expectedLearning: "Criteria", teacherAnswer: "Answer", points: 1,
   }] }), teacherContext()), /cannot contain HTML or active markup/);
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
-    objective: "Place unit fractions on a number line", prompt: "Call student@example.org", expectedLearning: "Criteria", points: 1,
+    objective: "Place unit fractions on a number line", prompt: "Question", expectedLearning: "Criteria", teacherAnswer: "<img src=x onerror=alert(1)>", points: 1,
+  }] }), teacherContext()), /cannot contain HTML or active markup/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "Call student@example.org", expectedLearning: "Criteria", teacherAnswer: "Answer", points: 1,
   }] }), teacherContext()), /student contact information/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "Read this card", expectedLearning: "Criteria", teacherAnswer: "Student named Avery should choose one quarter.", points: 1,
+  }] }), teacherContext()), /student-identifying information/);
   const baseQuestion = assessmentInput().questions[0];
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: Array(21).fill(baseQuestion) }), teacherContext()), /at most 20 entries/);
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({
     questions: Array(11).fill({ ...baseQuestion, points: 10 }),
   }), teacherContext()), /total points cannot exceed 100/);
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
-    objective: "Place unit fractions on a number line", prompt: "[click](javascript:alert(1))", expectedLearning: "Criteria", points: 1,
+    objective: "Place unit fractions on a number line", prompt: "[click](javascript:alert(1))", expectedLearning: "Criteria", teacherAnswer: "Answer", points: 1,
   }] }), teacherContext()), /cannot contain HTML or active markup/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "Question", expectedLearning: "Criteria", teacherAnswer: "student@example.org", points: 1,
+  }] }), teacherContext()), /student contact information/);
 
   const questions = [];
   let arrayGetterCalled = false;
@@ -201,7 +259,7 @@ test("assessment inputs reject student data, accessors, unsafe markup, and objec
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions }), teacherContext()), /safe, bounded lesson and context data/);
   assert.equal(arrayGetterCalled, false);
   let promptGetterCalled = false;
-  const hostileQuestion = { objective: "Place unit fractions on a number line", expectedLearning: "Criteria", points: 1 };
+  const hostileQuestion = { objective: "Place unit fractions on a number line", expectedLearning: "Criteria", teacherAnswer: "Answer", points: 1 };
   Object.defineProperty(hostileQuestion, "prompt", { enumerable: true, get() { promptGetterCalled = true; return "Question"; } });
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [hostileQuestion] }), teacherContext()), /safe, bounded lesson and context data/);
   assert.equal(promptGetterCalled, false);
@@ -213,11 +271,11 @@ test("assessment scope, source integrity, and sensitive-topic review gates fail 
     learningObjectives: ["Recognize warning signs of self-harm and find support"],
   }));
   await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
-    objective: "Recognize warning signs of self-harm and find support", prompt: "Name a trusted adult", expectedLearning: "Identifies a support adult", points: 2,
+    objective: "Recognize warning signs of self-harm and find support", prompt: "Name a trusted adult", expectedLearning: "Identifies a support adult", teacherAnswer: "A trusted adult can help", points: 2,
   }] }), { ...teacherContext(), currentWorkspaceId: "personal-space" }), /must match the active context/);
 
   const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
-    objective: "Recognize warning signs of self-harm and find support", prompt: "Name a trusted adult", expectedLearning: "Identifies a support adult", points: 2,
+    objective: "Recognize warning signs of self-harm and find support", prompt: "Name a trusted adult", expectedLearning: "Identifies a support adult", teacherAnswer: "A trusted adult can help", points: 2,
   }] }), teacherContext());
   assert.deepEqual(assessment.metadata.safety.reviewReasons, ["self_harm"]);
   await assert.rejects(exportTeacherAssessmentMarkdown(assessment, {
@@ -232,6 +290,29 @@ test("assessment scope, source integrity, and sensitive-topic review gates fail 
     safetyReview: { accountScope: "account:teacher-1", workspaceId: "school-space", reviewerId: "teacher-1", reviewedAt: "2026-10-15T10:00:00.000Z" },
   });
   assert.match(reviewed.content, /Safety review recorded for account\/workspace by: teacher-1/);
+
+  const worksheet = await buildTeacherWorksheetArtifact(assessment, teacherContext());
+  assert.deepEqual(worksheet.metadata.safety.reviewReasons, ["self_harm"]);
+  await assert.rejects(exportTeacherWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  }), /safety review is required/);
+  await assert.rejects(exportTeacherWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+    safetyReview: { accountScope: "account:other", workspaceId: "school-space", reviewerId: "teacher-1", reviewedAt: "2026-10-15T10:00:00.000Z" },
+  }), /safety review is required/);
+  const reviewedWorksheet = await exportTeacherWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+    safetyReview: { accountScope: "account:teacher-1", workspaceId: "school-space", reviewerId: "teacher-1", reviewedAt: "2026-10-15T10:00:00.000Z" },
+  });
+  assert.match(reviewedWorksheet.content, /Required safety review is complete for this export: yes/);
+  assert.doesNotMatch(reviewedWorksheet.content, /A trusted adult can help|Identifies a support adult/);
+
+  const ordinaryLesson = await buildTeacherLessonArtifact(lessonInput());
+  const sensitiveAnswerKey = await buildTeacherAssessmentArtifact(ordinaryLesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "Provide an example.", expectedLearning: "Gives a relevant example.",
+    teacherAnswer: "This answer includes self-harm support guidance.", points: 1,
+  }] }), teacherContext());
+  assert.deepEqual(sensitiveAnswerKey.metadata.safety.reviewReasons, ["self_harm"]);
 
   const forged = { ...assessment, content: { ...assessment.content, questions: [{ ...assessment.content.questions[0], prompt: "Forged" }] } };
   const forgedVerification = await verifyTeacherAssessmentArtifact(forged, { accountScope: "account:teacher-1", workspaceId: "school-space" });
@@ -347,6 +428,7 @@ test("export treats teacher text as literal Markdown and cannot inject document 
 
 test("lesson planner rejects unsupported grade bands and overscheduled activities", async () => {
   await assert.rejects(buildTeacherLessonArtifact(lessonInput({ gradeBand: "preschool" })), /supported grade band/);
+  await assert.rejects(buildTeacherLessonArtifact(lessonInput({ subject: "S".repeat(121) })), /at most 120 characters/);
   await assert.rejects(buildTeacherLessonArtifact(lessonInput({ durationMinutes: 15 })), /exceed the lesson duration/);
   await assert.rejects(buildTeacherLessonArtifact(lessonInput({ resources: new Array(1) })), /cannot contain missing entries/);
   const accessorResources = [];
