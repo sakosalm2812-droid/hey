@@ -24,6 +24,29 @@ const algorithms = [
   ["indexed", selectUltraSparseExpertsIndexed],
   ["masked", selectUltraSparseExpertsMasked],
 ];
+const expectedOutputs = new Map(workload.map((query) => [query, selectUltraSparseExperts(query)]));
+const equivalentCalls = Object.fromEntries(algorithms.map(([name]) => [name, 0]));
+
+function outputsEqual(actual, expected) {
+  if (!actual || typeof actual !== "object" || Object.keys(actual).length !== 4) return false;
+  if (actual.status !== expected.status || actual.truncated !== expected.truncated) return false;
+  if (!Array.isArray(actual.experts) || actual.experts.length !== expected.experts.length) return false;
+  if (!Array.isArray(actual.matchedTerms) || actual.matchedTerms.length !== expected.matchedTerms.length) return false;
+  for (let index = 0; index < actual.experts.length; index += 1) {
+    if (actual.experts[index]?.id !== expected.experts[index].id || actual.experts[index]?.score !== expected.experts[index].score) return false;
+  }
+  for (let index = 0; index < actual.matchedTerms.length; index += 1) {
+    if (actual.matchedTerms[index]?.expert !== expected.matchedTerms[index].expert || actual.matchedTerms[index]?.term !== expected.matchedTerms[index].term) return false;
+  }
+  return true;
+}
+
+function verifyOutput(name, query, output) {
+  if (!outputsEqual(output, expectedOutputs.get(query))) {
+    throw new Error(`Selector output mismatch: ${name}`);
+  }
+  equivalentCalls[name] += 1;
+}
 
 function summarize(samplesNs) {
   const sorted = [...samplesNs].sort((left, right) => left - right);
@@ -41,7 +64,7 @@ const memoryBefore = process.memoryUsage();
 for (let trial = 0; trial < trials; trial += 1) {
   for (let index = 0; index < warmup; index += 1) {
     const query = workload[index % workload.length];
-    for (const [, select] of algorithms) select(query);
+    for (const [name, select] of algorithms) verifyOutput(name, query, select(query));
   }
   for (let index = 0; index < samplesPerTrial; index += 1) {
     const query = workload[(trial * samplesPerTrial + index) % workload.length];
@@ -49,8 +72,11 @@ for (let trial = 0; trial < trials; trial += 1) {
     const order = [...algorithms.slice(offset), ...algorithms.slice(0, offset)];
     for (const [name, select] of order) {
       const started = process.hrtime.bigint();
-      select(query);
-      selectionSamplesNs[name].push(Number(process.hrtime.bigint() - started));
+      const output = select(query);
+      const elapsedNs = Number(process.hrtime.bigint() - started);
+      selectionSamplesNs[name].push(elapsedNs);
+      // Consume and compare the exact timed result after stopping the timer.
+      verifyOutput(name, query, output);
     }
   }
 }
@@ -88,6 +114,13 @@ const report = {
       description: "Use a prebuilt token-to-expert bit-mask index with fixed per-expert accumulators.",
       perOperationSelectionLatency: summarize(selectionSamplesNs.masked),
     },
+  },
+  correctness: {
+    baseline: "linear",
+    outputEquivalent: true,
+    comparedAfterTimer: true,
+    checkedCallsPerAlgorithm: equivalentCalls.linear,
+    checkedCalls: equivalentCalls,
   },
   selectionOnly: true,
   modelLoadingIncluded: false,

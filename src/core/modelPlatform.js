@@ -1,5 +1,7 @@
 const HASH_PATTERN = /^[a-f0-9]{64}$/i;
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,199}$/;
+const MAX_EVALUATION_CASES = 1_000;
+const MAX_CASE_LATENCY_MS = 3_600_000;
 
 export const INFERENCE_PROFILES = Object.freeze({
   fast: Object.freeze({
@@ -114,6 +116,109 @@ function snapshotObject(value, label) {
   const snapshot = snapshotData(value, label);
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new TypeError(`${label} must be a plain object.`);
   return snapshot;
+}
+
+function requireFiniteNonNegative(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new TypeError(`${label} must be a finite non-negative number.`);
+  }
+  return value;
+}
+
+function requireCanonicalTimestamp(value, label) {
+  const timestamp = requireText(value, label);
+  const date = Date.parse(timestamp);
+  if (!Number.isFinite(date) || new Date(date).toISOString() !== timestamp) {
+    throw new TypeError(`${label} must be canonical ISO-8601 UTC.`);
+  }
+  return timestamp;
+}
+
+function percentileNearestRank(sortedValues, percentile) {
+  return sortedValues[Math.max(0, Math.ceil(percentile * sortedValues.length) - 1)];
+}
+
+/**
+ * Derive content-free quality, latency, usage, and cost evidence from one
+ * bounded evaluation run. The inputs are observations supplied by the caller;
+ * this function does not execute a model or verify their external origin.
+ */
+export function createEvaluationReport(input) {
+  const source = snapshotObject(input, "Evaluation run");
+  const model = snapshotObject(source.model, "Evaluation model");
+  const modelId = requireText(model.id, "Evaluation model id");
+  if (!MODEL_ID_PATTERN.test(modelId)) throw new TypeError("Evaluation model id has an unsupported format.");
+  const modelRevision = requireText(model.revision, "Immutable evaluation model revision");
+  if (/^(main|master|latest|stable)$/i.test(modelRevision)) throw new TypeError("Evaluation model revision must be immutable.");
+  const modelWeightSha256 = requireHash(model.weightSha256, "Evaluation model weight hash");
+  const suite = requireText(source.suite, "Evaluation suite");
+  const suiteRevision = requireText(source.suiteRevision, "Evaluation suite revision");
+  const datasetSha256 = requireHash(source.datasetSha256, "Evaluation dataset hash");
+  const evaluatedAt = requireCanonicalTimestamp(source.evaluatedAt, "Evaluation timestamp");
+  const hardware = requireText(source.hardware, "Evaluation hardware");
+  const runId = requireText(source.runId, "Evaluation run id");
+  const pricing = snapshotObject(source.pricing, "Evaluation pricing");
+  const inputUsdPerMillion = requireFiniteNonNegative(pricing.inputUsdPerMillion, "Input token price");
+  const outputUsdPerMillion = requireFiniteNonNegative(pricing.outputUsdPerMillion, "Output token price");
+  if (!Array.isArray(source.samples) || source.samples.length === 0 || source.samples.length > MAX_EVALUATION_CASES) {
+    throw new TypeError(`Evaluation samples must contain between 1 and ${MAX_EVALUATION_CASES} cases.`);
+  }
+
+  const caseIds = new Set();
+  let passedCount = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const latencies = [];
+  for (const sample of source.samples) {
+    const entry = snapshotObject(sample, "Evaluation sample");
+    const caseId = requireText(entry.caseId, "Evaluation case id");
+    if (caseIds.has(caseId)) throw new TypeError("Evaluation case ids must be unique.");
+    caseIds.add(caseId);
+    if (typeof entry.passed !== "boolean") throw new TypeError("Evaluation case passed must be a boolean verdict.");
+    if (entry.passed) passedCount += 1;
+    if (typeof entry.latencyMs !== "number" || !Number.isFinite(entry.latencyMs) || entry.latencyMs <= 0 || entry.latencyMs > MAX_CASE_LATENCY_MS) {
+      throw new TypeError("Evaluation case latencyMs must be positive, finite, and at most one hour.");
+    }
+    for (const [field, label] of [["inputTokens", "Input tokens"], ["outputTokens", "Output tokens"]]) {
+      if (!Number.isSafeInteger(entry[field]) || entry[field] < 0) throw new TypeError(`${label} must be a non-negative safe integer.`);
+    }
+    inputTokens += entry.inputTokens;
+    outputTokens += entry.outputTokens;
+    if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) throw new TypeError("Evaluation token totals exceed the safe integer range.");
+    latencies.push(entry.latencyMs);
+  }
+
+  latencies.sort((left, right) => left - right);
+  const totalCostUsd = (inputTokens * inputUsdPerMillion + outputTokens * outputUsdPerMillion) / 1_000_000;
+  if (!Number.isFinite(totalCostUsd)) throw new TypeError("Evaluation cost is outside the supported numeric range.");
+  const sampleCount = source.samples.length;
+  const evaluation = Object.freeze({
+    suite,
+    suiteRevision,
+    datasetSha256,
+    evaluatedAt,
+    qualityScore: passedCount / sampleCount,
+    latencyP95Ms: percentileNearestRank(latencies, 0.95),
+    hardware,
+    runId,
+  });
+  return Object.freeze({
+    schemaVersion: 1,
+    modelId,
+    modelRevision,
+    modelWeightSha256,
+    evaluation,
+    sampleCount,
+    passedCount,
+    failedCount: sampleCount - passedCount,
+    latencyP50Ms: percentileNearestRank(latencies, 0.5),
+    latencyP95Ms: evaluation.latencyP95Ms,
+    latencyP99Ms: percentileNearestRank(latencies, 0.99),
+    inputTokens,
+    outputTokens,
+    totalCostUsd,
+    averageCostUsd: totalCostUsd / sampleCount,
+  });
 }
 
 /** Validate and freeze reproducible model/version/evaluation metadata. */

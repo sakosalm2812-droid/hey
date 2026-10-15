@@ -11,6 +11,7 @@ export const FUSION_MODES = Object.freeze({
 const MAX_MODELS = 2;
 const MAX_PROMPT_CHARS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
+const MAX_CONFLICTS = 16;
 
 function result(status, details = {}) {
   return { status, ...details };
@@ -93,22 +94,36 @@ function deepFreeze(value) {
 function findConflicts(outputs) {
   const claims = new Map();
   const conflicts = [];
+  const reportedClaims = new Set();
+  let truncated = false;
   for (const { providerId, evidence } of outputs) {
     for (const item of evidence) {
       const key = item.claimId.toLocaleLowerCase("en-US");
-      const previous = claims.get(key);
-      if (previous && !Object.is(previous.value, item.value)) {
-        conflicts.push({
-          claimId: item.claimId,
-          first: { providerId: previous.providerId, value: previous.value, source: previous.source },
-          second: { providerId, value: item.value, source: item.source },
-        });
-      } else if (!previous) {
-        claims.set(key, { providerId, value: item.value, source: item.source });
+      let providerClaims = claims.get(key);
+      if (!providerClaims) {
+        providerClaims = new Map();
+        claims.set(key, providerClaims);
+      }
+      // Repeated evidence from one provider is not independent corroboration and
+      // must not multiply the conflict report for the same claim.
+      if (providerClaims.has(providerId)) continue;
+      const previous = Array.from(providerClaims.values())[0];
+      providerClaims.set(providerId, { providerId, value: item.value, source: item.source });
+      if (previous && !Object.is(previous.value, item.value) && !reportedClaims.has(key)) {
+        reportedClaims.add(key);
+        if (conflicts.length < MAX_CONFLICTS) {
+          conflicts.push({
+            claimId: item.claimId,
+            first: { providerId: previous.providerId, value: previous.value, source: previous.source },
+            second: { providerId, value: item.value, source: item.source },
+          });
+        } else {
+          truncated = true;
+        }
       }
     }
   }
-  return conflicts;
+  return { conflicts, truncated };
 }
 
 function eligibleModels(mode, models, { manualProvider, permissions, sensitive }) {
@@ -261,7 +276,7 @@ export async function runProviderFusion({
   }
 
   if (!outputs.length) return result("provider_unavailable", { calls: dispatchedCalls, reservedCostUsd });
-  const conflicts = findConflicts(outputs);
+  const { conflicts, truncated: conflictsTruncated } = findConflicts(outputs);
   const independentlyChecked = outputs.length > 1;
   if (conflicts.length) {
     return result("conflict", {
@@ -269,6 +284,7 @@ export async function runProviderFusion({
       reason: "providers_disagree",
       evidence: outputs.flatMap(({ providerId, evidence }) => evidence.map((item) => ({ ...item, providerId }))),
       conflicts,
+      conflictsTruncated,
       confidence: Math.min(...outputs.map((output) => output.confidence)),
       independentlyChecked,
       providers: outputs.map(({ providerId, modelId }) => ({ providerId, modelId })),
