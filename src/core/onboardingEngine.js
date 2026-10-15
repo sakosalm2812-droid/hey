@@ -2,7 +2,7 @@ import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { setSetting } from "./settingsRegistry.js";
 import { safeStorage } from "../lib/safeStorage.js";
-import { getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
+import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 
 const ONBOARDING_STAGES = Object.freeze({
   WELCOME: "welcome",
@@ -93,11 +93,62 @@ const PRACTICE_TASKS = [
 
 const STORAGE_KEY = "hey_onboarding_progress";
 const TUTORIAL_STORAGE_KEY = "hey_tutorial_progress";
+const MAX_ONBOARDING_STORAGE_CHARS = 100_000;
+
+export const ONBOARDING_MOTIVATIONS = Object.freeze([
+  Object.freeze({ id: "organize_work", label: "Organize my work" }),
+  Object.freeze({ id: "save_time", label: "Save time on routine tasks" }),
+  Object.freeze({ id: "manage_personal", label: "Manage personal responsibilities" }),
+  Object.freeze({ id: "learn", label: "Learn and explore" }),
+  Object.freeze({ id: "create", label: "Create and brainstorm" }),
+  Object.freeze({ id: "coordinate", label: "Communicate and coordinate" }),
+  Object.freeze({ id: "accessibility", label: "Make tools easier to use" }),
+  Object.freeze({ id: "privacy", label: "Keep control of my information" }),
+]);
+
+const VALID_ONBOARDING_MOTIVATIONS = new Set(ONBOARDING_MOTIVATIONS.map(({ id }) => id));
+const STARTER_SUGGESTIONS = Object.freeze([
+  Object.freeze({ id: "personal", label: "Personal" }),
+  Object.freeze({ id: "work", label: "Work" }),
+  Object.freeze({ id: "learning", label: "Learning" }),
+]);
+const MOTIVATION_STARTER_WEIGHTS = Object.freeze({
+  organize_work: Object.freeze({ work: 3 }),
+  save_time: Object.freeze({ personal: 1, work: 1, learning: 1 }),
+  manage_personal: Object.freeze({ personal: 3 }),
+  learn: Object.freeze({ learning: 3 }),
+  create: Object.freeze({ learning: 2, work: 1 }),
+  coordinate: Object.freeze({ work: 2, personal: 1 }),
+  accessibility: Object.freeze({ personal: 1, work: 1, learning: 1 }),
+  privacy: Object.freeze({ personal: 1, work: 1, learning: 1 }),
+});
 
 const VALID_ONBOARDING_STAGES = new Set([...Object.values(ONBOARDING_STAGES)]);
 const VALID_PRACTICE_TASK_IDS = new Set(PRACTICE_TASKS.map(({ id }) => id));
 const MAX_STARTER_SPACE_SELECTIONS = 12;
 const STARTER_SPACE_ID = /^[a-z0-9][a-z0-9_-]{0,47}$/i;
+
+function normalizeMotivationSelections(value) {
+  try {
+    if (!Array.isArray(value)) return null;
+    if (Object.getPrototypeOf(value) !== Array.prototype) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.getOwnPropertySymbols(value).length > 0) return null;
+    const length = descriptors.length?.value;
+    if (!Number.isInteger(length) || length < 0 || length > ONBOARDING_MOTIVATIONS.length) return null;
+    if (Object.keys(descriptors).some((key) => key !== "length" && (!/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= length))) return null;
+    const result = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[index];
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+      if (typeof descriptor.value !== "string" || !VALID_ONBOARDING_MOTIVATIONS.has(descriptor.value) || result.includes(descriptor.value)) return null;
+      result.push(descriptor.value);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
 
 function createInitialProgress() {
   return {
@@ -111,6 +162,7 @@ function createInitialProgress() {
     locale: "en",
     accessibility: {},
     starterSpaceSelections: [],
+    motivationSelections: [],
     dismissedSuggestions: new Set(),
   };
 }
@@ -139,6 +191,7 @@ function normalizeProgress(value) {
     starterSpaceSelections: Array.isArray(value.starterSpaceSelections)
       ? [...new Set(value.starterSpaceSelections.filter((id) => typeof id === "string" && STARTER_SPACE_ID.test(id)))].slice(0, MAX_STARTER_SPACE_SELECTIONS)
       : [],
+    motivationSelections: normalizeMotivationSelections(value.motivationSelections) || [],
     dismissedSuggestions: new Set(strings(value.dismissedSuggestions)),
   };
 }
@@ -147,8 +200,10 @@ export class OnboardingEngine {
   constructor() {
     this.progress = createInitialProgress();
     this.listeners = new Set();
+    this.accountScope = getAccountScope();
     this.load();
-    this.unsubscribeAccountScope = subscribeAccountScope(() => {
+    this.unsubscribeAccountScope = subscribeAccountScope((_previousScope, nextScope) => {
+      this.accountScope = nextScope;
       this.load();
       this.notify("account_scope_changed", this.getProgress());
     });
@@ -188,9 +243,10 @@ export class OnboardingEngine {
   }
 
   load() {
+    this.accountScope = getAccountScope();
     try {
-      const stored = safeStorage.getItem(getAccountStorageKey(STORAGE_KEY));
-      if (stored) {
+      const stored = safeStorage.getItem(getAccountStorageKey(STORAGE_KEY, this.accountScope));
+      if (typeof stored === "string" && stored.length <= MAX_ONBOARDING_STORAGE_CHARS) {
         const parsed = JSON.parse(stored);
         this.progress = normalizeProgress(parsed);
       } else this.progress = createInitialProgress();
@@ -203,14 +259,24 @@ export class OnboardingEngine {
   save() {
     try {
       const data = { ...this.progress, dismissedSuggestions: Array.from(this.progress.dismissedSuggestions) };
-      safeStorage.setItem(getAccountStorageKey(STORAGE_KEY), JSON.stringify(data));
+      const serialized = JSON.stringify(data);
+      const scope = this.accountScope;
+      if (scope !== getAccountScope()) return { success: false, status: "account_scope_changed" };
+      if (serialized.length > MAX_ONBOARDING_STORAGE_CHARS) return { success: false, status: "too_large" };
+      const key = getAccountStorageKey(STORAGE_KEY, scope);
+      safeStorage.setItem(key, serialized);
+      if (scope !== getAccountScope() || safeStorage.getItem(key) !== serialized) {
+        return { success: false, status: scope !== getAccountScope() ? "account_scope_changed" : "readback_failed" };
+      }
+      return { success: true };
     } catch (err) {
       console.warn("Failed to save onboarding progress:", err);
+      return { success: false, status: "storage_error" };
     }
   }
 
   getProgress() {
-    return { ...this.progress, completedStages: [...this.progress.completedStages], skippedStages: [...this.progress.skippedStages], accessibility: { ...this.progress.accessibility }, starterSpaceSelections: [...this.progress.starterSpaceSelections], dismissedSuggestions: new Set(this.progress.dismissedSuggestions) };
+    return { ...this.progress, completedStages: [...this.progress.completedStages], skippedStages: [...this.progress.skippedStages], accessibility: { ...this.progress.accessibility }, starterSpaceSelections: [...this.progress.starterSpaceSelections], motivationSelections: [...this.progress.motivationSelections], dismissedSuggestions: new Set(this.progress.dismissedSuggestions) };
   }
 
   getCurrentStage() {
@@ -327,6 +393,39 @@ export class OnboardingEngine {
     return [...normalized];
   }
 
+  setMotivations(motivationIds) {
+    const normalized = normalizeMotivationSelections(motivationIds);
+    if (!normalized) return { error: "Choose up to eight valid, unique motivations" };
+    const previous = this.progress.motivationSelections;
+    const scope = this.accountScope;
+    this.progress.motivationSelections = normalized;
+    const result = this.save();
+    if (!result.success) {
+      if (scope === this.accountScope && scope === getAccountScope()) this.progress.motivationSelections = previous;
+      return { error: "Could not safely save motivations", status: result.status };
+    }
+    this.notify("motivations_updated", this.getProgress());
+    return [...normalized];
+  }
+
+  getMotivations() {
+    return [...this.progress.motivationSelections];
+  }
+
+  rankStarterSuggestions(motivationIds = this.progress.motivationSelections) {
+    const normalized = normalizeMotivationSelections(motivationIds) || [];
+    const scores = new Map(STARTER_SUGGESTIONS.map(({ id }) => [id, 0]));
+    for (const motivationId of normalized) {
+      for (const [suggestionId, weight] of Object.entries(MOTIVATION_STARTER_WEIGHTS[motivationId])) {
+        scores.set(suggestionId, scores.get(suggestionId) + weight);
+      }
+    }
+    return STARTER_SUGGESTIONS
+      .map((suggestion, originalIndex) => ({ ...suggestion, score: scores.get(suggestion.id), originalIndex }))
+      .sort((a, b) => b.score - a.score || a.originalIndex - b.originalIndex)
+      .map(({ originalIndex, ...suggestion }) => suggestion);
+  }
+
   selectPracticeTask(taskId) {
     const task = PRACTICE_TASKS.find(t => t.id === taskId);
     if (!task) return { error: "Invalid practice task" };
@@ -364,6 +463,8 @@ export class OnboardingEngine {
       practiceTaskCompleted: false,
       locale: "en",
       accessibility: {},
+      starterSpaceSelections: [],
+      motivationSelections: [],
       dismissedSuggestions: new Set(),
     };
     this.save();
@@ -536,6 +637,18 @@ export function setOnboardingStarterSpaces(spaceIds) {
 
 export function getOnboardingStarterSpaces() {
   return onboardingEngine.getProgress().starterSpaceSelections;
+}
+
+export function setOnboardingMotivations(motivationIds) {
+  return onboardingEngine.setMotivations(motivationIds);
+}
+
+export function getOnboardingMotivations() {
+  return onboardingEngine.getMotivations();
+}
+
+export function rankOnboardingStarterSuggestions(motivationIds) {
+  return onboardingEngine.rankStarterSuggestions(motivationIds);
 }
 
 export function selectPracticeTask(taskId) {
