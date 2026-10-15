@@ -179,7 +179,7 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   assert.equal(report.inferenceIncluded, false);
   assert.equal(report.performanceClaims.subMillisecondTargetVerified, false);
   assert.equal(report.performanceClaims.endToEndSubMillisecondTargetVerified, false);
-  assert.ok(Array.isArray(report.performanceClaims.linearReferenceCatalogCountsOver1ms));
+  assert.deepEqual(report.performanceClaims.linearReferenceCatalogCountsOver1ms, []);
   assert.match(report.performanceClaims.verificationScope, /every full-mode trial/);
   assert.equal(report.algorithms.linear.p95MicrosecondsByTrial.length, 1);
   assert.equal(report.algorithms.linear.perOperationSelectionLatency.samples, 50);
@@ -202,7 +202,12 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   assert.equal(report.scalingBenchmarks.catalogPreparationIncludedInSelectionLatency, false);
   assert.equal(report.scalingBenchmarks.indexedCandidatePreparationIncludedInSelectionLatency, false);
   assert.deepEqual(report.scalingBenchmarks.results.map(({ expertCount }) => expertCount), [5, 20, 100]);
-  const stableScalingFingerprint = (results) => results.map(({ expertCount, catalogSha256, querySha256 }) => ({ expertCount, catalogSha256, querySha256 }));
+  const stableScalingFingerprint = (results) => results.map(({ expertCount, catalogSha256, querySha256, cases }) => ({
+    expertCount,
+    catalogSha256,
+    querySha256,
+    cases: cases.map(({ name, querySha256 }) => ({ name, querySha256 })),
+  }));
   assert.deepEqual(
     stableScalingFingerprint(repeatedReport.scalingBenchmarks.results),
     stableScalingFingerprint(report.scalingBenchmarks.results),
@@ -210,18 +215,42 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   assert.deepEqual(stableScalingFingerprint(report.scalingBenchmarks.results), [
     {
       expertCount: 5,
-      catalogSha256: "7a2e9de2f14b605e4c1bacd8bf20cc529cf0dc9c1142a5c0f8b4bd6e7f091f58",
-      querySha256: "dca28004136f24d73e4bf9b371c3ed3ef3cd8052dd15f681365c918a0a36a886",
+      catalogSha256: "59e46c88e6d557bfd90541c34d86df2a748c672a8cd4f64368de5b301347d2d9",
+      querySha256: "61feabbab5005dc1f705fc3fbf533e41964a47458cbcedc0ec1ed95a4a8a19ce",
+      cases: [
+        { name: "sparsePair", querySha256: "0a2b1afc3d2b901b0eef1bfd6009dc8738511d1401ef3d323322cb32d185d9d7" },
+        { name: "skewedRelevance", querySha256: "2b9f311bdf533e581c69f721b30f7053bd62cb77e38561f3d4b3002422da0684" },
+        { name: "duplicateTerms", querySha256: "a26c7848bb529a0bb122b51e3d40814ae43d18dace4a53f287197a8c7f7c8c54" },
+        { name: "nearDuplicateTerms", querySha256: "3e94b78086fbae26fe1cad4d781d9271125ff129a7b70155ddd7892fcaa60c30" },
+        { name: "noMatch", querySha256: "c97e671f6d24d36e01b0b0eee8a64bcf8bb01e2c5f95f73e3b61c03c3192fbf0" },
+        { name: "hostileBoundary", querySha256: "4b73d4c1dd32e0a7cb3ee5a2fa7b2fff8cf2eb5fd1168725777c147b45bc563b" },
+      ],
     },
     {
       expertCount: 20,
-      catalogSha256: "87b7e5c4f60daf3a1ee623a5f51635e005ceca3c77fd6ff7cb27ee93aaa0ad8d",
-      querySha256: "c78854c366ec131c99793d53315cc5bc5cef5a9211394c6b0a4af1ab4ad3f83f",
+      catalogSha256: "01c9f88b5d6292763b6b6bd291d7306e65076fcb674ac32a7b8d76a54804ddb2",
+      querySha256: "eb98e494984e8fad059b856f73d893efeea45d5662a30721652b0b5ecb857daa",
+      cases: [
+        { name: "sparsePair", querySha256: "1725ef8ef92430a0ca0dcd9833d245cc2fdf6f0638edae132419a7d5641c43fe" },
+        { name: "skewedRelevance", querySha256: "2b9f311bdf533e581c69f721b30f7053bd62cb77e38561f3d4b3002422da0684" },
+        { name: "duplicateTerms", querySha256: "a26c7848bb529a0bb122b51e3d40814ae43d18dace4a53f287197a8c7f7c8c54" },
+        { name: "nearDuplicateTerms", querySha256: "3e94b78086fbae26fe1cad4d781d9271125ff129a7b70155ddd7892fcaa60c30" },
+        { name: "noMatch", querySha256: "c97e671f6d24d36e01b0b0eee8a64bcf8bb01e2c5f95f73e3b61c03c3192fbf0" },
+        { name: "hostileBoundary", querySha256: "7ce845fe0f85068bd2c3d96cf9dbb29465c64b7b567d3b220daf4ad022404328" },
+      ],
     },
     {
       expertCount: 100,
-      catalogSha256: "3703da65b2ae2ed9b1f1c4a92468affe8b8fd101c6c815048d3d24fdfce4b275",
-      querySha256: "6eaacb15a0226e0e891c18420145548ceb41accaa6df2714cc8e8d335fb955d5",
+      catalogSha256: "62e954963b3f90542007c7a18c7a2c7ab6b00abb448d515cff7edd63e73796ff",
+      querySha256: "304c88ce267fd432e9d66aec12d4feab33c06f4d8819d4fdb11f063147e22d5c",
+      cases: [
+        { name: "sparsePair", querySha256: "633f4ecdebe639c7229501a54e098650f8a70576bd06346132675f5ced327ac7" },
+        { name: "skewedRelevance", querySha256: "2b9f311bdf533e581c69f721b30f7053bd62cb77e38561f3d4b3002422da0684" },
+        { name: "duplicateTerms", querySha256: "a26c7848bb529a0bb122b51e3d40814ae43d18dace4a53f287197a8c7f7c8c54" },
+        { name: "nearDuplicateTerms", querySha256: "3e94b78086fbae26fe1cad4d781d9271125ff129a7b70155ddd7892fcaa60c30" },
+        { name: "noMatch", querySha256: "c97e671f6d24d36e01b0b0eee8a64bcf8bb01e2c5f95f73e3b61c03c3192fbf0" },
+        { name: "hostileBoundary", querySha256: "228188926767cea0c17732284004a96a43998ab3c7779a5c7bc5ac0289dbc0bd" },
+      ],
     },
   ]);
   assert.deepEqual(report.scalingBenchmarks.results.map(({ adaptivePath }) => adaptivePath), [
@@ -231,15 +260,38 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   ]);
   for (const scaling of report.scalingBenchmarks.results) {
     assert.equal(scaling.termsPerExpert, 8);
-    assert.equal(scaling.matchedExpertsPerQuery, 2);
+    assert.equal(scaling.workloadCaseCount, 6);
+    assert.equal(scaling.samplesPerCasePerTrial, 10);
     assert.ok(Number.isFinite(scaling.catalogConstructionMicroseconds));
     assert.ok(Number.isFinite(scaling.indexedCandidatePreparationMicroseconds));
     assert.ok(scaling.estimatedBreakEvenSelectionsAtP50 === null || Number.isInteger(scaling.estimatedBreakEvenSelectionsAtP50));
     assert.equal(scaling.correctness.outputEquivalent, true);
     assert.equal(scaling.correctness.comparedAfterTimer, true);
-    assert.deepEqual(scaling.correctness.checkedCalls, { linear: 70, indexedCandidates: 70, adaptive: 70 });
+    assert.deepEqual(scaling.correctness.checkedCalls, { linear: 90, indexedCandidates: 90, adaptive: 90 });
     assert.ok(Number.isFinite(scaling.linear.p50Microseconds));
     assert.ok(Number.isFinite(scaling.indexedCandidates.p95Microseconds));
     assert.equal(scaling.adaptivePathP95PerTrialMicroseconds.length, 1);
+    assert.deepEqual(scaling.cases.map(({ name }) => name), [
+      "sparsePair",
+      "skewedRelevance",
+      "duplicateTerms",
+      "nearDuplicateTerms",
+      "noMatch",
+      "hostileBoundary",
+    ]);
+    for (const workloadCase of scaling.cases) {
+      assert.equal(workloadCase.correctness.outputEquivalent, true);
+      assert.equal(workloadCase.correctness.comparedAfterTimer, true);
+      assert.deepEqual(workloadCase.correctness.checkedCalls, { linear: 15, indexedCandidates: 15, adaptive: 15 });
+      assert.ok(Number.isFinite(workloadCase.linear.p50Microseconds));
+      assert.ok(Number.isFinite(workloadCase.indexedCandidates.p95Microseconds));
+      assert.equal(workloadCase.adaptivePathP95PerTrialMicroseconds.length, 1);
+      assert.ok(workloadCase.queryUtf8Bytes >= 0);
+    }
+    const noMatchCase = scaling.cases.find(({ name }) => name === "noMatch");
+    const hostileCase = scaling.cases.find(({ name }) => name === "hostileBoundary");
+    assert.equal(noMatchCase.expectedStatus, "no_match");
+    assert.equal(hostileCase.expectedStatus, "no_match");
+    assert.equal(hostileCase.expectedTruncated, true);
   }
 });

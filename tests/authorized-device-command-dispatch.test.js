@@ -161,6 +161,11 @@ test("inputs stay bound across awaits, device revocation is rechecked, duplicate
   assert.equal(first.enqueued, true);
   assert.equal(changed.queueCalls[0][1], deviceId);
   assert.equal(changed.queueCalls[0][3].input.url, resource);
+  assert.deepEqual(changed.queueCalls[0][4], {
+    mandateIds: [mandate.payload.id],
+    expiresAt: mandate.payload.expiresAt,
+    revocationEpoch: mandate.payload.revocationEpoch,
+  });
 
   const raceStore = durableStore();
   const revokedDuringAwait = dependencies({ store: raceStore, deviceUnavailableOnSecondRead: true });

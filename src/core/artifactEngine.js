@@ -1,6 +1,7 @@
 import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { supabaseClient } from "../lib/supabase.js";
+import { canReadTeacherArtifact } from "./teacherArtifactAccess.js";
 
 const ARTIFACT_TYPES = [
   "image",
@@ -92,7 +93,8 @@ class ArtifactEngine {
 
   async getArtifact(artifactId) {
     if (this.artifacts.has(artifactId)) {
-      return this.artifacts.get(artifactId);
+      const cached = this.artifacts.get(artifactId);
+      return await canReadTeacherArtifact(cached) ? cached : null;
     }
 
     try {
@@ -104,6 +106,7 @@ class ArtifactEngine {
 
       if (data) {
         const artifact = this.deserializeArtifact(data);
+        if (!await canReadTeacherArtifact(artifact)) return null;
         this.artifacts.set(artifactId, artifact);
         return artifact;
       }
@@ -352,6 +355,7 @@ class ArtifactEngine {
   }
 
   async getVersion(artifactId, versionId) {
+    if (!await this.getArtifact(artifactId)) return null;
     try {
       const { data } = await supabaseClient
         .from('hey_artifact_versions')
@@ -361,7 +365,11 @@ class ArtifactEngine {
         .single();
 
       if (data) {
-        return this.deserializeVersion(data);
+        const version = this.deserializeVersion(data);
+        const parent = await this.getArtifact(artifactId);
+        const accessRecord = { content: version.content, metadata: { ...parent?.metadata, ...version.metadata } };
+        if (!parent || !await canReadTeacherArtifact(accessRecord)) return null;
+        return version;
       }
     } catch (err) {
       console.warn('Failed to load version:', err);
@@ -370,6 +378,7 @@ class ArtifactEngine {
   }
 
   async getVersionHistory(artifactId, limit = 50) {
+    if (!await this.getArtifact(artifactId)) return [];
     try {
       const { data } = await supabaseClient
         .from('hey_artifact_versions')
@@ -378,7 +387,13 @@ class ArtifactEngine {
         .order('created_at', { ascending: false })
         .limit(limit);
 
-      return (data || []).map(d => this.deserializeVersion(d));
+      const parent = await this.getArtifact(artifactId);
+      if (!parent) return [];
+      const versions = (data || []).map((record) => this.deserializeVersion(record));
+      return (await Promise.all(versions.map(async (version) => {
+        const accessRecord = { content: version.content, metadata: { ...parent.metadata, ...version.metadata } };
+        return await canReadTeacherArtifact(accessRecord) ? version : null;
+      }))).filter(Boolean);
     } catch (err) {
       console.warn('Failed to load version history:', err);
       return [];
@@ -386,6 +401,7 @@ class ArtifactEngine {
   }
 
   async getBranches(artifactId) {
+    if (!await this.getArtifact(artifactId)) return [];
     try {
       const { data } = await supabaseClient
         .from('hey_artifact_versions')
@@ -401,6 +417,7 @@ class ArtifactEngine {
   }
 
   async compareVersions(artifactId, versionIdA, versionIdB) {
+    if (!await this.getArtifact(artifactId)) throw new Error("Artifact not found");
     const versionA = await this.getVersion(artifactId, versionIdA);
     const versionB = await this.getVersion(artifactId, versionIdB);
 
@@ -482,12 +499,16 @@ class ArtifactEngine {
       }
 
       const { data } = await query;
-      return (data || []).map(d => this.deserializeArtifact(d));
+      const artifacts = (data || []).map(d => this.deserializeArtifact(d));
+      return (await Promise.all(artifacts.map(async (artifact) =>
+        await canReadTeacherArtifact(artifact) ? artifact : null
+      ))).filter(Boolean);
     } catch (err) {
       console.warn('Failed to list artifacts:', err);
-      return Array.from(this.artifacts.values()).filter(a => 
-        a.projectId === projectId && (!type || a.type === type)
-      );
+      const artifacts = Array.from(this.artifacts.values()).filter(a => a.projectId === projectId && (!type || a.type === type));
+      return (await Promise.all(artifacts.map(async (artifact) =>
+        await canReadTeacherArtifact(artifact) ? artifact : null
+      ))).filter(Boolean);
     }
   }
 
