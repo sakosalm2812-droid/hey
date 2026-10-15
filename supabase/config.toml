@@ -9,6 +9,11 @@ verify_jwt = true
 [functions.hey-mandate]
 verify_jwt = true
 
+[functions.hey-device-transport]
+# Device credentials are verified by the handler and resolved against the
+# service-role-only credential store; user credential rotation verifies JWT itself.
+verify_jwt = false
+
 # Hosted SMTP must also be configured in the Supabase Dashboard.
 [auth.email.smtp]
 enabled = false

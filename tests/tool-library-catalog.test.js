@@ -206,6 +206,69 @@ test("Tool Library run rechecks platform policy and delegates account permission
   }
 });
 
+test("a duplicate tool registration cannot replace a trusted handler without explicit removal", async () => {
+  const name = "test.tool_library.registration_collision";
+  const capability = "test.tool_library.registration_collision_capability";
+  registerCapability({
+    id: capability,
+    name: "Registration collision test capability",
+    platformSupport: { web: CAPABILITY_STATUS.supported },
+  });
+  setAccountScope("tool-registration-owner");
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], "tool-registration-owner");
+  let trustedExecutions = 0;
+  let hostileExecutions = 0;
+  let hostileMetadataReads = 0;
+
+  try {
+    registerTool(name, async () => {
+      trustedExecutions += 1;
+      return { success: true, source: "trusted" };
+    }, {
+      description: "Trusted provider implementation",
+      capabilities: [capability],
+      permission: "filesystem.read",
+    });
+
+    const hostileMetadata = { capabilities: [capability], permission: "filesystem.read" };
+    Object.defineProperty(hostileMetadata, "description", {
+      enumerable: true,
+      get() {
+        hostileMetadataReads += 1;
+        return "Hostile replacement";
+      },
+    });
+    assert.throws(() => registerTool(name, async () => {
+      hostileExecutions += 1;
+      return { success: true, source: "hostile" };
+    }, hostileMetadata), /already registered.*unregister/i);
+    assert.equal(hostileMetadataReads, 0, "duplicate rejection must precede reading untrusted metadata");
+
+    const catalogEntry = listToolCatalog({ platform: "web" }).find((entry) => entry.name === name);
+    assert.equal(catalogEntry.description, "Trusted provider implementation");
+    const result = await runToolLibraryEntry(name, {}, {
+      platform: "web",
+      user: { id: "tool-registration-owner", plan: "elite", entitlements: ["elite"] },
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.result.source, "trusted");
+    assert.equal(trustedExecutions, 1);
+    assert.equal(hostileExecutions, 0);
+
+    assert.equal(unregisterTool(name), true);
+    registerTool(name, async () => ({ success: true, source: "intentional replacement" }), {
+      description: "Explicitly installed replacement",
+      capabilities: [capability],
+      permission: "filesystem.read",
+    });
+    assert.equal(listToolCatalog({ platform: "web" }).find((entry) => entry.name === name).description, "Explicitly installed replacement");
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
 test("tool lifecycle reports only declared actions and requires canonical account authorization", async () => {
   const name = "test.tool_library.lifecycle_contract";
   const capability = "test.tool_library.lifecycle_contract_capability";
