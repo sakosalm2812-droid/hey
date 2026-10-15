@@ -2,16 +2,15 @@
 
 Updated: 2026-10-15  
 Repository: `sakosalm2812-droid/hey`  
-Latest verified starting baseline: `3fe674d09fc14d449726699583946f5e68149ac6` on `codex/resume-emergency-2026-10-14`.
+Latest verified coordinator baseline: `357ddf1` on `codex/resume-emergency-2026-10-14`. New follow-up worktrees must start from this commit or a newer verified coordinator checkpoint; the worktree assignments below are historical first-wave assignments from `3fe674d`.
 
 ## Session setup and current access
 
-The local Codex task launcher exposed no saved local Git project for this repository. `list_projects` returned only ChatGPT projects, and this session cannot bind a new repository task to one of them as a local Git worktree. No standalone local Codex chats are claimed as created. Eleven independent local Git worktrees and branches were prepared from the verified baseline. Chats 02–11 have delivered local commits and are integrated after coordinator review. Chat 01 has an active follow-up for the visible consented dictation flow; its UI changes remain uncommitted in its isolated worktree. These are collaboration subagent task references, not separate Codex chat IDs.
+The local Codex task launcher currently exposes no saved local Git project for this repository, so it cannot create or configure standalone local Codex chats bound to HEY. No standalone chat IDs/settings are claimed. The first-wave specialist worktrees below preserve prior implementation and were based on `3fe674d`; their work is integrated in the coordinator branch. Latest verified coordinator baseline is `357ddf19096ea816a1b5aa847dd64087f3f75e0e`. Chat 01 localization/account isolation, Chat 10 indexed-selector comparison, and Chat 11 authenticated Edge Fusion are complete and integrated. New follow-up work must use separate branches/worktrees based on the latest verified coordinator commit, and the coordinator owns integration. See `HEY_EXECUTION_HANDOFF.md` for active worker references, test evidence, blockers, and next actions.
 
-For a standalone Codex task, select **Local**, **GPT-6 Luna**, **High**, then open the exact worktree path below. If the local picker cannot open a worktree directly, add `sakosalm2812-droid/hey` as a local Codex project and select the listed branch. Paste the matching startup prompt. Verify the branch and commit in the opened checkout before editing. The coordinator owns central integration and review.
+For standalone tasks when the local project becomes available, select **Local**, **GPT-6 Luna**, **High**, then open the exact worktree path below. Verify the branch and commit in the opened checkout before editing. The coordinator owns central integration and review.
 
-Every specialist must inspect canonical HEY code and interfaces before editing; preserve stronger behavior; keep work isolated to its branch; add tests and adversarial checks; report honest evidence and limitations; commit locally; do not push or merge without coordinator review. No worker may claim production readiness from local tests alone. Chat 01 is the only owner of shared frontend files. Backend agents provide stable contracts for it.
-
+Every specialist must inspect canonical HEY code and interfaces before editing; preserve stronger behavior; keep work isolated to its branch; add tests and adversarial checks; report evidence and limits; commit locally; do not push or merge without coordinator review. Chat 01 owns shared frontend files. Backend agents provide stable contracts for it.
 ## Worktree assignments
 
 All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`. Their `node_modules` links resolve to the coordinator checkout's already installed dependencies; workers should not run dependency installers or edit those shared dependencies.
