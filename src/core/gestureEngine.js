@@ -40,6 +40,16 @@ const SCOPES = Object.freeze({
   SYSTEM_VISIBLE: "system-visible",
 });
 
+const GESTURE_COOLDOWN_MIN_MS = 200;
+const GESTURE_COOLDOWN_MAX_MS = 2000;
+
+function validateGestureCooldownMs(value) {
+  if (!Number.isSafeInteger(value) || value < GESTURE_COOLDOWN_MIN_MS || value > GESTURE_COOLDOWN_MAX_MS) {
+    throw new RangeError(`Gesture cooldown must be between ${GESTURE_COOLDOWN_MIN_MS} and ${GESTURE_COOLDOWN_MAX_MS} milliseconds.`);
+  }
+  return value;
+}
+
 function generateProfileId() {
   return `gesture_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -73,6 +83,8 @@ export class GestureEngine {
     this.frameCanvas = null;
     this.lastFrameAt = 0;
     this.detectionTimeoutMs = detectionTimeoutMs;
+    this.detectionEpoch = 0;
+    this.gestureCooldowns = new Map();
     this.listeners = new Set();
     this.load();
   }
@@ -118,6 +130,7 @@ export class GestureEngine {
   createProfile(input = {}) {
     const profileId = generateProfileId();
     const now = new Date().toISOString();
+    const cooldownMs = validateGestureCooldownMs(input.cooldownMs ?? getSetting("gesture.cooldown_ms") ?? 600);
     
     const profile = {
       id: profileId,
@@ -131,7 +144,7 @@ export class GestureEngine {
       activationZone: input.activationZone || "center",
       cameraId: input.cameraId || null,
       holdMs: input.holdMs || getSetting("gesture.hold_ms") || 400,
-      cooldownMs: input.cooldownMs || getSetting("gesture.cooldown_ms") || 600,
+      cooldownMs,
       smoothing: input.smoothing || "moderate",
       accidentalTriggerGuard: input.accidentalTriggerGuard !== false,
       overlay: input.overlay !== false,
@@ -167,6 +180,12 @@ export class GestureEngine {
   updateProfile(id, updates) {
     const profile = this.profiles.get(id);
     if (!profile) return null;
+
+    const cooldownDescriptor = Object.getOwnPropertyDescriptor(updates ?? {}, "cooldownMs");
+    if (cooldownDescriptor) {
+      if (!Object.hasOwn(cooldownDescriptor, "value")) throw new TypeError("Gesture cooldown must be a data property.");
+      validateGestureCooldownMs(cooldownDescriptor.value);
+    }
 
     const updated = { ...profile, ...updates, updatedAt: new Date().toISOString() };
     this.profiles.set(id, updated);
@@ -392,9 +411,13 @@ export class GestureEngine {
       const now = Date.now();
       if (this.recognitionState === GESTURE_STATES.ACTIVE && this.videoElement && this.videoElement.readyState >= 2 && now - this.lastFrameAt >= 100) {
         this.lastFrameAt = now;
+        const detectionEpoch = this.detectionEpoch;
         try {
           const gesture = await this.detectGesture(this.videoElement, profile, signal);
-          if (gesture && generation === this.recognitionGeneration && this.recognitionState === GESTURE_STATES.ACTIVE) {
+          if (gesture
+            && generation === this.recognitionGeneration
+            && detectionEpoch === this.detectionEpoch
+            && this.recognitionState === GESTURE_STATES.ACTIVE) {
             this.handleGestureDetection(gesture, profile);
           }
         } catch (error) {
@@ -470,6 +493,14 @@ export class GestureEngine {
   handleGestureDetection(gesture, profile) {
     if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.activeProfileId !== profile?.id) return;
 
+    const cooldownMs = profile.cooldownMs ?? getSetting("gesture.cooldown_ms") ?? 600;
+    try {
+      validateGestureCooldownMs(cooldownMs);
+    } catch {
+      this.notify("recognition_profile_error", { profileId: profile.id, code: "invalid_gesture_cooldown" });
+      return;
+    }
+
     const binding = Array.from(this.bindings.values()).find(b => 
       b.profileId === profile.id && 
       b.gestureId === gesture.id && 
@@ -480,8 +511,10 @@ export class GestureEngine {
     if (!binding) return;
 
     const now = Date.now();
-    if (binding.lastTriggered && now - binding.lastTriggered < profile.cooldownMs) return;
-    binding.lastTriggered = now;
+    const cooldownKey = `${profile.id}:${gesture.id}`;
+    if (this.gestureCooldowns.has(cooldownKey)
+      && now - this.gestureCooldowns.get(cooldownKey) < cooldownMs) return;
+    this.gestureCooldowns.set(cooldownKey, now);
 
     const conflicts = this.checkConflicts(gesture, profile);
     if (conflicts.length > 0 && !binding.allowConflict) {
@@ -535,6 +568,8 @@ export class GestureEngine {
 
   stopRecognition(reason = "user_stop") {
     this.recognitionGeneration += 1;
+    this.detectionEpoch += 1;
+    this.gestureCooldowns.clear();
     this.recognitionAbortController?.abort(reason);
     this.recognitionAbortController = null;
     this.recognitionState = GESTURE_STATES.INACTIVE;
@@ -571,6 +606,8 @@ export class GestureEngine {
 
   pauseRecognition() {
     if (this.recognitionState !== GESTURE_STATES.ACTIVE) return false;
+    this.detectionEpoch += 1;
+    this.gestureCooldowns.clear();
     this.recognitionState = GESTURE_STATES.PAUSED;
     this.notify("recognition_state_changed", { state: this.recognitionState, profileId: this.activeProfileId, camera: "active", visible: true });
     return true;

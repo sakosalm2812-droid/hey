@@ -2,6 +2,7 @@ import { recordAudit } from "./auditLog.js";
 import { executeWithPermission, authorizeExecution, hasPermission } from "./permissionManager.js";
 import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { getAccountScope, subscribeAccountScope } from "./accountScope.js";
+import { createToolLibraryPreferenceStore } from "./toolLibraryPreferences.js";
 
 const tools = new Map();
 const activeToolSessions = new Map();
@@ -9,6 +10,9 @@ const toolSessionActivity = new Map();
 const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
+export const toolLibraryPreferenceStore = createToolLibraryPreferenceStore({
+  isToolRegistered: (name) => tools.has(name),
+});
 
 subscribeAccountScope((previousScope) => {
   const previousAccountId = typeof previousScope === "string" && previousScope.startsWith("account:")
@@ -288,7 +292,13 @@ export async function runToolLibraryEntry(name, input, context = {}) {
 
   // The single execution path owns identity, account permission, entitlement,
   // confirmation, audit, and handler invocation checks.
-  return executeTool(name, input, { ...context, permissionScope: "account" });
+  const result = await executeTool(name, input, { ...context, permissionScope: "account" });
+  if (result?.success) {
+    // Recents are optional local preferences; a write failure must not change
+    // the result of an already authorized tool execution.
+    toolLibraryPreferenceStore.recordRecent(name, { accountId: String(accountId) });
+  }
+  return result;
 }
 
 function resolveToolAccount(context = {}) {
@@ -592,5 +602,6 @@ export default {
   startToolLibraryEntry,
   stopToolLibraryEntry,
   getToolLifecycleContract,
+  toolLibraryPreferenceStore,
   executeTool,
 };
