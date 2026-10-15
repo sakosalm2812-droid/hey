@@ -341,8 +341,12 @@ export async function runProviderFusion({
           return result("provider_contract_invalid", { reason: "candidate_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
         }
       }
-    } else if (independentCheckRequired && !hasBoundAnswerEvidence(parsedOutput)) {
-      return result("provider_contract_invalid", { reason: "checker_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
+    } else if ((independentCheckRequired || primaryFailed) && !hasBoundAnswerEvidence(parsedOutput)) {
+      return result("provider_contract_invalid", {
+        reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "checker_answer_not_bound_to_evidence",
+        calls: dispatchedCalls,
+        reservedCostUsd,
+      });
     }
     outputs.push({
       providerId: model.providerId,
