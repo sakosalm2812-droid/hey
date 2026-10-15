@@ -1,4 +1,7 @@
 import { createProviderPlan, selectModel, selectModelFromSnapshot } from "./providerRouter.js";
+import { isProviderPermissionSnapshotCurrent } from "./permissionManager.js";
+import { getAccountScope } from "./accountScope.js";
+import { isRegisteredModelSnapshot } from "./providerRegistry.js";
 
 export const FUSION_MODES = Object.freeze({
   AUTO: "auto",
@@ -111,15 +114,18 @@ async function invokeWithTimeout(invoke, request, parentSignal, timeoutMs) {
   }
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      controller.abort(new Error("Provider timeout"));
       const error = new Error("Provider timeout");
       error.providerTimeout = true;
+      controller.abort(error);
       reject(error);
     }, timeoutMs);
   });
   try {
     return await Promise.race([
-      Promise.resolve().then(() => invoke({ ...request, signal: controller.signal })),
+      Promise.resolve().then(() => invoke({ ...request, signal: controller.signal })).catch((error) => {
+        if (controller.signal.reason?.providerTimeout) throw controller.signal.reason;
+        throw error;
+      }),
       abortPromise,
       timeoutPromise,
     ]);
@@ -170,8 +176,9 @@ function findConflicts(outputs) {
   return { conflicts, truncated };
 }
 
-function eligibleModels(mode, models, { manualProvider, permissions, sensitive }) {
+function eligibleModels(mode, models, { manualProvider, permissions, sensitive, requireRegisteredModels }) {
   const allowed = models.filter((model) => {
+    if (requireRegisteredModels && !isRegisteredModelSnapshot(model)) return false;
     const isLocal = model.local === true;
     if (!permissions.includes(isLocal ? "provider.local" : "provider.remote")) return false;
     if (!permissions.includes(`provider:${model.providerId}`)) return false;
@@ -207,6 +214,7 @@ export async function runProviderFusion({
   synthesize,
   signal,
   isCurrent = () => true,
+  authorizeProviderCall,
   invoke,
   maxCostUsd = 0.05,
   minConfidence = 0.72,
@@ -232,6 +240,9 @@ export async function runProviderFusion({
     return result("invalid_request", { reason: "provider_contract_required" });
   }
   if (typeof isCurrent !== "function") return result("invalid_request", { reason: "scope_fence_required" });
+  if (authorizeProviderCall !== undefined && typeof authorizeProviderCall !== "function") {
+    return result("invalid_request", { reason: "provider_authority_check_invalid" });
+  }
   if (!Number.isFinite(maxCostUsd) || maxCostUsd < 0 || !Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
     return result("invalid_request", { reason: "budget_or_threshold_invalid" });
   }
@@ -241,9 +252,16 @@ export async function runProviderFusion({
   }
   if (signal?.aborted) return result("cancelled");
 
+  // Edge dispatch supplies models and entitlements from its authenticated
+  // server boundary. Browser/core dispatch instead uses the owner-bound local
+  // permission snapshot below.
+  const serverAuthority = typeof authorizeProviderCall === "function";
+
   const isScopeCurrent = () => {
     try {
-      return isCurrent(accountScope) === true;
+      return isCurrent(accountScope) === true && (serverAuthority || (
+        getAccountScope() === accountScope && isProviderPermissionSnapshotCurrent(permissionSnapshot)
+      ));
     } catch {
       return false;
     }
@@ -256,10 +274,25 @@ export async function runProviderFusion({
       ? selectModelFromSnapshot(providerModels, { intent, preferredProvider: manualProvider })
       : selectModel({ intent, preferredProvider: manualProvider })), attempts: [] }
     : createProviderPlan({ intent }, providerModels);
+  const permissionSnapshot = basePlan.permissionSnapshot;
+  if (!serverAuthority && (accountScope !== getAccountScope() || !isProviderPermissionSnapshotCurrent(permissionSnapshot))) {
+    return result("denied", { reason: "provider_permission_or_account_scope_stale" });
+  }
+  const grantedPermissions = new Set();
+  if (serverAuthority) {
+    for (const permission of permissions) grantedPermissions.add(permission);
+  } else {
+    for (const { providerId, local } of permissionSnapshot.permittedModels) {
+      grantedPermissions.add(local ? "provider.local" : "provider.remote");
+      grantedPermissions.add(`provider:${providerId}`);
+    }
+  }
+  const effectivePermissions = permissions.filter((permission) => grantedPermissions.has(permission));
   const candidates = eligibleModels(mode, basePlan.selected ? [basePlan.selected, ...basePlan.fallbacks] : [], {
     manualProvider,
-    permissions,
+    permissions: effectivePermissions,
     sensitive,
+    requireRegisteredModels: !serverAuthority,
   }).filter((model, index, models) => models.findIndex((candidate) => candidate.providerId === model.providerId) === index);
   const selected = mode === FUSION_MODES.MANUAL
     ? candidates.slice(0, 1)
@@ -282,6 +315,26 @@ export async function runProviderFusion({
   const outputs = [];
   let primaryFailed = false;
   let independentCheckRequired = mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck;
+  const checkProviderAuthority = async (model, phase) => {
+    if (!authorizeProviderCall) return "allowed";
+    const remainingMs = maxDurationMs - (performance.now() - startedAt);
+    if (remainingMs <= 0) return "time_budget_exhausted";
+    try {
+      const authorized = await invokeWithTimeout(({ signal: authoritySignal }) => authorizeProviderCall({
+        providerId: model.providerId,
+        modelId: model.id,
+        accountScope,
+        phase,
+        signal: authoritySignal,
+      }), {}, signal, Math.min(providerTimeoutMs, remainingMs));
+      if (signal?.aborted || !isScopeCurrent()) return "cancelled";
+      if (performance.now() - startedAt >= maxDurationMs) return "time_budget_exhausted";
+      return authorized === true ? "allowed" : authorized === false ? "denied" : "unavailable";
+    } catch (error) {
+      if (signal?.aborted || !isScopeCurrent()) return "cancelled";
+      return error?.providerTimeout ? "time_budget_exhausted" : "unavailable";
+    }
+  };
   for (let index = 0; index < planned.length; index += 1) {
     const model = planned[index];
     const shouldCall = index === 0 || (primaryFailed || (
@@ -304,6 +357,25 @@ export async function runProviderFusion({
     if (reservedCostUsd + estimate > maxCostUsd) {
       return result("budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
     }
+    const preflightAuthority = await checkProviderAuthority(model, "before_provider");
+    if (preflightAuthority === "cancelled") return result("cancelled");
+    if (preflightAuthority === "denied") return result("denied", { reason: "provider_permission_revoked", calls: dispatchedCalls, reservedCostUsd });
+    if (preflightAuthority === "unavailable") return result("unconfigured", { reason: "authorization_revalidation_failed", calls: dispatchedCalls, reservedCostUsd });
+    if (preflightAuthority === "time_budget_exhausted") {
+      return independentCheckRequired && outputs.length ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+        : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+    }
+    if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
+    if (maxDurationMs - (performance.now() - startedAt) <= 0) {
+      return independentCheckRequired && outputs.length ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+        : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+    }
+    const callRemainingMs = maxDurationMs - (performance.now() - startedAt);
+    if (callRemainingMs <= 0) {
+      return independentCheckRequired && outputs.length ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+        : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+    }
+    const requestDeadlineLimitsCall = callRemainingMs <= providerTimeoutMs;
     reservedCostUsd += estimate;
 
     let raw;
@@ -316,9 +388,20 @@ export async function runProviderFusion({
         accountScope,
         maxCostUsd: estimate,
         maxOutputChars: MAX_OUTPUT_CHARS,
-      }, signal, Math.min(providerTimeoutMs, remainingMs));
+      }, signal, Math.min(providerTimeoutMs, callRemainingMs));
     } catch (error) {
       if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
+      if (error?.providerAuthorization === "revoked") {
+        return result("denied", { reason: "provider_permission_revoked", calls: dispatchedCalls, reservedCostUsd });
+      }
+      if (error?.providerAuthorization === "unavailable") {
+        return result("unconfigured", { reason: "authorization_revalidation_failed", calls: dispatchedCalls, reservedCostUsd });
+      }
+      if (requestDeadlineLimitsCall || performance.now() - startedAt >= maxDurationMs) {
+        return independentCheckRequired && outputs.length
+          ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+          : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+      }
       if (error?.providerTimeout && outputs.length && independentCheckRequired) {
         return result("verification_unavailable", { reason: "provider_timeout", calls: dispatchedCalls, reservedCostUsd });
       }
@@ -327,6 +410,18 @@ export async function runProviderFusion({
       continue;
     }
     if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
+    if (performance.now() - startedAt >= maxDurationMs) {
+      return independentCheckRequired ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+        : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+    }
+    const postflightAuthority = await checkProviderAuthority(model, "after_provider");
+    if (postflightAuthority === "cancelled") return result("cancelled");
+    if (postflightAuthority === "denied") return result("denied", { reason: "provider_permission_revoked", calls: dispatchedCalls, reservedCostUsd });
+    if (postflightAuthority === "unavailable") return result("unconfigured", { reason: "authorization_revalidation_failed", calls: dispatchedCalls, reservedCostUsd });
+    if (postflightAuthority === "time_budget_exhausted") {
+      return independentCheckRequired ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
+        : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
+    }
     const parsedOutput = parseProviderOutput(raw, estimate);
     if (!parsedOutput) {
       return result("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });

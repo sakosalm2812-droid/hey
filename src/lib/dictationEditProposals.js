@@ -35,6 +35,41 @@ function plainText(value, name, { allowLineBreaks = false } = {}) {
   return value.trim();
 }
 
+function selectionText(value) {
+  if (typeof value !== "string" || value.length > MAX_EDIT_TEXT_LENGTH) {
+    throw new TypeError("Source text must be text within the supported length.");
+  }
+  const hasControl = [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint === 0x7f || (codePoint < 0x20 && ![0x09, 0x0a, 0x0d].includes(codePoint));
+  });
+  if (hasControl) throw new TypeError("Source text cannot contain control characters.");
+  return value;
+}
+
+function normalizedPhrase(value, language) {
+  try { return value.normalize("NFC").replace(/\s+/gu, " ").trim().toLocaleLowerCase(language); }
+  catch { return value.normalize("NFC").replace(/\s+/gu, " ").trim().toLowerCase(); }
+}
+
+function matchExplicitSnippet(utterance, snippets, language) {
+  const command = utterance.match(/^(?:insert|expand|use\s+snippet)\s+(.+)$/iu);
+  if (!command) return null;
+  let requested = command[1].trim();
+  requested = requested.replace(/^snippet\s+/iu, "");
+  const key = normalizedPhrase(requested, language);
+  return snippets.find(({ name }) => normalizedPhrase(name, language) === key) || null;
+}
+
+function boundedIdentity(value, name, maxLength) {
+  try {
+    const text = plainText(value, name);
+    if (text.length > maxLength) throw new TypeError(`${name} is too long.`);
+    return text;
+  }
+  catch { throw new TypeError(`${name} must be non-empty bounded text.`); }
+}
+
 function localizedEditUtterance(utterance, locale) {
   if (punctuationKind(utterance, locale)) return `Edit ${utterance}`;
   const language = locale.split("-")[0].toLowerCase();
@@ -165,55 +200,67 @@ export function createDictationEditSession(options = {}) {
     if (!isCurrent()) return fail("session_ended", "account_changed");
     let request;
     try {
-      request = readDataRecord(input, "Dictation edit request", ["sourceText", "utterance"]);
-      request.sourceText = plainText(request.sourceText, "Source text", { allowLineBreaks: true });
+      request = readDataRecord(input, "Dictation edit request", ["sourceText", "utterance", "targetId", "selectionDigest"]);
+      request.sourceText = selectionText(request.sourceText);
       request.utterance = plainText(request.utterance, "Edit utterance");
+      request.targetId = boundedIdentity(request.targetId, "Target ID", 160);
+      request.selectionDigest = boundedIdentity(request.selectionDigest, "Selection digest", 256);
     } catch {
       return fail("invalid_request", "invalid_edit_request");
     }
 
     const currentGeneration = generation;
-    let classified;
-    try {
-      classified = await understandVoiceCommand(localizedEditUtterance(request.utterance, language));
-    } catch {
-      return fail("classification_failed", "voice_intent_unavailable");
-    }
-    if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
-    if (classified?.type !== "Edit" || classified.status !== "preview_required" || classified.requiresConfirmation !== true) {
-      return fail("edit_intent_required", "utterance_is_not_an_edit");
-    }
-
-    const instruction = plainText(classified.preview?.instruction, "Edit instruction");
-    const punctuation = punctuationKind(instruction, language);
+    let instruction;
     let intent;
     let proposedText;
-    if (punctuation) {
-      intent = "punctuation";
-      proposedText = applyPunctuation(request.sourceText, punctuation, language);
-      if (proposedText === null) return fail("invalid_proposal", "edit_output_too_long");
+    const snippet = matchExplicitSnippet(request.utterance, preferenceSnapshot.snippets, language);
+    if (snippet) {
+      intent = "snippet";
+      instruction = `Insert snippet ${snippet.name}`;
+      proposedText = snippet.text;
     } else {
-      intent = "rewrite";
-      if (!rewrite) return fail("provider_unavailable", "rewrite_provider_unavailable");
-      if (typeof AbortController !== "function") return fail("provider_unavailable", "cancellation_unavailable");
-      const controller = new AbortController();
-      controllers.add(controller);
-      const providerInput = Object.freeze({
-        text: request.sourceText,
-        instruction,
-        language,
-        applicationId: identity,
-        signal: controller.signal,
-      });
+      let classified;
       try {
-        proposedText = readProviderText(await Reflect.apply(rewrite, rewriteProvider, [providerInput]));
+        classified = await understandVoiceCommand(localizedEditUtterance(request.utterance, language));
       } catch {
-        if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
-        return fail("provider_failed", "rewrite_provider_failed");
-      } finally {
-        controllers.delete(controller);
+        return fail("classification_failed", "voice_intent_unavailable");
       }
       if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+      if (classified?.type !== "Edit" || classified.status !== "preview_required" || classified.requiresConfirmation !== true) {
+        return fail("edit_intent_required", "utterance_is_not_an_edit");
+      }
+
+      instruction = plainText(classified.preview?.instruction, "Edit instruction");
+      const punctuation = punctuationKind(instruction, language);
+      if (punctuation) {
+        intent = "punctuation";
+        proposedText = applyPunctuation(request.sourceText, punctuation, language);
+        if (proposedText === null) return fail("invalid_proposal", "edit_output_too_long");
+      } else {
+        intent = "rewrite";
+        if (!rewrite) return fail("provider_unavailable", "rewrite_provider_unavailable");
+        if (typeof AbortController !== "function") return fail("provider_unavailable", "cancellation_unavailable");
+        const controller = new AbortController();
+        controllers.add(controller);
+        const providerInput = Object.freeze({
+          text: request.sourceText,
+          instruction,
+          language,
+          applicationId: identity,
+          targetId: request.targetId,
+          selectionDigest: request.selectionDigest,
+          signal: controller.signal,
+        });
+        try {
+          proposedText = readProviderText(await Reflect.apply(rewrite, rewriteProvider, [providerInput]));
+        } catch {
+          if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+          return fail("provider_failed", "rewrite_provider_failed");
+        } finally {
+          controllers.delete(controller);
+        }
+        if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+      }
     }
 
     if (!isCurrent()) return fail("session_ended", "account_changed");
@@ -227,9 +274,18 @@ export function createDictationEditSession(options = {}) {
       proposedText,
       language,
       applicationId: identity,
+      targetId: request.targetId,
+      selectionDigest: request.selectionDigest,
       requiresConfirmation: true,
     });
-    proposals.set(proposal, { used: false, sourceText: request.sourceText, proposedText, intent });
+    proposals.set(proposal, {
+      used: false,
+      sourceText: request.sourceText,
+      proposedText,
+      intent,
+      targetId: request.targetId,
+      selectionDigest: request.selectionDigest,
+    });
     return Object.freeze({ success: true, status: "preview_required", proposal });
   }
 
@@ -237,8 +293,8 @@ export function createDictationEditSession(options = {}) {
     if (!isCurrent()) return fail("session_ended", "account_changed");
     let confirmation;
     try {
-      confirmation = readDataRecord(input, "Dictation edit confirmation", ["confirmed", "currentText", "applicationId"]);
-      if (!Object.hasOwn(confirmation, "confirmed") || !Object.hasOwn(confirmation, "currentText") || !Object.hasOwn(confirmation, "applicationId")) {
+      confirmation = readDataRecord(input, "Dictation edit confirmation", ["confirmed", "currentText", "applicationId", "targetId", "selectionDigest"]);
+      if (!["confirmed", "currentText", "applicationId", "targetId", "selectionDigest"].every((key) => Object.hasOwn(confirmation, key))) {
         return fail("invalid_confirmation", "confirmation_context_required");
       }
       if (confirmation.confirmed !== true) return fail("confirmation_required", "explicit_confirmation_required");
@@ -247,6 +303,9 @@ export function createDictationEditSession(options = {}) {
         ? null
         : normalizeDictationApplicationId(confirmation.applicationId);
       if (currentIdentity !== identity) return fail("stale_proposal", "application_changed");
+      confirmation.targetId = boundedIdentity(confirmation.targetId, "Target ID", 160);
+      confirmation.selectionDigest = boundedIdentity(confirmation.selectionDigest, "Selection digest", 256);
+      if (confirmation.currentText.length > MAX_EDIT_TEXT_LENGTH) return fail("stale_proposal", "source_text_changed");
     } catch {
       return fail("invalid_confirmation", "invalid_confirmation_input");
     }
@@ -254,6 +313,8 @@ export function createDictationEditSession(options = {}) {
     const saved = proposal && typeof proposal === "object" ? proposals.get(proposal) : null;
     if (!saved) return fail("invalid_proposal", "proposal_not_created_by_this_session");
     if (saved.used) return fail("replay_denied", "proposal_already_confirmed");
+    if (confirmation.targetId !== saved.targetId) return fail("stale_proposal", "target_changed");
+    if (confirmation.selectionDigest !== saved.selectionDigest) return fail("stale_proposal", "selection_changed");
     if (confirmation.currentText !== saved.sourceText) return fail("stale_proposal", "source_text_changed");
     saved.used = true;
     return Object.freeze({

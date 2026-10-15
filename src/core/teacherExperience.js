@@ -1,4 +1,5 @@
 import { createArtifact as createForgeArtifact } from "./artifactEngine.js";
+import { canReadTeacherArtifact } from "./teacherArtifactAccess.js";
 
 const REQUEST_FIELDS = new Set([
   "title", "subject", "gradeBand", "durationMinutes", "learningObjectives",
@@ -13,12 +14,12 @@ const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
 const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "teacherAnswer", "points"]);
 const WORKSHEET_QUESTION_FIELDS = new Set(["prompt", "points"]);
 const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
-const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
+const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "classId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
-const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
-const WORKSHEET_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "promptsPresent", "sourceAssessmentBound", "teacherKeySeparated"]);
-const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "currentAccountScope", "currentWorkspaceId"]);
+const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
+const WORKSHEET_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "promptsPresent", "sourceAssessmentBound", "teacherKeySeparated"]);
+const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "classId", "currentAccountScope", "currentWorkspaceId", "currentClassId"]);
 const SAVE_OPTION_FIELDS = new Set(["createArtifact"]);
 const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
@@ -433,8 +434,9 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
   assertOnlyDataFields(stableContext, "Teacher assessment context", SAVE_CONTEXT_FIELDS);
   const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
   const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
-  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
-    throw new Error("Assessment account and workspace must match the active context");
+  const classId = requiredText(stableContext.classId, "Class ID", 200);
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId || stableContext.currentClassId !== classId) {
+    throw new Error("Assessment account, workspace, and class must match the active context");
   }
   const lessonVerification = await verifyTeacherLessonArtifact(stableLesson, { accountScope, workspaceId });
   if (!lessonVerification.valid) throw new Error("Assessment source lesson failed verification for the active account and workspace");
@@ -473,6 +475,7 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
       workflow: "teacher_assessment",
       accountScope,
       workspaceId,
+      classId,
       studentDataPolicy: "not_collected",
       audience: "teacher_only",
       provenance: {
@@ -492,6 +495,7 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
         valid: true,
         checks: {
           accountWorkspaceBound: true,
+          classScope: true,
           studentDataAbsent: true,
           objectivesPresent: true,
           questionsPresent: true,
@@ -506,7 +510,7 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
   return frozenArtifact;
 }
 
-export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId } = {}) {
+export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId, classId } = {}) {
   if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(artifact)) {
     return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
   }
@@ -579,6 +583,8 @@ export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, 
     contentShapeSafe,
     accountScope: typeof accountScope === "string" && artifact?.metadata?.accountScope === accountScope,
     workspace: typeof workspaceId === "string" && artifact?.metadata?.workspaceId === workspaceId,
+    classScope: typeof artifact?.metadata?.classId === "string" && artifact.metadata.classId.trim().length > 0
+      && (classId === undefined || artifact.metadata.classId === classId),
     studentDataPolicy: artifact?.metadata?.studentDataPolicy === "not_collected",
     audience: artifact?.metadata?.audience === "teacher_only",
     provenance: artifact?.metadata?.provenance?.generatedBy === "HEY Teacher Assessment Workflow"
@@ -617,10 +623,11 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
   }
   const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
   const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
-  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
-    throw new Error("Worksheet account and workspace must match the active context");
+  const classId = requiredText(stableContext.classId, "Class ID", 200);
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId || stableContext.currentClassId !== classId) {
+    throw new Error("Worksheet account, workspace, and class must match the active context");
   }
-  const sourceVerification = await verifyTeacherAssessmentArtifact(assessmentArtifact, { accountScope, workspaceId });
+  const sourceVerification = await verifyTeacherAssessmentArtifact(assessmentArtifact, { accountScope, workspaceId, classId });
   if (!sourceVerification.valid) throw new Error("Worksheet source assessment failed verification for the active account and workspace");
 
   const assessment = stableAssessment.content;
@@ -649,6 +656,7 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
       workflow: "teacher_worksheet",
       accountScope,
       workspaceId,
+      classId,
       studentDataPolicy: "not_collected",
       audience: "student",
       provenance: {
@@ -668,6 +676,7 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
         valid: true,
         checks: {
           accountWorkspaceBound: true,
+          classScope: true,
           studentDataAbsent: true,
           promptsPresent: true,
           sourceAssessmentBound: true,
@@ -682,7 +691,7 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
   return frozenArtifact;
 }
 
-export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId } = {}) {
+export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId, classId } = {}) {
   if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact)) {
     return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
   }
@@ -748,6 +757,8 @@ export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, w
     contentShapeSafe,
     accountScope: typeof accountScope === "string" && artifact?.metadata?.accountScope === accountScope,
     workspace: typeof workspaceId === "string" && artifact?.metadata?.workspaceId === workspaceId,
+    classScope: typeof artifact?.metadata?.classId === "string" && artifact.metadata.classId.trim().length > 0
+      && (classId === undefined || artifact.metadata.classId === classId),
     studentDataPolicy: artifact?.metadata?.studentDataPolicy === "not_collected",
     audience: artifact?.metadata?.audience === "student",
     provenance: artifact?.metadata?.provenance?.generatedBy === "HEY Teacher Worksheet Workflow"
@@ -792,14 +803,19 @@ async function saveTeacherArtifact(artifact, context, options, builtArtifacts, v
   }
   const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
   const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
-  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
+  const classId = label === "assessment" ? requiredText(stableContext.classId, "Class ID", 200) : stableContext.classId;
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId
+    || label === "assessment" && stableContext.currentClassId !== classId) {
     throw new Error(`${label} artifact account and workspace must match the active context`);
   }
   const createArtifact = options.createArtifact ?? createForgeArtifact;
   if (typeof createArtifact !== "function") throw new TypeError("Shared artifact creator must be a function");
 
-  const verification = await verifyArtifact(artifact, { accountScope, workspaceId });
+  const verification = await verifyArtifact(artifact, { accountScope, workspaceId, classId });
   if (!verification.valid) throw new Error(`${label} artifact failed verification for the active account and workspace`);
+  if (label === "assessment" && !await canReadTeacherArtifact(stableArtifact, { accountScope, classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to save the answer key");
+  }
   freezeDeep(stableArtifact);
 
   const { content, metadata } = stableArtifact;
@@ -814,6 +830,7 @@ async function saveTeacherArtifact(artifact, context, options, builtArtifacts, v
       artifactContract: contract,
       accountScope,
       workspaceId,
+      ...(classId ? { classId } : {}),
     },
     tags,
   });
@@ -879,11 +896,14 @@ export async function exportTeacherLessonMarkdown(artifact, { accountScope, work
   return Object.freeze({ filename: "lesson-plan.md", mimeType: "text/markdown", content: lines.join("\n") });
 }
 
-export async function exportTeacherAssessmentMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
+export async function exportTeacherAssessmentMarkdown(artifact, { accountScope, workspaceId, classId, safetyReview } = {}) {
   if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(artifact)) {
     throw new Error("Only an assessment artifact built in the active Teacher runtime can be exported");
   }
-  const verification = await verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId });
+  if (!await canReadTeacherArtifact(artifact, { accountScope, classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to export the answer key");
+  }
+  const verification = await verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId, classId });
   if (!verification.valid) throw new Error("Assessment artifact failed verification for the active account and workspace");
   let stableArtifact;
   let stableSafetyReview;

@@ -2,12 +2,14 @@ import { recordAudit } from "./auditLog.js";
 import { authorizeExecution } from "./permissionManager.js";
 import { evaluateApprovalPolicy } from "./trustKernelPolicy.js";
 import { publish } from "./eventBus.js";
+import { subscribeAccountScope } from "./accountScope.js";
 import supabaseClient from "../lib/supabase.js";
 
 const actions = new Map();
 const undoReservations = new Map();
 const OBSERVATION_MAX_AGE_MS = 30_000;
 const OBSERVATION_CLOCK_SKEW_MS = 2_000;
+const ACTION_PREVIEW_MAX_LIFETIME_MS = 5 * 60_000;
 
 function copyPlainJson(value, ancestors = new WeakSet(), depth = 0) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -66,6 +68,50 @@ function isSensitiveComputerAction(action) {
   return capabilities.some((value) => /^(?:computer(?:[.:/]|$)|window\.control$|input\.control$|screen\.capture$)/i.test(value));
 }
 
+function snapshotActionLifecycle(value, now = Date.now()) {
+  try {
+    const lifecycle = copyPlainJson(value);
+    if (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle)) return null;
+    if (new TextEncoder().encode(JSON.stringify(lifecycle)).byteLength > 8 * 1024) return null;
+    const expiresAt = typeof lifecycle.expiresAt === "string" ? Date.parse(lifecycle.expiresAt) : lifecycle.expiresAt;
+    if (typeof lifecycle.accountId !== "string" || !lifecycle.accountId.trim() || lifecycle.accountId.length > 256
+      || typeof lifecycle.deviceId !== "string" || !lifecycle.deviceId.trim() || lifecycle.deviceId.length > 512
+      || typeof lifecycle.resource !== "string" || !lifecycle.resource.trim() || lifecycle.resource.length > 4096
+      || !(typeof lifecycle.authorizationEpoch === "string" && lifecycle.authorizationEpoch.length > 0 && lifecycle.authorizationEpoch.length <= 256)
+        && !(Number.isSafeInteger(lifecycle.authorizationEpoch) && lifecycle.authorizationEpoch >= 0)
+      || !Number.isFinite(expiresAt) || expiresAt <= now || expiresAt > now + ACTION_PREVIEW_MAX_LIFETIME_MS) return null;
+    return freezePlainJson({
+      accountId: lifecycle.accountId.trim(),
+      deviceId: lifecycle.deviceId.trim(),
+      resource: lifecycle.resource.trim(),
+      authorizationEpoch: lifecycle.authorizationEpoch,
+      expiresAt,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function actionLifecycleMatches(action, options, now = Date.now()) {
+  const expected = action.lifecycle;
+  const accountId = authenticatedAccountId(options?.user);
+  return Boolean(expected)
+    && expected.expiresAt > now
+    && accountId === expected.accountId
+    && options?.deviceId === expected.deviceId
+    && options?.resource === expected.resource
+    && options?.authorizationEpoch === expected.authorizationEpoch;
+}
+
+function invalidateAction(action, reason) {
+  if (!action || actions.get(action.id) !== action) return;
+  action.status = "invalidated";
+  action.error = reason;
+  action.updatedAt = new Date();
+  undoReservations.delete(action.id);
+  publish("action.updated", action);
+}
+
 function validateIndependentObservation(value, expected, requestedAt = Date.now()) {
   let snapshot;
   try {
@@ -80,6 +126,9 @@ function validateIndependentObservation(value, expected, requestedAt = Date.now(
   const contractMatches = snapshot.actionId === expected.actionId
     && snapshot.operationId === expected.operationId
     && snapshot.accountId === expected.accountId
+    && snapshot.deviceId === expected.deviceId
+    && snapshot.authorizationEpoch === expected.authorizationEpoch
+    && snapshot.lifecycleExpiresAt === expected.lifecycleExpiresAt
     && snapshot.capability === expected.capability
     && snapshot.permission === expected.permission
     && snapshot.resource === expected.resource
@@ -101,11 +150,41 @@ export function clearActions() {
   undoReservations.clear();
 }
 
+export function invalidateActionPreviews(currentContext = {}) {
+  const now = Date.now();
+  let invalidated = 0;
+  for (const action of actions.values()) {
+    if (!isSensitiveComputerAction(action) || !action.lifecycle) continue;
+    const lifecycle = action.lifecycle;
+    const matches = lifecycle.expiresAt > now
+      && currentContext.accountId === lifecycle.accountId
+      && currentContext.deviceId === lifecycle.deviceId
+      && currentContext.resource === lifecycle.resource
+      && currentContext.authorizationEpoch === lifecycle.authorizationEpoch;
+    if (!matches) {
+      invalidateAction(action, lifecycle.expiresAt <= now ? "Action preview expired." : "Action preview context changed.");
+      invalidated += 1;
+    }
+  }
+  return invalidated;
+}
+
+subscribeAccountScope((_previousScope, nextScope) => {
+  const accountId = nextScope.startsWith("account:") ? nextScope.slice("account:".length) : null;
+  invalidateActionPreviews({ accountId });
+});
+
 export function createAction(input = {}) {
-  const action = { id: crypto.randomUUID(), title: String(input.title || "Untitled action"), tool: input.tool || null, input: input.input || {}, permission: input.permission || input.tool || "general", riskLevel: input.riskLevel || "medium", status: "queued", undo: input.undo || null, createdAt: new Date(), updatedAt: new Date() };
+  const base = { id: crypto.randomUUID(), title: String(input.title || "Untitled action"), tool: input.tool || null, input: input.input || {}, permission: input.permission || input.tool || "general", riskLevel: input.riskLevel || "medium", status: "queued", undo: input.undo || null, createdAt: new Date(), updatedAt: new Date() };
+  const lifecycle = snapshotActionLifecycle(input.lifecycle);
+  const action = { ...base, ...(lifecycle ? { lifecycle } : {}) };
+  if (isSensitiveComputerAction(action) && !lifecycle) {
+    action.status = "invalidated";
+    action.error = "Sensitive action preview requires a valid bounded lifecycle context.";
+  }
   actions.set(action.id, action);
   publish("action.updated", action);
-  recordAudit({ action: "action.created", tool: action.tool, riskLevel: action.riskLevel, status: "queued", metadata: { actionId: action.id } });
+  recordAudit({ action: "action.created", tool: action.tool, riskLevel: action.riskLevel, status: action.status, metadata: { actionId: action.id } });
   return action;
 }
 
@@ -163,6 +242,11 @@ export function approveAction(actionId) {
 export async function executeAction(actionId, handler, options = {}) {
   const action = getAction(actionId);
   if (!action) return { success: false, error: "Action not found." };
+  const requiresLifecycleFence = isSensitiveComputerAction(action);
+  if (requiresLifecycleFence && !actionLifecycleMatches(action, options)) {
+    invalidateAction(action, action?.lifecycle?.expiresAt <= Date.now() ? "Action preview expired." : "Action preview context changed.");
+    return { success: false, error: action.error, action };
+  }
   if (action.status !== "queued" && action.status !== "approved") {
     return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
   }
@@ -178,6 +262,11 @@ export async function executeAction(actionId, handler, options = {}) {
   if (typeof handler !== "function") return { success: false, error: "No action handler registered." };
   const requiresIndependentVerification = options.requireIndependentVerification === true || isSensitiveComputerAction(action);
   const accountId = authenticatedAccountId(options.user);
+  const lifecycleIsCurrent = () => {
+    if (!requiresLifecycleFence || actionLifecycleMatches(action, options)) return true;
+    invalidateAction(action, action?.lifecycle?.expiresAt <= Date.now() ? "Action preview expired." : "Action preview context changed.");
+    return false;
+  };
   const operationId = crypto.randomUUID();
   const strictResource = options.resource;
   const verifyTargetBinding = options.verifyTargetBinding;
@@ -201,9 +290,10 @@ export async function executeAction(actionId, handler, options = {}) {
     if (actions.get(actionId) !== action || (action.status !== "queued" && action.status !== "approved")) {
       return { success: false, error: "Action is no longer available for execution.", action };
     }
+    if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   }
   const strictAction = requiresIndependentVerification
-    ? Object.freeze({ id: action.id, tool: action.tool, permission: action.permission, riskLevel: action.riskLevel, accountId, operationId, operation: "execute" })
+    ? Object.freeze({ id: action.id, tool: action.tool, permission: action.permission, riskLevel: action.riskLevel, accountId, deviceId: action.lifecycle?.deviceId, authorizationEpoch: action.lifecycle?.authorizationEpoch, lifecycleExpiresAt: action.lifecycle?.expiresAt, operationId, operation: "execute" })
     : action;
   let strictMandate = options.mandate;
   if (requiresIndependentVerification && options.mandate !== undefined) {
@@ -222,6 +312,9 @@ export async function executeAction(actionId, handler, options = {}) {
       actionId: executionContext.id,
       operationId,
       accountId,
+      deviceId: action.lifecycle?.deviceId,
+      authorizationEpoch: action.lifecycle?.authorizationEpoch,
+      lifecycleExpiresAt: action.lifecycle?.expiresAt,
       capability: executionContext.tool || executionContext.permission,
       permission: executionContext.permission,
       resource: strictResource,
@@ -236,7 +329,7 @@ export async function executeAction(actionId, handler, options = {}) {
       return { success: false, error: "The exact computer-control target could not be independently bound.", action };
     }
     const boundTarget = validateIndependentObservation(binding, bindingContext, bindingRequestedAt);
-    if (actions.get(actionId) !== action || (action.status !== "queued" && action.status !== "approved") || authenticatedAccountId(options.user) !== accountId) {
+    if (actions.get(actionId) !== action || (action.status !== "queued" && action.status !== "approved") || authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) {
       return { success: false, error: "Action or account is no longer available for execution.", action };
     }
     if (!boundTarget.valid || boundTarget.snapshot?.verified !== true) {
@@ -247,6 +340,7 @@ export async function executeAction(actionId, handler, options = {}) {
     return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
   }
   const mandate = await verifyActionMandate(strictAction, strictOptions);
+  if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   if (!mandate.authorized) return { success: false, error: mandate.reason, action, mandate };
   // Mandate verification is asynchronous; reserve the action only after it
   // completes, then re-check admission to prevent concurrent double dispatch.
@@ -256,6 +350,7 @@ export async function executeAction(actionId, handler, options = {}) {
   if (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId) {
     return { success: false, error: "Authenticated account changed during action authorization.", action };
   }
+  if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   action.status = "running";
   action.updatedAt = new Date();
   publish("action.updated", action);
@@ -265,11 +360,14 @@ export async function executeAction(actionId, handler, options = {}) {
       if (actions.get(actionId) !== action || action.status !== "running") {
         return { success: false, error: "Action is no longer available for execution.", action };
       }
-      if (authenticatedAccountId(options.user) !== accountId) throw new Error("Authenticated account changed during computer action execution.");
+      if (authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) throw new Error(action.error || "Authenticated account changed during computer action execution.");
       const observationContext = {
         actionId: strictAction.id,
         operationId,
         accountId,
+        deviceId: action.lifecycle?.deviceId,
+        authorizationEpoch: action.lifecycle?.authorizationEpoch,
+        lifecycleExpiresAt: action.lifecycle?.expiresAt,
         capability: executionContext.tool || executionContext.permission,
         permission: executionContext.permission,
         resource: strictResource,
@@ -289,13 +387,16 @@ export async function executeAction(actionId, handler, options = {}) {
       if (actions.get(actionId) !== action || action.status !== "running") {
         return { success: false, error: "Action is no longer available for execution.", action };
       }
-      if (authenticatedAccountId(options.user) !== accountId) throw new Error("Authenticated account changed during independent verification.");
+      if (authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) throw new Error(action.error || "Authenticated account changed during independent verification.");
       const verificationRecord = freezePlainJson({
         verified: true,
         capability: executionContext.tool || executionContext.permission,
         permission: executionContext.permission,
         riskLevel: executionContext.riskLevel,
         accountId,
+        deviceId: action.lifecycle?.deviceId,
+        authorizationEpoch: action.lifecycle?.authorizationEpoch,
+        lifecycleExpiresAt: action.lifecycle?.expiresAt,
         operationId,
         operation: "execute",
         resource: strictResource,
@@ -315,6 +416,10 @@ export async function executeAction(actionId, handler, options = {}) {
     recordAudit({ action: "action.executed", tool: action.tool, riskLevel: action.riskLevel, status: "completed", metadata: { actionId } });
     return { success: true, action };
   } catch (error) {
+    if (requiresLifecycleFence && !actionLifecycleMatches(action, options)) {
+      invalidateAction(action, action?.lifecycle?.expiresAt <= Date.now() ? "Action preview expired." : "Action preview context changed.");
+      return { success: false, error: action.error, action };
+    }
     if (requiresIndependentVerification && (actions.get(actionId) !== action || action.status !== "running")) {
       return { success: false, error: "Action or account is no longer available for execution.", action };
     }
@@ -338,6 +443,13 @@ export async function undoAction(actionId, handler, options = {}) {
   const action = getAction(actionId);
   if (!action || action.status !== "completed" || typeof handler !== "function" || undoReservations.has(actionId)) return { success: false, error: "Action cannot be undone." };
   const requiresIndependentVerification = options.requireIndependentVerification === true || isSensitiveComputerAction(action);
+  const requiresLifecycleFence = isSensitiveComputerAction(action);
+  const lifecycleIsCurrent = () => {
+    if (!requiresLifecycleFence || actionLifecycleMatches(action, options)) return true;
+    invalidateAction(action, action?.lifecycle?.expiresAt <= Date.now() ? "Action preview or undo receipt expired." : "Action preview or undo receipt context changed.");
+    return false;
+  };
+  if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   const accountId = authenticatedAccountId(options.user);
   const operationId = crypto.randomUUID();
   const strictResource = options.resource;
@@ -377,6 +489,9 @@ export async function undoAction(actionId, handler, options = {}) {
       || originalVerificationSnapshot.permission !== originalPermission
       || originalVerificationSnapshot.riskLevel !== originalRiskLevel
       || originalVerificationSnapshot.accountId !== accountId
+      || originalVerificationSnapshot.deviceId !== action.lifecycle.deviceId
+      || originalVerificationSnapshot.authorizationEpoch !== action.lifecycle.authorizationEpoch
+      || originalVerificationSnapshot.lifecycleExpiresAt !== action.lifecycle.expiresAt
       || originalVerificationSnapshot.operation !== "execute"
       || typeof originalVerificationSnapshot.operationId !== "string"
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(originalVerificationSnapshot.operationId)
@@ -418,7 +533,7 @@ export async function undoAction(actionId, handler, options = {}) {
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
   const strictAction = requiresIndependentVerification
-    ? Object.freeze({ id: action.id, tool: undoCapability, permission: undoPermission, riskLevel: originalRiskLevel, originalCapability, originalPermission, accountId, operationId, operation: "undo" })
+    ? Object.freeze({ id: action.id, tool: undoCapability, permission: undoPermission, riskLevel: originalRiskLevel, originalCapability, originalPermission, accountId, deviceId: action.lifecycle?.deviceId, authorizationEpoch: action.lifecycle?.authorizationEpoch, lifecycleExpiresAt: action.lifecycle?.expiresAt, operationId, operation: "undo" })
     : action;
   let strictMandate = options.mandate;
   if (requiresIndependentVerification && options.mandate !== undefined) {
@@ -452,7 +567,7 @@ export async function undoAction(actionId, handler, options = {}) {
   };
   const staleReservation = () => {
     if (undoReservations.get(actionId) === reservationToken) {
-      if (actions.get(actionId) === action && action.status !== "cancelled") {
+      if (actions.get(actionId) === action && action.status !== "invalidated" && action.status !== "cancelled" && action.status !== "undone") {
         action.status = "undo_failed";
         action.error = "Undo proposal state changed during verification.";
         action.updatedAt = new Date();
@@ -463,21 +578,23 @@ export async function undoAction(actionId, handler, options = {}) {
   };
   try { publish("action.updated", action); }
   catch { return releaseReservation("Undo proposal could not be safely reserved."); }
-  if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing") return staleReservation();
+  if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || !lifecycleIsCurrent()) return staleReservation();
   let originalResourceDigest;
   let originalEvidenceDigest;
   let undoInputDigest;
+  let deviceIdDigest;
   if (requiresIndependentVerification) {
     try {
-      [originalResourceDigest, originalEvidenceDigest, undoInputDigest] = await Promise.all([
+      [originalResourceDigest, originalEvidenceDigest, undoInputDigest, deviceIdDigest] = await Promise.all([
         digestReceiptValue(strictResource, "Undo resource"),
         digestReceiptValue(originalVerificationSnapshot.evidence ?? null, "Original verification evidence"),
         digestReceiptValue(undoInput, "Undo target input"),
+        digestReceiptValue(action.lifecycle.deviceId, "Undo device id"),
       ]);
     } catch {
       return releaseReservation("Strict undo receipt inputs must remain within the bounded digest size.");
     }
-    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || authenticatedAccountId(options.user) !== accountId) return staleReservation();
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) return staleReservation();
   }
   if (requiresIndependentVerification) {
     let binding;
@@ -485,6 +602,9 @@ export async function undoAction(actionId, handler, options = {}) {
       actionId: undoContext.id,
       operationId,
       accountId,
+      deviceId: action.lifecycle?.deviceId,
+      authorizationEpoch: action.lifecycle?.authorizationEpoch,
+      lifecycleExpiresAt: action.lifecycle?.expiresAt,
       capability: undoCapability,
       permission: undoPermission,
       resource: strictResource,
@@ -498,7 +618,7 @@ export async function undoAction(actionId, handler, options = {}) {
     } catch {
       return releaseReservation("The exact computer undo target could not be independently bound.");
     }
-    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || authenticatedAccountId(options.user) !== accountId) return staleReservation();
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) return staleReservation();
     const boundTarget = validateIndependentObservation(binding, bindingContext, bindingRequestedAt);
     if (!boundTarget.valid || boundTarget.snapshot?.verified !== true) {
       return releaseReservation(typeof boundTarget.snapshot?.reason === "string" ? boundTarget.snapshot.reason.slice(0, 300) : "The exact computer undo target could not be independently bound.");
@@ -508,7 +628,7 @@ export async function undoAction(actionId, handler, options = {}) {
   if (!mandate.authorized) {
     return { ...releaseReservation(mandate.reason), mandate };
   }
-  if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId)) return staleReservation();
+  if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId) || !lifecycleIsCurrent()) return staleReservation();
   if (requiresIndependentVerification && (typeof mandate.mandateId !== "string" || mandate.mandateId.length > 512)) {
     return releaseReservation("Strict undo mandate result exceeds the receipt size limit.");
   }
@@ -516,14 +636,17 @@ export async function undoAction(actionId, handler, options = {}) {
   action.updatedAt = new Date();
   try {
     publish("action.updated", action);
-    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId)) return staleReservation();
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId) || !lifecycleIsCurrent()) return staleReservation();
     const result = await handler(undoInput, undoContext);
-    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId)) return staleReservation();
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId) || !lifecycleIsCurrent()) return staleReservation();
     if (requiresIndependentVerification) {
       const observationContext = {
         actionId: strictAction.id,
         operationId,
         accountId,
+        deviceId: action.lifecycle?.deviceId,
+        authorizationEpoch: action.lifecycle?.authorizationEpoch,
+        lifecycleExpiresAt: action.lifecycle?.expiresAt,
         capability: undoContext.tool || undoContext.permission,
         permission: undoPermission,
         resource: strictResource,
@@ -538,9 +661,9 @@ export async function undoAction(actionId, handler, options = {}) {
       if (!checkedObservation.valid) throw new Error("Independent undo observation was stale or did not match the exact action context.");
       const verificationSnapshot = checkedObservation.snapshot;
       if (verificationSnapshot?.verified !== true) throw new Error(verificationSnapshot?.reason || "Independent undo verification failed.");
-      if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || authenticatedAccountId(options.user) !== accountId) return staleReservation();
+      if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) return staleReservation();
       const postconditionEvidenceDigest = await digestReceiptValue(verificationSnapshot.evidence ?? null, "Undo postcondition evidence");
-      if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || authenticatedAccountId(options.user) !== accountId) return staleReservation();
+      if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) return staleReservation();
       const policyVersion = typeof policyDecision?.policyVersion === "string" && policyDecision.policyVersion.length <= 256
         ? policyDecision.policyVersion
         : null;
@@ -549,6 +672,9 @@ export async function undoAction(actionId, handler, options = {}) {
         id: crypto.randomUUID(),
         actionId: strictAction.id,
         accountId,
+        deviceIdDigest,
+        authorizationEpoch: action.lifecycle.authorizationEpoch,
+        lifecycleExpiresAt: action.lifecycle.expiresAt,
         operationId,
         originalCapability,
         originalPermission,
@@ -614,7 +740,7 @@ export async function undoAction(actionId, handler, options = {}) {
     });
     return { success: true, action, policyDecision, receipt: action.undoReceipt || null };
   } catch (error) {
-    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId)) return staleReservation();
+    if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undoing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId) || !lifecycleIsCurrent()) return staleReservation();
     if (undoReservations.get(actionId) === reservationToken) undoReservations.delete(actionId);
     action.status = "undo_failed";
     action.error = error instanceof Error ? error.message : String(error);

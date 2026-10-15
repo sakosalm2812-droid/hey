@@ -2,7 +2,7 @@
 
 Updated: 2026-10-15
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `61e8b6b` (source); full Node suite 471/471 passed on a standalone rerun, production Vite build and changed-file ESLint passed. Gesture profiles focused tests 20/20; Ultrasparse selector focused tests 8/8. One concurrent full-suite run had a transient Fusion deadline assertion failure during build load; focused Fusion passed 30/30 and the full rerun passed. SQL migrations and Edge functions were not run against PostgreSQL/Supabase or deployed.
+Latest verified implementation checkpoint: `5f09406` (source); full Node suite 500/500 passed; model/Fusion/Edge focused suites 73/73 and standalone Fusion suite 34/34 passed; changed-file ESLint, `git diff --check`, and production Vite build passed. Fusion authority now uses owner-bound permission epochs for local routing and authenticated server entitlements at the Edge boundary; deadline exhaustion blocks subsequent provider dispatch. New evidence includes accessible Space tool membership UI, bounded typed tool invocation with per-step authorization, mandate-bound lease renewal (static/mock only), explicit snippet edit proposals, lifecycle fencing for sensitive action previews and undo, teacher answer-key checks at HEY read/export boundaries, and skewed Ultrasparse benchmark cases. No external database/deployment, browser E2E, native, or provider-runtime validation was performed.
 
 ## Status rules
 
