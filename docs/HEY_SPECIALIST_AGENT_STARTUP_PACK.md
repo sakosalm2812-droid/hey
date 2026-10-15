@@ -37,7 +37,15 @@ These follow-up branches use the latest verified coordinator tree plus documenta
 |---:|---|---|---|---|---|
 | 01 | `/root/additional_01_frontend` | `codex/additional-01-frontend-director` | `work/hey-specialists/additional-01-frontend-director` | `eeffea1` | Explicit Fusion request control and honest denial/unconfigured states; ordinary chat stays default |
 | 02 | `/root/additional_02_spaces` | `codex/additional-02-spaces-onboarding` | `work/hey-specialists/additional-02-spaces-onboarding` | `eeffea1` | Account-safe natural-language Space preview/confirmation core contract |
+| 03 | Pending worker slot | `codex/additional-03-tool-library` | `work/hey-specialists/additional-03-tool-library` | `6b52d49` | Extend the canonical capability discovery/metadata lifecycle without creating another tool engine |
+| 04 | Pending worker slot | `codex/additional-04-edge-everywhere` | `work/hey-specialists/additional-04-edge-everywhere` | `6b52d49` | Continue only a permission-gated Edge device slice supported by an actual adapter contract |
+| 05 | Pending worker slot | `codex/additional-05-gesture-control` | `work/hey-specialists/additional-05-gesture-control` | `6b52d49` | Advance gesture lifecycle/authorization contracts; no detector availability claim |
+| 06 | Pending worker slot | `codex/additional-06-flow-dictation` | `work/hey-specialists/additional-06-flow-dictation` | `6b52d49` | Advance provider/privacy/correction capabilities through the existing dictation contract |
 | 07 | `/root/additional_07_voiceos` | `codex/additional-07-voiceos-control` | `work/hey-specialists/additional-07-voiceos-control` | `eeffea1` | VoiceOS intent classes and confirmation preview contract; no OS side effects |
+| 08 | Pending worker slot | `codex/additional-08-teacher-experience` | `work/hey-specialists/additional-08-teacher-experience` | `6b52d49` | Extend verified teacher artifact workflow with provenance/student-data boundaries |
+| 09 | Pending worker slot | `codex/additional-09-hey-one-models` | `work/hey-specialists/additional-09-hey-one-models` | `6b52d49` | Advance reproducible model/inference metadata; do not claim model training or hosted inference |
+| 10 | Pending worker slot | `codex/additional-10-ultrasparse-research` | `work/hey-specialists/additional-10-ultrasparse-research` | `6b52d49` | Continue measured sparse selection research using existing linear default as baseline |
+| 11 | Pending worker slot | `codex/additional-11-fusion-models` | `work/hey-specialists/additional-11-fusion-models` | `6b52d49` | Continue post-Edge Fusion review without changing shared frontend or duplicating provider routing |
 
 ## Ready-to-paste startup prompts
 
