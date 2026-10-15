@@ -96,6 +96,11 @@ function hasBoundAnswerEvidence(output) {
   return answerClaims.length === 1 && typeof answerClaims[0].value === "string" && answerClaims[0].value === output.text;
 }
 
+function hasConfirmedVerificationEvidence(output) {
+  const verificationClaims = output.evidence.filter((item) => item.claimId.toLocaleLowerCase("en-US") === "verification");
+  return verificationClaims.length === 1 && verificationClaims[0].value === true;
+}
+
 async function invokeWithTimeout(invoke, request, parentSignal, timeoutMs) {
   const controller = new AbortController();
   if (parentSignal?.aborted) throw new Error("Provider request cancelled");
@@ -381,9 +386,19 @@ export async function runProviderFusion({
     let raw;
     try {
       dispatchedCalls += 1;
+      const isCheckerCall = outputs.length > 0 && !primaryFailed;
+      const candidate = isCheckerCall ? Object.freeze({
+        providerId: outputs[0].providerId,
+        modelId: outputs[0].modelId,
+        text: outputs[0].text,
+        confidence: outputs[0].confidence,
+        evidence: outputs[0].evidence,
+      }) : null;
       raw = await invokeWithTimeout(invoke, {
         providerId: model.providerId,
         modelId: model.id,
+        role: isCheckerCall ? "checker" : primaryFailed ? "fallback" : "primary",
+        candidate,
         prompt,
         accountScope,
         maxCostUsd: estimate,
@@ -436,12 +451,21 @@ export async function runProviderFusion({
           return result("provider_contract_invalid", { reason: "candidate_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
         }
       }
-    } else if ((independentCheckRequired || primaryFailed) && !hasBoundAnswerEvidence(parsedOutput)) {
-      return result("provider_contract_invalid", {
-        reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "checker_answer_not_bound_to_evidence",
-        calls: dispatchedCalls,
-        reservedCostUsd,
-      });
+    } else if (independentCheckRequired || primaryFailed) {
+      if (!hasBoundAnswerEvidence(parsedOutput)) {
+        return result("provider_contract_invalid", {
+          reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "checker_answer_not_bound_to_evidence",
+          calls: dispatchedCalls,
+          reservedCostUsd,
+        });
+      }
+      if (!primaryFailed && !hasConfirmedVerificationEvidence(parsedOutput)) {
+        return result("provider_contract_invalid", {
+          reason: "checker_verification_not_confirmed",
+          calls: dispatchedCalls,
+          reservedCostUsd,
+        });
+      }
     }
     outputs.push({
       providerId: model.providerId,

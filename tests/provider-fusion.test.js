@@ -42,6 +42,10 @@ function providers({ secondCost = 0.02, withLocal = false, priced = true } = {})
 }
 
 const evidence = (value = "42") => [{ claimId: "answer", statement: `The answer is ${value}.`, value, source: "fixture://source" }];
+const checkedEvidence = (value = "42", confirmed = true) => [
+  ...evidence(value),
+  { claimId: "verification", statement: "The candidate was independently reviewed.", value: confirmed, source: "fixture://review" },
+];
 const base = {
   prompt: "What is the fixture answer?",
   accountScope: "account:fixture-a",
@@ -68,24 +72,41 @@ test("Auto stays on one model when confidence and evidence justify the cheaper a
   assert.equal(response.costUsd, 0.01);
 });
 
-test("low confidence escalates to a distinct checker and records disagreement evidence", async () => {
+test("the checker receives the primary candidate and rejects an unsupported answer", async () => {
+  providers();
+  let checkerRequest;
+  const response = await runProviderFusion({
+    ...base,
+    invoke: async (request) => {
+      if (request.role === "checker") checkerRequest = request;
+      return request.role === "primary"
+      ? { text: "42", confidence: 0.4, evidence: evidence("42"), costUsd: 0.01 }
+      : { text: "43", confidence: 0.9, evidence: checkedEvidence("43", false), costUsd: 0.015 };
+    },
+  });
+  assert.equal(response.status, "provider_contract_invalid");
+  assert.equal(response.reason, "checker_verification_not_confirmed");
+  assert.equal(response.answer, undefined);
+  assert.equal(checkerRequest.candidate.text, "42");
+  assert.equal(checkerRequest.candidate.providerId, "fusion-primary");
+  assert.equal(Object.isFrozen(checkerRequest.candidate), true);
+});
+
+test("a matching checker response without an explicit verification claim is withheld", async () => {
   providers();
   const response = await runProviderFusion({
     ...base,
-    invoke: async ({ providerId }) => providerId === "fusion-primary"
-      ? { text: "42", confidence: 0.4, evidence: evidence("42"), costUsd: 0.01 }
-      : { text: "43", confidence: 0.9, evidence: evidence("43"), costUsd: 0.015 },
+    mode: FUSION_MODES.FUSION,
+    invoke: async () => ({
+      text: "42",
+      confidence: 0.9,
+      evidence: evidence(),
+      costUsd: 0.01,
+    }),
   });
-  assert.equal(response.status, "conflict");
-  assert.equal(response.answer, null);
-  assert.equal(response.independentlyChecked, true);
-  assert.deepEqual(response.conflicts[0].first, {
-    providerId: "fusion-primary", value: "42", source: "fixture://source",
-  });
-  assert.deepEqual(response.conflicts[0].second, {
-    providerId: "fusion-checker", value: "43", source: "fixture://source",
-  });
-  assert.equal(response.evidence.length, 2);
+  assert.equal(response.status, "provider_contract_invalid");
+  assert.equal(response.reason, "checker_verification_not_confirmed");
+  assert.equal(response.answer, undefined);
 });
 
 test("agreement is synthesized locally from both provider outputs without a third model call", async () => {
@@ -96,7 +117,7 @@ test("agreement is synthesized locally from both provider outputs without a thir
     ...base,
     invoke: async ({ providerId }) => {
       providerCalls += 1;
-      return { text: "42", confidence: providerId === "fusion-primary" ? 0.3 : 0.92, evidence: evidence(), costUsd: 0.01 };
+      return { text: "42", confidence: providerId === "fusion-primary" ? 0.3 : 0.92, evidence: providerId === "fusion-primary" ? evidence() : checkedEvidence(), costUsd: 0.01 };
     },
     synthesize: (input) => {
       synthesisInput = input;
@@ -195,7 +216,7 @@ test("the local synthesizer cannot mutate evidence used for the returned decisio
     ...base,
     invoke: async ({ providerId }) => providerId === "fusion-primary"
       ? { text: "42", confidence: 0.2, evidence: evidence(), costUsd: 0.01 }
-      : { text: "42", confidence: 0.9, evidence: evidence(), costUsd: 0.01 },
+      : { text: "42", confidence: 0.9, evidence: checkedEvidence(), costUsd: 0.01 },
     synthesize: ({ checker }) => {
       checker.evidence[0].value = "forged";
       return "forged answer";
