@@ -3,6 +3,7 @@ import { executeWithPermission, authorizeExecution, hasPermission } from "./perm
 import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { getAccountScope, subscribeAccountScope } from "./accountScope.js";
 import { createToolLibraryPreferenceStore } from "./toolLibraryPreferences.js";
+import { normalizeToolSchema, snapshotToolData, validateToolValue } from "./toolSchemas.js";
 
 const tools = new Map();
 const activeToolSessions = new Map();
@@ -10,6 +11,7 @@ const toolSessionActivity = new Map();
 const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
+const invocationPlans = new WeakMap();
 export const toolLibraryPreferenceStore = createToolLibraryPreferenceStore({
   isToolRegistered: (name) => tools.has(name),
 });
@@ -92,27 +94,6 @@ function describeTool(tool) {
   });
 }
 
-function validateInput(input, schema) {
-  if (!schema) return null;
-  if (schema.type === "object" && (!input || typeof input !== "object" || Array.isArray(input))) {
-    return "Tool input must be an object.";
-  }
-
-  for (const key of schema.required || []) {
-    if (input?.[key] === undefined || input?.[key] === null) return `Missing required input: ${key}`;
-  }
-
-  for (const [key, definition] of Object.entries(schema.properties || {})) {
-    if (input?.[key] === undefined || !definition.type) continue;
-    const typeMatches = definition.type === "array"
-      ? Array.isArray(input[key])
-      : typeof input[key] === definition.type;
-    if (!typeMatches) return `Invalid input type for ${key}. Expected ${definition.type}.`;
-  }
-
-  return null;
-}
-
 function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   if (!name || typeof handler !== "function") {
     throw new TypeError("A tool name and function are required.");
@@ -126,6 +107,8 @@ function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   }
 
   const safeMetadata = cloneMetadata(metadata);
+  if (safeMetadata.inputSchema !== undefined) safeMetadata.inputSchema = normalizeToolSchema(safeMetadata.inputSchema);
+  if (safeMetadata.outputSchema !== undefined) safeMetadata.outputSchema = normalizeToolSchema(safeMetadata.outputSchema);
   const lifecycle = safeMetadata.lifecycle;
   if (lifecycle !== undefined && (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle))) {
     throw new TypeError("Tool lifecycle metadata must be a plain object.");
@@ -178,6 +161,95 @@ export function unregisterTool(name) {
     }
   }
   return tools.delete(name);
+}
+
+const MAX_INVOCATION_STEPS = 8;
+const MAX_INVOCATION_BINDINGS = 16;
+
+/** Capture a bounded, typed multi-tool plan. Execution always uses the canonical library path. */
+export function createToolInvocationPlan(steps) {
+  if (!Array.isArray(steps) || steps.length === 0 || steps.length > MAX_INVOCATION_STEPS) {
+    throw new TypeError(`A plan must contain between 1 and ${MAX_INVOCATION_STEPS} steps.`);
+  }
+  steps = snapshotToolData(steps, "Invocation plan");
+  const stepIds = new Set();
+  const snapshots = [];
+  let bindingCount = 0;
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    if (!step || typeof step !== "object" || Array.isArray(step) ||
+        Object.keys(step).some((key) => !["id", "toolName", "input", "bindings"].includes(key))) {
+      throw new TypeError("Plan steps must contain only id, toolName, input, and bindings.");
+    }
+    const { id, toolName } = step;
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/u.test(id) || stepIds.has(id)) throw new TypeError("Plan step ids must be unique bounded identifiers.");
+    if (typeof toolName !== "string" || !tools.has(toolName)) throw new TypeError(`Plan tool is not registered: ${toolName}.`);
+    const tool = tools.get(toolName);
+    const schema = tool.metadata.inputSchema;
+    if (!schema) throw new TypeError(`Tool ${toolName} does not declare a typed input schema.`);
+    const input = snapshotToolData(step.input, `Input for ${toolName}`);
+    const bindings = step.bindings === undefined ? [] : step.bindings;
+    if (!Array.isArray(bindings)) throw new TypeError("Plan bindings must be an array.");
+    bindingCount += bindings.length;
+    if (bindingCount > MAX_INVOCATION_BINDINGS) throw new TypeError("Plan contains too many bindings.");
+    const safeBindings = bindings.map((binding) => {
+      if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
+          Object.keys(binding).some((key) => !["fromStepId", "fromField", "toField"].includes(key))) {
+        throw new TypeError("Bindings must contain only fromStepId, fromField, and toField.");
+      }
+      const sourceIndex = snapshots.findIndex((candidate) => candidate.id === binding.fromStepId);
+      if (sourceIndex < 0 || typeof binding.fromField !== "string" || typeof binding.toField !== "string") {
+        throw new TypeError("Bindings must reference an earlier step and declared fields.");
+      }
+      const sourceSchema = snapshots[sourceIndex].tool.metadata.outputSchema;
+      const sourceField = sourceSchema?.type === "object" ? sourceSchema.properties[binding.fromField] : null;
+      const targetField = schema.type === "object" ? schema.properties[binding.toField] : null;
+      if (!sourceField || !targetField || !["string", "number", "integer", "boolean", "null"].includes(sourceField.type) ||
+          sourceField.type !== targetField.type || Object.hasOwn(input, binding.toField)) {
+        throw new TypeError("Binding fields must be unset scalar fields with matching declared types.");
+      }
+      return Object.freeze({ fromStepId: binding.fromStepId, fromField: binding.fromField, toField: binding.toField });
+    });
+    const boundFields = new Set(safeBindings.map(({ toField }) => toField));
+    if (boundFields.size !== safeBindings.length) throw new TypeError("Each destination field can have only one binding.");
+    const validationSchema = boundFields.size && schema.type === "object"
+      ? { ...schema, required: schema.required.filter((key) => !boundFields.has(key)) }
+      : schema;
+    const inputError = validateToolValue(input, validationSchema, `Input for ${toolName}`);
+    if (inputError) throw new TypeError(inputError);
+    stepIds.add(id);
+    snapshots.push({ id, toolName, tool, input, bindings: safeBindings });
+  }
+  const plan = Object.freeze({ stepCount: snapshots.length, stepIds: Object.freeze(snapshots.map(({ id }) => id)) });
+  invocationPlans.set(plan, snapshots);
+  return plan;
+}
+
+export async function executeToolInvocationPlan(plan, context = {}) {
+  const steps = invocationPlans.get(plan);
+  if (!steps) return { success: false, status: "invalid_plan", error: "Invocation plan is invalid or was not created by this registry.", completed: [], results: [] };
+  const byId = new Map();
+  const results = [];
+  for (const step of steps) {
+    if (tools.get(step.toolName) !== step.tool) {
+      return { success: false, status: "stale_registration", failedStepId: step.id, error: `Tool registration changed for ${step.toolName}.`, completed: results.map(({ stepId }) => stepId), results };
+    }
+    const input = snapshotToolData(step.input, `Input for ${step.toolName}`);
+    for (const binding of step.bindings) {
+      const source = byId.get(binding.fromStepId);
+      if (!source || !source.output || !Object.hasOwn(source.output, binding.fromField)) {
+        return { success: false, status: "binding_failed", failedStepId: step.id, error: "A declared output binding was unavailable.", completed: results.map(({ stepId }) => stepId), results };
+      }
+      input[binding.toField] = source.output[binding.fromField];
+    }
+    const inputError = validateToolValue(input, step.tool.metadata.inputSchema, `Input for ${step.toolName}`);
+    if (inputError) return { success: false, status: "binding_failed", failedStepId: step.id, error: inputError, completed: results.map(({ stepId }) => stepId), results };
+    const result = await runToolLibraryEntry(step.toolName, input, context);
+    results.push({ stepId: step.id, success: result?.success === true, status: result?.status || (result?.success ? "completed" : "failed"), result: result?.result ?? null, error: result?.error || null });
+    if (!result?.success) return { success: false, status: result?.status || "failed", failedStepId: step.id, error: result?.error || "Tool invocation failed.", completed: results.slice(0, -1).map(({ stepId }) => stepId), results };
+    byId.set(step.id, { output: result.result });
+  }
+  return { success: true, status: "completed", completed: results.map(({ stepId }) => stepId), results };
 }
 
 export function getTool(name) {
@@ -460,7 +532,16 @@ export async function executeTool(name, input, context = {}) {
   }
 
   const metadata = tool.metadata;
-  const inputError = validateInput(input, metadata.inputSchema);
+  let safeInput = input;
+  let inputError = null;
+  if (metadata.inputSchema) {
+    try {
+      safeInput = snapshotToolData(input, `Input for ${name}`);
+      inputError = validateToolValue(safeInput, metadata.inputSchema, `Input for ${name}`);
+    } catch (error) {
+      inputError = error instanceof Error ? error.message : "Tool input is invalid.";
+    }
+  }
   if (inputError) {
     recordAudit({ action: "tool.rejected", tool: name, status: "failed", requestId, metadata: { reason: inputError } });
     return { success: false, result: null, error: inputError, metadata: { requestId, source: "tool_registry" } };
@@ -512,7 +593,7 @@ export async function executeTool(name, input, context = {}) {
       capability: metadata.capabilities?.[0] || permission,
       clientPlan: context.clientPlan || context.plan,
       clientEntitlements: context.clientEntitlements || context.entitlements,
-    }, () => runWithRetries(tool, input, { ...context, requestId }));
+    }, () => runWithRetries(tool, safeInput, { ...context, requestId }));
 
     if (permissionResult.result && typeof permissionResult.result === "object") {
       return {
@@ -534,7 +615,7 @@ export async function executeTool(name, input, context = {}) {
     };
   }
 
-  return runWithRetries(tool, input, { ...context, requestId });
+  return runWithRetries(tool, safeInput, { ...context, requestId });
 }
 
 async function runWithRetries(tool, input, context) {
@@ -543,6 +624,7 @@ async function runWithRetries(tool, input, context) {
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
+      if (tools.get(tool.name) !== tool) return { success: false, result: null, error: "Tool registration changed before execution.", status: "stale_registration", metadata: { requestId: context.requestId, source: "tool_registry" } };
       if (context.signal?.aborted) {
         recordAudit({ action: "tool.cancelled", tool: tool.name, status: "cancelled", requestId: context.requestId });
         return { success: false, result: null, error: "Tool run was cancelled.", status: "cancelled", metadata: { requestId: context.requestId, attempts: attempt, source: tool.metadata.source || "tool_registry", confidence: 0 } };
@@ -550,6 +632,7 @@ async function runWithRetries(tool, input, context) {
       const onLifecycleStart = context[LIFECYCLE_START_CALLBACK];
       if (typeof onLifecycleStart === "function") onLifecycleStart();
       const result = await tool.handler(input, context);
+      if (tools.get(tool.name) !== tool) return { success: false, result: null, error: "Tool registration changed during execution.", status: "stale_registration", metadata: { requestId: context.requestId, source: "tool_registry" } };
       if (result?.success === false) {
         const retryable = isTransientFailure(result);
         recordAudit({ action: "tool.failed", tool: tool.name, status: "failed", requestId: context.requestId, metadata: { attempt, error: result.error || "Tool reported failure.", verified: Boolean(result.verified), retryable } });
@@ -560,6 +643,22 @@ async function runWithRetries(tool, input, context) {
           error: result.error || "Tool reported failure.",
           metadata: { requestId: context.requestId, attempts: attempt + 1, source: tool.metadata.source || "tool_registry", confidence: 0, verified: Boolean(result.verified), retryable },
         };
+      }
+      if (tool.metadata.outputSchema) {
+        let output;
+        let outputError;
+        try {
+          output = snapshotToolData(result, `Output from ${tool.name}`);
+          outputError = validateToolValue(output, tool.metadata.outputSchema, `Output from ${tool.name}`);
+        } catch (error) {
+          outputError = error instanceof Error ? error.message : "Tool output is invalid.";
+        }
+        if (outputError) {
+          recordAudit({ action: "tool.rejected", tool: tool.name, status: "failed", requestId: context.requestId, metadata: { reason: "output_contract" } });
+          return { success: false, result: null, error: "Tool output did not match its declared schema.", status: "invalid_output", metadata: { requestId: context.requestId, attempts: attempt + 1, source: tool.metadata.source || "tool_registry", confidence: 0 } };
+        }
+        recordAudit({ action: "tool.executed", tool: tool.name, status: "completed", requestId: context.requestId, metadata: { attempt } });
+        return { success: true, result: output, error: null, metadata: { requestId: context.requestId, attempt: attempt + 1, source: tool.metadata.source || "tool_registry", confidence: 1 } };
       }
       recordAudit({ action: "tool.executed", tool: tool.name, status: "completed", requestId: context.requestId, metadata: { attempt } });
       return {
@@ -604,4 +703,6 @@ export default {
   getToolLifecycleContract,
   toolLibraryPreferenceStore,
   executeTool,
+  createToolInvocationPlan,
+  executeToolInvocationPlan,
 };
