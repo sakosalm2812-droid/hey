@@ -69,6 +69,7 @@ test("dictation preferences are accessible, account-scoped, and snapshotted when
   assert.match(control, /dictationPreferenceStore\.save\(normalized\)/);
   assert.match(control, /dictationPreferenceStore\.clear\(\)/);
   assert.match(control, /<details className="hey-dictation__preferences"/);
+  assert.match(control, /chat\.dictation\.preferencesDisclosure/);
   assert.match(control, /aria-label=\{t\("chat\.dictation\.language"\)\}/);
   assert.match(control, /corrections: \[\s*\.\.\.snapshot\.corrections,\s*\.\.\.snapshot\.snippets\.map/);
   assert.match(control, /language: snapshot\.language/);

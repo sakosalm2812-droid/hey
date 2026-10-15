@@ -12,6 +12,7 @@ export const SPACE_CREATION_LIMITS = Object.freeze({
 });
 
 const STORAGE_KEY = "hey_spaces";
+const MAX_STORAGE_CHARS = 1_000_000;
 const CREATE_SPACE_PROMPT = /^(?:please\s+)?create\s+(?:a\s+)?(?:private\s+)?space\s+(?:called|named)\s+(.+)$/i;
 const FORBIDDEN_INTENT = /\b(?:public|share|shared|sharing|invite|invites|members?|permissions?|access|roles?|admin|administrator|owner|grant|escalat(?:e|ion))\b/i;
 const SPACE_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'’()-]{0,79}$/u;
@@ -131,12 +132,18 @@ export class SpaceCreationEngine {
     this.loadError = false;
     try {
       const stored = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
-      if (!stored) return;
+      if (stored == null) return;
+      if (typeof stored !== "string" || stored.length > MAX_STORAGE_CHARS) throw new Error("Space storage is invalid or too large");
       const parsed = JSON.parse(stored);
-      if (!plainRecord(parsed) || parsed.accountScope !== scope || !plainRecord(parsed.spaces)) return;
-      Object.entries(parsed.spaces).slice(0, SPACE_CREATION_LIMITS.maxSpacesPerAccount).forEach(([id, value]) => {
+      if (!plainRecord(parsed) || parsed.contractVersion !== SPACE_CREATION_CONTRACT_VERSION || parsed.accountScope !== scope || !plainRecord(parsed.spaces)) {
+        throw new Error("Space storage version or scope is invalid");
+      }
+      const entries = Object.entries(parsed.spaces);
+      if (entries.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) throw new Error("Space storage exceeds the account limit");
+      entries.forEach(([id, value]) => {
         const clean = cleanStoredSpace(id, value, scope);
-        if (clean) this.spaces.set(id, clean);
+        if (!clean) throw new Error("Space storage contains an invalid record");
+        this.spaces.set(id, clean);
       });
     } catch {
       this.spaces.clear();
@@ -153,6 +160,7 @@ export class SpaceCreationEngine {
         accountScope: this.accountScope,
         spaces: Object.fromEntries(this.spaces),
       });
+      if (serialized.length > MAX_STORAGE_CHARS) return { error: "Space storage limit reached" };
       // safeStorage intentionally absorbs browser storage exceptions. Verify the
       // round trip here so callers never receive a persisted-success result when
       // the canonical per-account store rejected the write.

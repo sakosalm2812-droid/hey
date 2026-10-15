@@ -244,6 +244,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
     <div className="hey-dictation">
       <details className="hey-dictation__preferences" open={preferenceOpen} onToggle={(event) => setPreferenceOpen(event.currentTarget.open)}>
         <summary>{t("chat.dictation.preferencesTitle")}</summary>
+        <p className="hey-dictation__preference-note">{t("chat.dictation.preferencesDisclosure")}</p>
         <fieldset disabled={disabled || isActive || requesting}>
           <legend>{t("chat.dictation.preferencesTitle")}</legend>
           <label>

@@ -213,3 +213,27 @@ test("storage read failures surface as load errors and retry recovers previously
     setAccountScope(previousScope);
   }
 }));
+
+test("corrupt or unsupported stored Space data blocks creation instead of being overwritten", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-storage-corrupt-owner");
+    const key = getAccountStorageKey("hey_spaces");
+    storage.setItem(key, JSON.stringify({ contractVersion: 99, accountScope: "space-storage-corrupt-owner", spaces: {} }));
+    const unsupported = new SpaceCreationEngine();
+    assert.throws(() => unsupported.getSpaces(), /storage could not be read/);
+    assert.match(unsupported.previewNaturalLanguageRequest({ prompt: "Create a space called Keep old version" }).error, /storage could not be read/);
+    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 99);
+
+    storage.setItem(key, JSON.stringify({
+      contractVersion: 1,
+      accountScope: "space-storage-corrupt-owner",
+      spaces: { lost: { id: "wrong-id", accountScope: "space-storage-corrupt-owner", name: "Hidden data", visibility: "private", sharing: "off" } },
+    }));
+    assert.throws(() => unsupported.getSpaces(), /storage could not be read/);
+    assert.match(unsupported.previewNaturalLanguageRequest({ prompt: "Create a space called Keep damaged row" }).error, /storage could not be read/);
+  } finally {
+    setAccountScope(previousScope);
+  }
+}));
