@@ -58,6 +58,16 @@ These isolated tasks continued from coordinator checkpoint `b745752`; all four a
 | `/root/wave2_03_tool_lifecycle` | `codex/wave2-03-tool-lifecycle` | `work/hey-specialists/wave2-03-tool-lifecycle` | `b745752` | Complete, worker `21c2edebbe2c93175f55c8df9ea1cabc75bf9441`, integrated `bca038a`; guarded search/run API; 295 tests, scoped lint and diff check passed |
 | `/root/wave2_04_device_enrollment` | `codex/wave2-04-device-enrollment` | `work/hey-specialists/wave2-04-device-enrollment` | `f29485f` | Complete, worker `9051d8012250a64664131a82c0725a781fc94c55`, integrated `ab4e6ce`; versioned account-scoped local persistence/read-back/revocation; 297 tests, focused suites, scoped lint and diff check passed |
 
+## Wave 3 — additional implementation continuation
+
+The full attached mission calls for 11 specialty areas through October 28, 2026 (Asia/Baghdad). These Luna/High collaboration agents start from `fed6fbb`, latest durable coordinator checkpoint. Work remains in separate worktrees until coordinator review. These agent references are not standalone Codex chat IDs.
+
+| Worker task | Branch | Worktree | Starting SHA | Scope/state |
+|---|---|---|---|---|
+| `/root/wave3_space_ui` | `codex/wave3-space-ui` | `work/hey-specialists/wave3-space-ui` | `fed6fbb` | Active: accessible Space creation UI wired to account-bound preview/confirm API |
+| `/root/wave3_tool_lifecycle` | `codex/wave3-tool-lifecycle` | `work/hey-specialists/wave3-tool-lifecycle` | `fed6fbb` | Active: backend lifecycle contracts with honest unsupported states and account binding |
+| `/root/wave3_device_transport` | `codex/wave3-device-transport` | `work/hey-specialists/wave3-device-transport` | `fed6fbb` | Active: trusted server-side account-scoped device command queue persistence seam; no claim of delivery/native execution |
+
 ## Ready-to-paste startup prompts
 
 ### CHAT 01 — HEY FRONTEND DIRECTOR
