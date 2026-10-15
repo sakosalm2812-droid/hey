@@ -297,6 +297,9 @@ test("canonical registered tools can join and leave any private Space without gr
       expectedRevision = added.revision;
     }
     assert.deepEqual(engine.getLayoutPreferences(created.space.id).toolIds, toolNames);
+    const reloadedOwnerA = new SpaceCreationEngine();
+    assert.equal(reloadedOwnerA.getSpaces()[0].name, "Cross category");
+    assert.deepEqual(reloadedOwnerA.getLayoutPreferences(created.space.id).toolIds, toolNames, "cross-category choices must survive a fresh engine load");
     assert.deepEqual(listPermissions(), grantsBefore, "membership metadata must not grant or revoke a tool permission");
 
     assert.equal(engine.setToolMembership({
@@ -332,10 +335,12 @@ test("canonical registered tools can join and leave any private Space without gr
     assert.deepEqual(listPermissions(), grantsBefore);
 
     setAccountScope("space-tool-owner-b");
-    assert.deepEqual(engine.getSpaces(), []);
+    const ownerBReload = new SpaceCreationEngine();
+    assert.deepEqual(ownerBReload.getSpaces(), [], "a fresh engine for another account must not see the created Space");
     assert.deepEqual(onboarding.getProgress().starterSpaceSelections, []);
     setAccountScope("space-tool-owner-a");
-    assert.deepEqual(engine.getLayoutPreferences(created.space.id).toolIds, toolNames);
+    const ownerAReload = new SpaceCreationEngine();
+    assert.deepEqual(ownerAReload.getLayoutPreferences(created.space.id).toolIds, toolNames);
     assert.deepEqual(listPermissions(), grantsBefore);
 
     unregisterTool(toolNames[1]);
