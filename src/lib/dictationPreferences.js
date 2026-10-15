@@ -5,6 +5,8 @@ const STORAGE_KEY = "hey_dictation_preferences";
 const MAX_BYTES = 48_000;
 const MAX_CORRECTIONS = 64;
 const MAX_SNIPPETS = 32;
+const MAX_VOCABULARY = 32;
+const MAX_PERSONALIZATION_ENTRIES = 64;
 const MAX_APPLICATIONS = 32;
 const MAX_APPLICATION_ID_LENGTH = 96;
 const storesBeingMutated = new WeakSet();
@@ -13,6 +15,7 @@ export const DEFAULT_DICTATION_PREFERENCES = Object.freeze({
   language: "en-US",
   corrections: Object.freeze([]),
   snippets: Object.freeze([]),
+  vocabulary: Object.freeze([]),
   applications: Object.freeze([]),
 });
 
@@ -77,6 +80,23 @@ function canonicalLanguage(value) {
   }
 }
 
+function phraseKey(value, language) {
+  return value.normalize("NFC").toLocaleUpperCase(language).toLocaleLowerCase(language).normalize("NFC");
+}
+
+function assertUniquePersonalizedPhrases(corrections, snippets, vocabulary, language) {
+  const sources = new Set();
+  for (const phrase of [
+    ...corrections.map(({ from }) => from),
+    ...snippets.map(({ name }) => name),
+    ...vocabulary,
+  ]) {
+    const key = phraseKey(phrase, language);
+    if (sources.has(key)) throw new TypeError("Dictation corrections, snippets, and vocabulary phrases must not conflict.");
+    sources.add(key);
+  }
+}
+
 function plainText(value, name, maxLength, allowLineBreaks = false) {
   if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
     throw new TypeError(`${name} must be non-empty text within the supported length.`);
@@ -93,7 +113,7 @@ function plainText(value, name, maxLength, allowLineBreaks = false) {
 
 export function normalizeDictationPreferences(input) {
   const record = plainRecord(input, "Dictation preferences");
-  const allowed = new Set(["language", "corrections", "snippets", "applications"]);
+  const allowed = new Set(["language", "corrections", "snippets", "vocabulary", "applications"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new TypeError("Dictation preferences contain an unsupported field.");
   const language = canonicalLanguage(record.language ?? DEFAULT_DICTATION_PREFERENCES.language);
 
@@ -106,7 +126,7 @@ export function normalizeDictationPreferences(input) {
     }
     const from = plainText(correction.from, "Correction source", 80);
     const to = plainText(correction.to, "Correction replacement", 160);
-    const key = from.toLocaleLowerCase();
+    const key = phraseKey(from, language);
     if (correctionSources.has(key)) throw new TypeError("Dictation correction sources must be unique.");
     correctionSources.add(key);
     return Object.freeze({ from, to });
@@ -121,13 +141,23 @@ export function normalizeDictationPreferences(input) {
     }
     const name = plainText(snippet.name, "Snippet name", 64);
     const text = plainText(snippet.text, "Snippet text", 2000, true);
-    const key = name.toLocaleLowerCase();
+    const key = phraseKey(name, language);
     if (snippetNames.has(key)) throw new TypeError("Dictation snippet names must be unique.");
     snippetNames.add(key);
     return Object.freeze({ name, text });
   });
-  if (corrections.length + snippets.length > MAX_CORRECTIONS) {
-    throw new TypeError(`Combined dictation corrections and snippets must not exceed ${MAX_CORRECTIONS} entries.`);
+  const vocabularyInput = plainArray(record.vocabulary ?? [], "Dictation vocabulary", MAX_VOCABULARY);
+  const vocabularyKeys = new Set();
+  const vocabulary = vocabularyInput.map((entry) => {
+    const phrase = plainText(entry, "Vocabulary phrase", 80);
+    const key = phraseKey(phrase, language);
+    if (vocabularyKeys.has(key)) throw new TypeError("Dictation vocabulary phrases must be unique.");
+    vocabularyKeys.add(key);
+    return phrase;
+  });
+  assertUniquePersonalizedPhrases(corrections, snippets, vocabulary, language);
+  if (corrections.length + snippets.length + vocabulary.length > MAX_PERSONALIZATION_ENTRIES) {
+    throw new TypeError(`Combined dictation corrections, snippets, and vocabulary must not exceed ${MAX_PERSONALIZATION_ENTRIES} entries.`);
   }
 
   const applicationInput = plainArray(record.applications ?? [], "Dictation applications", MAX_APPLICATIONS);
@@ -142,24 +172,32 @@ export function normalizeDictationPreferences(input) {
     if (applicationIds.has(applicationId)) throw new TypeError("Dictation application identities must be unique.");
     applicationIds.add(applicationId);
     const override = plainRecord(application.preferences, "Application dictation preferences");
-    if (!Object.keys(override).length || Object.keys(override).some((key) => !["language", "corrections", "snippets"].includes(key))) {
+    if (!Object.keys(override).length || Object.keys(override).some((key) => !["language", "corrections", "snippets", "vocabulary"].includes(key))) {
       throw new TypeError("Application dictation preferences contain an unsupported field.");
     }
     const normalized = {};
     if (Object.hasOwn(override, "language")) normalized.language = canonicalLanguage(override.language);
     if (Object.hasOwn(override, "corrections")) {
-      normalized.corrections = normalizeDictationPreferences({ corrections: override.corrections }).corrections;
+      normalized.corrections = normalizeDictationPreferences({ language: normalized.language ?? language, corrections: override.corrections }).corrections;
     }
     if (Object.hasOwn(override, "snippets")) {
-      normalized.snippets = normalizeDictationPreferences({ snippets: override.snippets }).snippets;
+      normalized.snippets = normalizeDictationPreferences({ language: normalized.language ?? language, snippets: override.snippets }).snippets;
     }
-    if ((normalized.corrections?.length ?? 0) + (normalized.snippets?.length ?? 0) > MAX_CORRECTIONS) {
-      throw new TypeError(`Combined application corrections and snippets must not exceed ${MAX_CORRECTIONS} entries.`);
+    if (Object.hasOwn(override, "vocabulary")) {
+      normalized.vocabulary = normalizeDictationPreferences({ language: normalized.language ?? language, vocabulary: override.vocabulary }).vocabulary;
+    }
+    const effectiveCorrections = normalized.corrections ?? corrections;
+    const effectiveSnippets = normalized.snippets ?? snippets;
+    const effectiveVocabulary = normalized.vocabulary ?? vocabulary;
+    const effectiveLanguage = normalized.language ?? language;
+    assertUniquePersonalizedPhrases(effectiveCorrections, effectiveSnippets, effectiveVocabulary, effectiveLanguage);
+    if (effectiveCorrections.length + effectiveSnippets.length + effectiveVocabulary.length > MAX_PERSONALIZATION_ENTRIES) {
+      throw new TypeError(`Combined application corrections, snippets, and vocabulary must not exceed ${MAX_PERSONALIZATION_ENTRIES} entries.`);
     }
     return Object.freeze({ applicationId, preferences: Object.freeze(normalized) });
   });
 
-  return Object.freeze({ language, corrections: Object.freeze(corrections), snippets: Object.freeze(snippets), applications: Object.freeze(applications) });
+  return Object.freeze({ language, corrections: Object.freeze(corrections), snippets: Object.freeze(snippets), vocabulary: Object.freeze(vocabulary), applications: Object.freeze(applications) });
 }
 
 /** Resolve a stable snapshot, using app overrides field-by-field over global settings. */
@@ -172,6 +210,7 @@ export function resolveDictationPreferences(input, applicationId) {
     language: app?.preferences.language ?? preferences.language,
     corrections: app?.preferences.corrections ?? preferences.corrections,
     snippets: app?.preferences.snippets ?? preferences.snippets,
+    vocabulary: app?.preferences.vocabulary ?? preferences.vocabulary,
   });
 }
 
@@ -185,7 +224,7 @@ export function applyDictationPreferences(transcript, input) {
   if (corrections.length > MAX_CORRECTIONS) {
     throw new TypeError(`Combined dictation corrections and snippets must not exceed ${MAX_CORRECTIONS} entries.`);
   }
-  return applyDictationCorrections(transcript, corrections);
+  return applyDictationCorrections(transcript, corrections, preferences.language);
 }
 
 function activeAccountScope(getScope) {
@@ -276,7 +315,12 @@ export function createDictationPreferenceStore({
     const scope = activeAccountScope(getScope);
     if (!scope) return { success: false, status: "account_required", preferences: null, settings: null };
     let preferences;
-    try { preferences = normalizeDictationPreferences(value); }
+    let vocabularyProvided;
+    try {
+      const input = plainRecord(value, "Dictation preferences");
+      vocabularyProvided = Object.hasOwn(input, "vocabulary");
+      preferences = normalizeDictationPreferences(input);
+    }
     catch (error) { return { success: false, status: "invalid_input", error: error.message, preferences: null, settings: null }; }
     const store = getStorage();
     if (!store || !["object", "function"].includes(typeof store)) return { success: false, status: "unavailable", preferences: null, settings: null };
@@ -289,11 +333,23 @@ export function createDictationPreferenceStore({
       if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required", preferences: null, settings: null };
       if (identity === null) {
         // A global editor only changes global fields; current app overrides are authoritative.
-        const settings = normalizeDictationPreferences({ ...preferences, applications: current.settings.applications });
+        const settings = normalizeDictationPreferences({
+          ...preferences,
+          vocabulary: vocabularyProvided ? preferences.vocabulary : current.settings.vocabulary,
+          applications: current.settings.applications,
+        });
         return write(scope, store, settings);
       }
       const apps = current.settings.applications.filter((app) => app.applicationId !== identity);
-      apps.push({ applicationId: identity, preferences: { language: preferences.language, corrections: preferences.corrections, snippets: preferences.snippets } });
+      const currentApp = current.settings.applications.find((app) => app.applicationId === identity);
+      const applicationPreferences = {
+        language: preferences.language,
+        corrections: preferences.corrections,
+        snippets: preferences.snippets,
+      };
+      if (vocabularyProvided) applicationPreferences.vocabulary = preferences.vocabulary;
+      else if (currentApp?.preferences.vocabulary !== undefined) applicationPreferences.vocabulary = currentApp.preferences.vocabulary;
+      apps.push({ applicationId: identity, preferences: applicationPreferences });
       const settings = normalizeDictationPreferences({ ...current.settings, applications: apps });
       const result = write(scope, store, settings);
       if (result.success) result.preferences = resolveDictationPreferences(settings, identity);

@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
 import { spaces as spacesApi } from "../src/core/index.js";
 import { OnboardingEngine } from "../src/core/onboardingEngine.js";
+import { clearPermissions, listPermissions, seedPermissions } from "../src/core/permissionManager.js";
 import { SPACE_CREATION_LIMITS, SpaceCreationEngine } from "../src/core/spaceCreationEngine.js";
+import { registerTool, unregisterTool } from "../src/core/toolRegistry.js";
 
 class MemoryStorage {
   values = new Map();
@@ -66,6 +68,7 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(spacesApi.storageContractVersion, 2);
   assert.equal(typeof spacesApi.getLayoutPreferences, "function");
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
+  assert.equal(typeof spacesApi.setToolMembership, "function");
   assert.equal(typeof spacesApi.subscribe, "function");
 });
 
@@ -157,6 +160,7 @@ test("Space layout preference validation and persistence fail closed on hostile,
       { favoriteToolIds: ["../private"] },
       { favoriteToolIds: ["x".repeat(65)] },
       { favoriteToolIds: Array.from({ length: 33 }, (_, index) => `tool.${index}`) },
+      { toolIds: Array.from({ length: SPACE_CREATION_LIMITS.maxToolsPerSpace + 1 }, (_, index) => `tool.${index}`) },
       { widgetIds: ["notes"], shortcutIds: "open" },
     ]) assert.ok(engine.updateLayoutPreferences({ ...base, preferences }).error);
 
@@ -258,6 +262,99 @@ test("version 1 Space records load with empty preferences and are upgraded only 
     assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 2);
     assert.deepEqual(new SpaceCreationEngine().getLayoutPreferences("legacy").widgetIds, ["notes"]);
   } finally { setAccountScope(previousScope); }
+}));
+
+test("canonical registered tools can join and leave any private Space without granting permissions", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  const toolNames = ["test.space.research", "test.space.computer", "test.space.creation"];
+  setAccountScope(previousScope);
+  clearPermissions();
+  try {
+    setAccountScope("space-tool-owner-a");
+    const engine = new SpaceCreationEngine();
+    const onboarding = new OnboardingEngine();
+    const created = engine.confirmNaturalLanguagePreview({
+      previewId: engine.previewNaturalLanguageRequest({ prompt: "Create a space called Cross category" }).previewId,
+      confirm: true,
+    });
+    const categories = ["research", "computer", "generation"];
+    toolNames.forEach((name, index) => registerTool(name, async () => ({ success: true }), {
+      category: categories[index],
+      permissions: [`permission.${categories[index]}`],
+    }));
+    seedPermissions([{ permission: "permission.research", status: "granted" }], "space-tool-owner-a");
+    const grantsBefore = listPermissions();
+    let expectedRevision = 0;
+    for (const toolName of toolNames) {
+      const added = spacesApi.setToolMembership({
+        accountScope: created.space.accountScope,
+        spaceId: created.space.id,
+        toolName,
+        member: true,
+        expectedRevision,
+      });
+      assert.equal(added.success, true);
+      expectedRevision = added.revision;
+    }
+    assert.deepEqual(engine.getLayoutPreferences(created.space.id).toolIds, toolNames);
+    assert.deepEqual(listPermissions(), grantsBefore, "membership metadata must not grant or revoke a tool permission");
+
+    assert.equal(engine.setToolMembership({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      toolName: "test.space.unregistered",
+      member: true,
+      expectedRevision,
+    }).code, "tool_not_registered");
+    assert.equal(engine.updateLayoutPreferences({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      expectedRevision,
+      preferences: { toolIds: ["test.space.unregistered"] },
+    }).code, "tool_not_registered", "the lower-level preferences API cannot bypass canonical registry validation");
+    assert.equal(engine.setToolMembership({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      toolName: toolNames[0],
+      member: true,
+      expectedRevision: 0,
+    }).code, "stale_revision");
+    assert.match(engine.setToolMembership({
+      accountScope: "account:space-tool-owner-b",
+      spaceId: created.space.id,
+      toolName: toolNames[0],
+      member: false,
+      expectedRevision,
+    }).error, /Account scope mismatch/);
+
+    onboarding.setStarterSpaceSelections(["personal", "learning"]);
+    assert.deepEqual(engine.getLayoutPreferences(created.space.id).toolIds, toolNames);
+    assert.deepEqual(listPermissions(), grantsBefore);
+
+    setAccountScope("space-tool-owner-b");
+    assert.deepEqual(engine.getSpaces(), []);
+    assert.deepEqual(onboarding.getProgress().starterSpaceSelections, []);
+    setAccountScope("space-tool-owner-a");
+    assert.deepEqual(engine.getLayoutPreferences(created.space.id).toolIds, toolNames);
+    assert.deepEqual(listPermissions(), grantsBefore);
+
+    unregisterTool(toolNames[1]);
+    const removed = engine.setToolMembership({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      toolName: toolNames[1],
+      member: false,
+      expectedRevision,
+    });
+    assert.equal(removed.success, true, "removed registry entries can still be detached from saved Spaces");
+    assert.deepEqual(removed.toolIds, [toolNames[0], toolNames[2]]);
+    assert.deepEqual(listPermissions(), grantsBefore);
+    assert.equal(storage.getItem(getAccountStorageKey("hey_spaces")).includes(toolNames[1]), false);
+  } finally {
+    toolNames.forEach((name) => unregisterTool(name));
+    clearPermissions();
+    setAccountScope(previousScope);
+  }
 }));
 
 test("natural-language creation preview is safe, non-mutating, and requires explicit confirmation", () => withStorage((storage) => {
