@@ -2,11 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
 import { selectModel, createProviderPlan } from "../src/core/providerRouter.js";
-import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createModelRecord, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
+import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, createModelRecord, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
 import { HEY } from "../src/core/index.js";
 
 test("HEY exposes the validated model serving target contract", () => {
   assert.equal(HEY.modelPlatform.createAdapterServingTarget, createAdapterServingTarget);
+  assert.equal(HEY.modelPlatform.createEvaluationReport, createEvaluationReport);
 });
 
 const HASH = "a".repeat(64);
@@ -35,6 +36,89 @@ function model(id, evidence, local = false) {
 }
 
 const fastEvidence = { latencyP95Ms: 800, qualityScore: 0.78, inputUsdPerMillion: 0.4, outputUsdPerMillion: 0.8, evaluationRunId: "eval-fast" };
+
+function validEvaluationRun() {
+  return {
+    model: { id: "hey/qwen-candidate", revision: "9b".repeat(20), weightSha256: HASH },
+    suite: "hey-conformance-v1",
+    suiteRevision: "suite-7a1c",
+    datasetSha256: "b".repeat(64),
+    evaluatedAt: "2026-10-15T12:00:00.000Z",
+    hardware: "fixture host; no model execution asserted",
+    runId: "run-2026-10-15-1",
+    pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
+    samples: Array.from({ length: 20 }, (_, index) => ({
+      caseId: `case-${index + 1}`,
+      passed: index !== 2 && index !== 12,
+      latencyMs: (index + 1) * 10,
+      inputTokens: 100,
+      outputTokens: 50,
+    })),
+  };
+}
+
+test("evaluation reports derive content-free model quality, p95 latency, and measured token cost", () => {
+  const report = createEvaluationReport(validEvaluationRun());
+  assert.equal(report.modelId, "hey/qwen-candidate");
+  assert.equal(report.evaluation.qualityScore, 0.9);
+  assert.equal(report.evaluation.latencyP95Ms, 190);
+  assert.equal(report.latencyP50Ms, 100);
+  assert.equal(report.latencyP99Ms, 200);
+  assert.equal(report.inputTokens, 2_000);
+  assert.equal(report.outputTokens, 1_000);
+  assert.equal(report.totalCostUsd, 0.004);
+  assert.equal(report.sampleCount, 20);
+  assert.equal(report.passedCount, 18);
+  assert.equal(report.failedCount, 2);
+  assert.equal(Object.hasOwn(report, "samples"), false, "sample identifiers and content are not persisted in the report");
+  assert.ok(Object.isFrozen(report));
+  assert.ok(Object.isFrozen(report.evaluation));
+
+  const modelRecord = createModelRecord({
+    ...VALID_MODEL,
+    revision: report.modelRevision,
+    weightSha256: report.modelWeightSha256,
+    evaluation: report.evaluation,
+  });
+  assert.equal(modelRecord.evaluation.runId, report.evaluation.runId);
+  assert.equal(modelRecord.evaluation.qualityScore, 0.9);
+});
+
+test("evaluation report rejects mutable, duplicate, incomplete, and oversized measurement inputs", () => {
+  const getterRun = validEvaluationRun();
+  let getterCalls = 0;
+  Object.defineProperty(getterRun.samples[0], "latencyMs", { enumerable: true, get() { getterCalls += 1; return 10; } });
+  assert.throws(() => createEvaluationReport(getterRun), /accessor/i);
+  assert.equal(getterCalls, 0);
+
+  const duplicate = validEvaluationRun();
+  duplicate.samples[1].caseId = duplicate.samples[0].caseId;
+  assert.throws(() => createEvaluationReport(duplicate), /unique/i);
+
+  for (const [change, pattern] of [
+    [(run) => { run.samples[0].latencyMs = 0; }, /latencyMs/i],
+    [(run) => { run.samples[0].inputTokens = 1.5; }, /safe integer/i],
+    [(run) => { run.samples[0].passed = "yes"; }, /boolean verdict/i],
+    [(run) => { run.model.revision = "latest"; }, /immutable/i],
+    [(run) => { run.evaluatedAt = "October 15 2026"; }, /canonical ISO-8601/i],
+    [(run) => { run.samples = []; }, /between 1 and/i],
+    [(run) => { run.samples = Array(20_001); }, /dense|sparse/i],
+  ]) {
+    const invalid = validEvaluationRun();
+    change(invalid);
+    assert.throws(() => createEvaluationReport(invalid), pattern);
+  }
+
+  const tooMany = validEvaluationRun();
+  tooMany.samples = Array.from({ length: 1_001 }, (_, index) => ({
+    caseId: `case-${index}`, passed: true, latencyMs: 1, inputTokens: 0, outputTokens: 0,
+  }));
+  assert.throws(() => createEvaluationReport(tooMany), /between 1 and 1000/i);
+
+  const overflowingCost = validEvaluationRun();
+  overflowingCost.pricing.outputUsdPerMillion = Number.MAX_VALUE;
+  assert.throws(() => createEvaluationReport(overflowingCost), /numeric range/i);
+});
 
 test("model metadata binds immutable weights, tokenizer, license, runtime, and evaluation provenance", () => {
   const record = createModelRecord(VALID_MODEL);

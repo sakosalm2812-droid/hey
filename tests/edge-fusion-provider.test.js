@@ -130,6 +130,51 @@ test("fusion disagreement returns no answer and stale account scope cancels befo
   });
 });
 
+test("hostile provider evidence cannot multiply or exceed the bounded conflict summary", async (t) => {
+  const runWithEvidence = async (makeEvidence) => {
+    const calls = [];
+    const fetchImpl = async (url) => {
+      const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
+      calls.push(providerId);
+      const evidence = makeEvidence(providerId);
+      const answer = JSON.stringify({ text: "The providers disagree.", confidence: 0.9, evidence });
+      return providerId === "gemini"
+        ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }), { status: 200 })
+        : new Response(JSON.stringify({ choices: [{ message: { content: answer } }], usage: { prompt_tokens: 50, completion_tokens: 20 } }), { status: 200 });
+    };
+    const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+    return { calls, result };
+  };
+
+  await t.test("duplicate claim ids produce one independent conflict", async () => {
+    const { calls, result } = await runWithEvidence((providerId) => Array.from({ length: 32 }, () => ({
+      claimId: "same-claim",
+      statement: "The providers returned different values.",
+      value: providerId === "openai" ? "alpha" : "beta",
+      source: null,
+    })));
+    assert.equal(result.status, "conflict");
+    assert.equal(result.answer, null);
+    assert.equal(result.conflicts.length, 1);
+    assert.equal(result.conflictsTruncated, false);
+    assert.equal(calls.length, 2);
+  });
+
+  await t.test("more than the report cap is flagged and truncated", async () => {
+    const { result } = await runWithEvidence((providerId) => Array.from({ length: 32 }, (_, index) => ({
+      claimId: `claim-${index}`,
+      statement: `Claim ${index} differs between providers.`,
+      value: providerId === "openai" ? index : index + 100,
+      source: null,
+    })));
+    assert.equal(result.status, "conflict");
+    assert.equal(result.answer, null);
+    assert.equal(result.conflicts.length, 16);
+    assert.equal(result.conflictsTruncated, true);
+    assert.equal(result.evidence.length, 64);
+  });
+});
+
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {
   const constrainedPricing = parseFusionPricingConfig(JSON.stringify({
     budgetUsd: 0.03,
