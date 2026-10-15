@@ -96,9 +96,9 @@ export async function callConfiguredProvider({
         lastProviderStatus = 0;
         lastRetryAfterSeconds = null;
         const response = provider.id === "gemini"
-          ? await fetchWithTimeout(`${PROVIDER_ENDPOINTS.gemini}/${encodeURIComponent(provider.model)}:generateContent?key=${encodeURIComponent(provider.key)}`, {
+          ? await fetchWithTimeout(`${PROVIDER_ENDPOINTS.gemini}/${encodeURIComponent(provider.model)}:generateContent`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "x-goog-api-key": provider.key },
             body: JSON.stringify({
               contents: [{ role: "user", parts: [{ text: inputText }] }],
               generationConfig: { maxOutputTokens: providerMaxTokens, temperature: 0.7 },

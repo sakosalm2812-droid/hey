@@ -138,6 +138,45 @@ test("Edge dispatch sends the exact configured model with bounded tokens and rep
   assert.equal(result.costUsd, 0.00028);
 });
 
+test("Gemini dispatch keeps its key out of URLs while preserving the exact model and safe errors", async () => {
+  const secretKey = "gemini-secret-with-query-characters?&";
+  const geminiAttempt = { id: "gemini", model: "gemini-exact-fixture", key: secretKey };
+  const geminiPricing = parseChatPricingConfig(JSON.stringify({
+    budgetUsd: 0.02,
+    providers: [{ id: "gemini", model: geminiAttempt.model, inputUsdPerMillion: 1, outputUsdPerMillion: 3, maxCostUsd: 0.01 }],
+  }));
+  let capturedUrl = "";
+  let capturedInit;
+  const result = await callConfiguredProvider({
+    messages: [{ role: "user", content: "hello" }],
+    attempts: [geminiAttempt],
+    pricingConfig: geminiPricing,
+    fetchImpl: async (url, init) => {
+      capturedUrl = String(url);
+      capturedInit = init;
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: "fixture" }] } }],
+        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20 },
+      }));
+    },
+  });
+  assert.equal(result.model, "gemini-exact-fixture");
+  assert.equal(new URL(capturedUrl).pathname, "/v1beta/models/gemini-exact-fixture:generateContent");
+  assert.equal(new URL(capturedUrl).search, "");
+  assert.equal(capturedInit.headers["x-goog-api-key"], secretKey);
+  assert.equal(capturedUrl.includes(secretKey), false);
+
+  await assert.rejects(callConfiguredProvider({
+    messages: [{ role: "user", content: "hello" }],
+    attempts: [geminiAttempt],
+    pricingConfig: geminiPricing,
+    fetchImpl: async (url) => {
+      assert.equal(String(url).includes(secretKey), false);
+      return new Response(`vendor echoed ${secretKey}`, { status: 401 });
+    },
+  }), (error) => !error.message.includes(secretKey) && !error.message.includes("vendor echoed"));
+});
+
 test("an explicit model failure does not silently fall back to another provider", async () => {
   const calls = [];
   await assert.rejects(callConfiguredProvider({
@@ -175,7 +214,7 @@ test("automatic fallback stays inside aggregate reservations and provider cancel
   });
   assert.deepEqual(calls, [
     "https://api.openai.com/v1/chat/completions",
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:generateContent?key=fixture-secret-2",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:generateContent",
   ]);
   assert.equal(response.providerId, "gemini");
   assert.ok(response.costUsd <= fallbackPricing.budgetUsd);
