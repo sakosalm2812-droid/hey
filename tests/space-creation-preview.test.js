@@ -69,8 +69,31 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(typeof spacesApi.getLayoutPreferences, "function");
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
   assert.equal(typeof spacesApi.setToolMembership, "function");
+  assert.equal(typeof spacesApi.updateDetails, "function");
   assert.equal(typeof spacesApi.subscribe, "function");
 });
+
+test("Space starting points are previewed, persisted, and never add tool permissions", () => withStorage(() => {
+  const previousScope = "spaces-starter-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("spaces-starter-owner");
+    const engine = new SpaceCreationEngine();
+    const preview = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Field notes", templateId: "research" });
+    assert.equal(preview.template.id, "research");
+    assert.equal(preview.space.description, "Questions, sources, and findings.");
+    assert.equal(preview.permissionsChanged, false);
+    assert.match(engine.previewNaturalLanguageRequest({ prompt: "Create a space called Invalid", templateId: "unknown" }).error, /starting point/);
+
+    const created = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    assert.equal(created.space.templateId, "research");
+    assert.equal(created.space.description, "Questions, sources, and findings.");
+    assert.deepEqual(created.space.layoutPreferences.toolIds, []);
+    const reloaded = new SpaceCreationEngine().getSpaces()[0];
+    assert.equal(reloaded.templateId, "research");
+    assert.equal(reloaded.layoutPreferences.toolIds.length, 0);
+  } finally { setAccountScope(previousScope); }
+}));
 
 test("saved Space layout preferences persist by account, merge partial edits, and keep onboarding starters as suggestions", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
@@ -261,6 +284,102 @@ test("version 1 Space records load with empty preferences and are upgraded only 
     assert.equal(saved.success, true);
     assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 2);
     assert.deepEqual(new SpaceCreationEngine().getLayoutPreferences("legacy").widgetIds, ["notes"]);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("signed-in Space details edit with revision checks, exact readback, and account isolation", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-details-owner-a");
+    const owner = new SpaceCreationEngine();
+    const preview = owner.previewNaturalLanguageRequest({ prompt: "Create a space called Trip planning" });
+    const created = owner.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    const staleWriter = new SpaceCreationEngine();
+    const edit = owner.updateDetails({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      name: "Coastal trip",
+      description: "Plans, tickets, and places to visit.",
+    });
+    assert.deepEqual(edit, {
+      success: true,
+      accountScope: "account:space-details-owner-a",
+      spaceId: created.space.id,
+      detailsRevision: 1,
+      name: "Coastal trip",
+      description: "Plans, tickets, and places to visit.",
+    });
+    assert.equal(owner.getSpaces()[0].name, "Coastal trip");
+    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).spaces[created.space.id].detailsRevision, 1);
+
+    const stale = staleWriter.updateDetails({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      name: "Old name",
+      description: "Old description",
+    });
+    assert.equal(stale.code, "stale_revision");
+    assert.equal(stale.current.name, "Coastal trip");
+
+    const invalid = (request) => owner.updateDetails({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedRevision: 1, ...request });
+    assert.match(invalid({ name: "../private" }).error, /safe characters/);
+    assert.match(invalid({ name: "Safe name", description: "x".repeat(SPACE_CREATION_LIMITS.maxDescriptionLength + 1) }).error, /at most/);
+    assert.match(invalid({ name: "Safe\nname" }).error, /safe characters/);
+    assert.match(owner.updateDetails({ accountScope: "account:another-account", spaceId: created.space.id, expectedRevision: 1, name: "Foreign edit" }).error, /Account scope mismatch/);
+
+    let getterCalled = false;
+    const hostile = Object.defineProperties({}, {
+      accountScope: { value: created.space.accountScope, enumerable: true },
+      spaceId: { value: created.space.id, enumerable: true },
+      expectedRevision: { value: 1, enumerable: true },
+      name: { enumerable: true, get() { getterCalled = true; return "Hostile"; } },
+    });
+    assert.match(owner.updateDetails(hostile).error, /Accessor/);
+    assert.equal(getterCalled, false);
+
+    storage.failWrites = true;
+    const writeFailure = owner.updateDetails({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedRevision: 1, name: "Not persisted", description: "" });
+    assert.equal(writeFailure.code, "write_failed");
+    storage.failWrites = false;
+    assert.equal(owner.getSpaces()[0].name, "Coastal trip");
+
+    const reloadedOwner = new SpaceCreationEngine();
+    assert.equal(reloadedOwner.getSpaces()[0].description, "Plans, tickets, and places to visit.");
+    setAccountScope("space-details-owner-b");
+    assert.deepEqual(new SpaceCreationEngine().getSpaces(), []);
+    assert.match(reloadedOwner.updateDetails({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedRevision: 1, name: "Stale session" }).error, /Account scope mismatch/);
+    setAccountScope("space-details-owner-a");
+    const restoredOwner = new SpaceCreationEngine();
+    assert.equal(restoredOwner.getSpaces()[0].name, "Coastal trip");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space creation and editing fail closed at account storage quotas", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    const accountScope = "account:space-quota-owner";
+    setAccountScope("space-quota-owner");
+    const key = getAccountStorageKey("hey_spaces");
+    const spaces = Object.fromEntries(Array.from({ length: SPACE_CREATION_LIMITS.maxSpacesPerAccount + 1 }, (_, index) => {
+      const id = `space_${index}`;
+      return [id, { id, accountScope, name: `Space ${index}`, description: "", visibility: "private", sharing: "off", createdAt: null }];
+    }));
+    const fullSnapshot = JSON.stringify({ contractVersion: 2, accountScope, spaces });
+    storage.setItem(key, fullSnapshot);
+    const full = new SpaceCreationEngine();
+    assert.throws(() => full.getSpaces(), /storage could not be read/);
+    assert.match(full.previewNaturalLanguageRequest({ prompt: "Create a space called Too many" }).error, /storage could not be read/);
+    assert.equal(storage.getItem(key), fullSnapshot, "over-limit records are never overwritten as an empty store");
+
+    const oversizedSnapshot = "x".repeat(SPACE_CREATION_LIMITS.maxStoredChars + 1);
+    storage.setItem(key, oversizedSnapshot);
+    const oversized = new SpaceCreationEngine();
+    assert.throws(() => oversized.getSpaces(), /storage could not be read/);
+    assert.equal(storage.getItem(key), oversizedSnapshot);
   } finally { setAccountScope(previousScope); }
 }));
 

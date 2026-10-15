@@ -10,6 +10,7 @@ export const SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION = 1;
 export const SPACE_CREATION_LIMITS = Object.freeze({
   maxPromptLength: 500,
   maxNameLength: 80,
+  maxDescriptionLength: 240,
   maxSpacesPerAccount: 1000,
   maxPreferenceIdsPerCategory: 32,
   maxPreferenceIdLength: 64,
@@ -23,10 +24,16 @@ const STORAGE_KEY = "hey_spaces";
 const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, SPACE_STORAGE_CONTRACT_VERSION]);
 const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
 const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
-const activeLayoutPreferenceWrites = new Set();
+const activeSpaceWrites = new Set();
 const CREATE_SPACE_PROMPT = /^(?:please\s+)?create\s+(?:a\s+)?(?:private\s+)?space\s+(?:called|named)\s+(.+)$/i;
 const FORBIDDEN_INTENT = /\b(?:public|share|shared|sharing|invite|invites|members?|permissions?|access|roles?|admin|administrator|owner|grant|escalat(?:e|ion))\b/i;
 const SPACE_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'’()-]{0,79}$/u;
+const SPACE_STARTERS = Object.freeze({
+  empty: { label: "Empty Space", description: "" },
+  planning: { label: "Planning template", description: "Goals, tasks, and next steps." },
+  research: { label: "Research template", description: "Questions, sources, and findings." },
+  custom: { label: "Custom Space", description: "" },
+});
 
 function containsControlChars(value) {
   return [...value].some((character) => {
@@ -74,6 +81,11 @@ function cleanStoredSpace(id, value, scope) {
     const space = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
     if (space.id !== id || space.accountScope !== scope || typeof space.name !== "string" || !SPACE_NAME.test(space.name)) return null;
     if (space.visibility !== "private" || space.sharing !== "off") return null;
+    const detailsRevision = space.detailsRevision === undefined ? 0 : space.detailsRevision;
+    if (!Number.isSafeInteger(detailsRevision) || detailsRevision < 0) return null;
+    if (space.description !== undefined && (typeof space.description !== "string" || space.description.length > SPACE_CREATION_LIMITS.maxDescriptionLength || containsControlChars(space.description))) return null;
+    const templateId = space.templateId === undefined ? "empty" : space.templateId;
+    if (typeof templateId !== "string" || !Object.hasOwn(SPACE_STARTERS, templateId)) return null;
     const layoutPreferences = space.layoutPreferences === undefined
       ? createDefaultSpaceLayoutPreferences()
       : normalizeSpaceLayoutPreferences(space.layoutPreferences);
@@ -82,7 +94,9 @@ function cleanStoredSpace(id, value, scope) {
       id,
       accountScope: scope,
       name: space.name,
-      description: typeof space.description === "string" ? space.description.slice(0, 240) : "",
+      description: space.description || "",
+      templateId,
+      detailsRevision,
       visibility: "private",
       sharing: "off",
       createdAt: typeof space.createdAt === "string" ? space.createdAt.slice(0, 64) : null,
@@ -333,12 +347,15 @@ export class SpaceCreationEngine {
   }
 
   save() {
-    const scope = this.accountScope;
+    return this.persistSpaces(this.spaces, this.accountScope);
+  }
+
+  persistSpaces(spaces, scope) {
     if (getAccountScope() !== scope) return { error: "Account scope changed; reload before saving" };
     if (this.loadError) return { error: "Space storage could not be read; try again" };
     try {
       const key = getAccountStorageKey(STORAGE_KEY, scope);
-      const serialized = serializeSpaces(this.spaces, scope);
+      const serialized = serializeSpaces(spaces, scope);
       if (!serialized) return { error: "Space storage limit reached" };
       // safeStorage intentionally absorbs browser storage exceptions. Verify the
       // round trip here so callers never receive a persisted-success result when
@@ -389,9 +406,9 @@ export class SpaceCreationEngine {
     const patch = normalizeSpaceLayoutPreferencePatch(safeRequest.value.preferences);
     if (patch.error) return patch;
     const writeLockKey = JSON.stringify([scope, spaceId]);
-    if (activeLayoutPreferenceWrites.has(writeLockKey)) return { error: "A Space preference update is already in progress", code: "write_in_progress" };
+    if (activeSpaceWrites.has(writeLockKey)) return { error: "A Space update is already in progress", code: "write_in_progress" };
 
-    activeLayoutPreferenceWrites.add(writeLockKey);
+    activeSpaceWrites.add(writeLockKey);
     try {
       const refreshed = this.refreshFromStorage(scope, { notify: true });
       if (refreshed.error) return refreshed;
@@ -438,7 +455,7 @@ export class SpaceCreationEngine {
       }
       return result;
     } finally {
-      activeLayoutPreferenceWrites.delete(writeLockKey);
+      activeSpaceWrites.delete(writeLockKey);
     }
   }
 
@@ -482,12 +499,83 @@ export class SpaceCreationEngine {
     return updated.success ? { ...updated, changed: true } : updated;
   }
 
+  updateDetails(request) {
+    const safeRequest = readDataRecord(request, ["accountScope", "spaceId", "expectedRevision", "name", "description"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, spaceId, expectedRevision } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to edit a Space" };
+    if (typeof accountScope !== "string" || accountScope !== scope || accountScope !== getAccountScope()) return { error: "Account scope mismatch" };
+    if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return { error: "A valid details revision is required" };
+    if (!Object.hasOwn(safeRequest.value, "name") && !Object.hasOwn(safeRequest.value, "description")) return { error: "Provide a Space name or description to update" };
+
+    let name;
+    if (Object.hasOwn(safeRequest.value, "name")) {
+      name = safeRequest.value.name;
+      if (typeof name !== "string") return { error: "Space name must be text" };
+      name = name.trim();
+      if (!name || name.length > SPACE_CREATION_LIMITS.maxNameLength || containsControlChars(name) || !SPACE_NAME.test(name)) {
+        return { error: `Space name must be 1–${SPACE_CREATION_LIMITS.maxNameLength} safe characters` };
+      }
+    }
+    let description;
+    if (Object.hasOwn(safeRequest.value, "description")) {
+      description = safeRequest.value.description;
+      if (typeof description !== "string" || description.length > SPACE_CREATION_LIMITS.maxDescriptionLength || containsControlChars(description)) {
+        return { error: `Space description must be at most ${SPACE_CREATION_LIMITS.maxDescriptionLength} safe characters` };
+      }
+      description = description.trim();
+    }
+
+    const writeLockKey = JSON.stringify([scope, spaceId]);
+    if (activeSpaceWrites.has(writeLockKey)) return { error: "A Space update is already in progress", code: "write_in_progress" };
+    activeSpaceWrites.add(writeLockKey);
+    try {
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error) return refreshed;
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the update" };
+      const current = this.spaces.get(spaceId);
+      if (!current || current.accountScope !== scope) return { error: "Space not found" };
+      if (current.detailsRevision !== expectedRevision) {
+        return {
+          error: "Space details changed; reload before updating",
+          code: "stale_revision",
+          current: { accountScope: scope, spaceId, detailsRevision: current.detailsRevision, name: current.name, description: current.description },
+        };
+      }
+      if (current.detailsRevision === Number.MAX_SAFE_INTEGER) return { error: "Space details revision limit reached" };
+
+      const updated = {
+        ...current,
+        ...(name === undefined ? {} : { name }),
+        ...(description === undefined ? {} : { description }),
+        detailsRevision: current.detailsRevision + 1,
+      };
+      const nextSpaces = new Map(this.spaces);
+      nextSpaces.set(spaceId, updated);
+      const saved = this.persistSpaces(nextSpaces, scope);
+      if (saved.error) return { ...saved, code: saved.error === "Space storage limit reached" ? "storage_limit" : "write_failed" };
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before updating" };
+
+      this.spaces = nextSpaces;
+      const result = { success: true, accountScope: scope, spaceId, detailsRevision: updated.detailsRevision, name: updated.name, description: updated.description };
+      this.notify("space_updated", result);
+      publish("spaces.private_space_updated", result);
+      return result;
+    } finally {
+      activeSpaceWrites.delete(writeLockKey);
+    }
+  }
+
   previewNaturalLanguageRequest(request) {
-    const safeRequest = readDataRecord(request, ["prompt"]);
+    const safeRequest = readDataRecord(request, ["prompt", "templateId"]);
     if (safeRequest.error) return safeRequest;
     if (this.accountScope === "anonymous") return { error: "An account scope is required to create a Space" };
     if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; retry the request" };
     if (this.loadError) return { error: "Space storage could not be read; try again" };
+    const templateId = safeRequest.value.templateId === undefined ? "empty" : safeRequest.value.templateId;
+    if (typeof templateId !== "string" || !Object.hasOwn(SPACE_STARTERS, templateId)) return { error: "Choose a supported Space starting point" };
     const parsed = parseSpacePrompt(safeRequest.value.prompt);
     if (parsed.error) return parsed;
     if (this.spaces.size >= SPACE_CREATION_LIMITS.maxSpacesPerAccount) return { error: "Space limit reached" };
@@ -500,12 +588,13 @@ export class SpaceCreationEngine {
       accountScope: this.accountScope,
       expiresAt: new Date(expiresAt).toISOString(),
       action: "create_private_space",
-      space: { ...parsed.value, visibility: "private", sharing: "off" },
-      effects: ["Create one private Space in this account"],
+      space: { ...parsed.value, description: SPACE_STARTERS[templateId].description, templateId, visibility: "private", sharing: "off" },
+      template: { id: templateId, label: SPACE_STARTERS[templateId].label },
+      effects: [`Create one private Space from the ${SPACE_STARTERS[templateId].label.toLocaleLowerCase()}`],
       permissionsChanged: false,
       requiresConfirmation: true,
     };
-    this.previews.set(previewId, { accountScope: this.accountScope, expiresAt, name: parsed.value.name });
+    this.previews.set(previewId, { accountScope: this.accountScope, expiresAt, name: parsed.value.name, templateId });
     return preview;
   }
 
@@ -547,7 +636,9 @@ export class SpaceCreationEngine {
       id: createId(),
       accountScope: this.accountScope,
       name: pending.name,
-      description: "",
+      description: SPACE_STARTERS[pending.templateId || "empty"].description,
+      templateId: pending.templateId || "empty",
+      detailsRevision: 0,
       visibility: "private",
       sharing: "off",
       createdAt: new Date().toISOString(),
@@ -617,6 +708,10 @@ export function updateSpaceLayoutPreferences(request) {
  */
 export function setSpaceToolMembership(request) {
   return spaceCreationEngine.setToolMembership(request);
+}
+
+export function updatePrivateSpaceDetails(request) {
+  return spaceCreationEngine.updateDetails(request);
 }
 
 export function subscribeToPrivateSpaces(listener) {

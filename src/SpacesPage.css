@@ -39,9 +39,13 @@
 .spaces-page__create label { display: block; margin-bottom: 7px; font-size: 16px; font-weight: 600; }
 .spaces-page__hint,
 .spaces-page__list-heading p { margin: 0; color: var(--text-secondary, #a7a4ae); font-size: 13px; line-height: 1.55; }
-.spaces-page__create textarea { display: block; width: 100%; min-height: 86px; margin-top: 14px; padding: 13px 15px; resize: vertical; border: 1px solid rgba(255, 255, 255, .14); border-radius: 13px; background: rgba(0, 0, 0, .13); color: var(--text-primary, #f5f2ec); font: inherit; line-height: 1.5; }
+.spaces-page__create textarea,
+.spaces-page__create select { display: block; width: 100%; margin-top: 10px; padding: 13px 15px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 13px; background: rgba(0, 0, 0, .13); color: var(--text-primary, #f5f2ec); font: inherit; }
+.spaces-page__create textarea { min-height: 86px; resize: vertical; line-height: 1.5; }
+.spaces-page__create select { min-height: 48px; margin-bottom: 18px; }
 .spaces-page__create textarea::placeholder { color: var(--text-secondary, #a7a4ae); opacity: .8; }
 .spaces-page__create textarea:focus-visible,
+.spaces-page__create select:focus-visible,
 .spaces-page button:focus-visible { outline: 2px solid var(--gold-primary, #d6b66b); outline-offset: 3px; }
 .spaces-page__form-footer { margin-top: 13px; color: var(--text-secondary, #a7a4ae); font-size: 12px; }
 .spaces-page button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 15px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 12px; background: transparent; color: var(--text-primary, #f5f2ec); font: inherit; cursor: pointer; }
@@ -85,6 +89,16 @@
 .spaces-page__card-copy h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
 .spaces-page__card-copy p { margin: 4px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; }
 .spaces-page__card time { color: var(--text-secondary, #a7a4ae); font-size: 12px; white-space: nowrap; }
+.spaces-page__details-editor { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
+.spaces-page__edit-details { min-height: 36px !important; padding: 7px 11px !important; border-color: rgba(214, 182, 107, .28) !important; color: var(--gold-primary, #d6b66b) !important; font-size: 13px !important; }
+.spaces-page__details-form { display: grid; gap: 8px; max-width: 640px; margin-top: 10px; padding: 14px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 13px; background: rgba(0, 0, 0, .12); }
+.spaces-page__details-form label { color: var(--text-secondary, #a7a4ae); font-size: 12px; }
+.spaces-page__details-form input,
+.spaces-page__details-form textarea { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 10px; background: rgba(0, 0, 0, .13); color: var(--text-primary, #f5f2ec); font: inherit; font-size: 13px; }
+.spaces-page__details-form textarea { resize: vertical; }
+.spaces-page__details-form input:focus-visible,
+.spaces-page__details-form textarea:focus-visible { outline: 2px solid var(--gold-primary, #d6b66b); outline-offset: 2px; }
+.spaces-page__details-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 4px; }
 .spaces-page__membership { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
 .spaces-page__membership-toggle { min-height: 36px !important; padding: 7px 11px !important; border-color: rgba(214, 182, 107, .28) !important; color: var(--gold-primary, #d6b66b) !important; font-size: 13px !important; }
 .spaces-page__membership-panel { margin-top: 12px; padding: clamp(13px, 2vw, 20px); border: 1px solid rgba(255, 255, 255, .08); border-radius: 15px; background: rgba(0, 0, 0, .12); }
