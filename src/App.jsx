@@ -14,6 +14,7 @@ import IdleScreensaver from "./components/IdleScreensaver";
 import CommandPalette from "./components/CommandPalette";
 import TutorialOverlay from "./components/tutorials/TutorialOverlay";
 import AppErrorBoundary from "./components/AppErrorBoundary";
+import { InterfaceLevelProvider } from "./context/InterfaceLevelContext.jsx";
 
 // Layouts
 import PublicLayout from "./components/layout/PublicLayout";
@@ -353,13 +354,15 @@ export default function App() {
     <AppErrorBoundary>
       <MotionConfig reducedMotion="user">
         <BrowserRouter>
-          <Suspense fallback={<div className="hey-route-loading"><span className="hey-script">HEY</span><small>loading your world</small></div>}>
-            <AnimatedRoutes />
-          </Suspense>
-          <ConnectionNotice />
-          <CommandPalette />
-          <TutorialOverlay />
-          <IdleScreensaver />
+          <InterfaceLevelProvider>
+            <Suspense fallback={<div className="hey-route-loading"><span className="hey-script">HEY</span><small>loading your world</small></div>}>
+              <AnimatedRoutes />
+            </Suspense>
+            <ConnectionNotice />
+            <CommandPalette />
+            <TutorialOverlay />
+            <IdleScreensaver />
+          </InterfaceLevelProvider>
         </BrowserRouter>
       </MotionConfig>
     </AppErrorBoundary>
