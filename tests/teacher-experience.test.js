@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildTeacherAssessmentArtifact,
   buildTeacherLessonArtifact,
+  exportTeacherAssessmentMarkdown,
   exportTeacherLessonMarkdown,
+  saveTeacherAssessmentArtifact,
   saveTeacherLessonArtifact,
+  verifyTeacherAssessmentArtifact,
   verifyTeacherLessonArtifact,
 } from "../src/core/teacherExperience.js";
+import HEY from "../src/core/index.js";
 
 const lessonInput = (overrides = {}) => ({
   title: "Fractions on a number line",
@@ -22,6 +27,26 @@ const lessonInput = (overrides = {}) => ({
   workspaceId: "school-space",
   currentAccountScope: "account:teacher-1",
   currentWorkspaceId: "school-space",
+  createdAt: "2026-10-15T09:00:00.000Z",
+  ...overrides,
+});
+
+const teacherContext = () => ({
+  accountScope: "account:teacher-1",
+  workspaceId: "school-space",
+  currentAccountScope: "account:teacher-1",
+  currentWorkspaceId: "school-space",
+});
+
+const assessmentInput = (overrides = {}) => ({
+  title: "Fractions exit check",
+  directions: "Show your reasoning for each answer.",
+  questions: [{
+    objective: "Place unit fractions on a number line",
+    prompt: "Where does 1/4 belong on the number line?",
+    expectedLearning: "Learner places 1/4 between 0 and 1/2 and explains why.",
+    points: 2,
+  }],
   createdAt: "2026-10-15T09:00:00.000Z",
   ...overrides,
 });
@@ -107,6 +132,127 @@ test("shared artifact creation failures are returned to the caller", async () =>
     currentAccountScope: "account:teacher-1",
     currentWorkspaceId: "school-space",
   }, { createArtifact: async () => { throw new Error("artifact service unavailable"); } }), /artifact service unavailable/);
+});
+
+test("Teacher assessment artifacts derive from a scoped lesson and save/export through shared contracts", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput(), teacherContext());
+  const verification = await verifyTeacherAssessmentArtifact(assessment, {
+    accountScope: "account:teacher-1",
+    workspaceId: "school-space",
+  });
+  assert.equal(verification.valid, true);
+  assert.equal(assessment.metadata.workflow, "teacher_assessment");
+  assert.equal(assessment.metadata.provenance.sourceLessonDigest, lesson.metadata.verification.contentDigest);
+  assert.equal(assessment.metadata.studentDataPolicy, "not_collected");
+  assert.equal(assessment.metadata.safety.teacherReviewRequiredBeforeUse, true);
+  assert.equal(assessment.content.questions[0].objective, lesson.content.learningObjectives[0]);
+
+  let saved;
+  await saveTeacherAssessmentArtifact(assessment, teacherContext(), {
+    createArtifact: async (input) => { saved = input; return { id: "assessment-forge-1", ...input, status: "draft" }; },
+  });
+  assert.equal(saved.projectId, "school-space");
+  assert.equal(saved.metadata.artifactContract, "hey.teacher.assessment.v1");
+  assert.deepEqual(saved.tags, ["teacher", "assessment"]);
+  assert.equal(saved.metadata.safety.teacherReviewRequiredBeforeUse, true);
+  await assert.rejects(saveTeacherAssessmentArtifact(assessment, teacherContext(), {
+    createArtifact: async () => { throw new Error("Forge assessment store unavailable"); },
+  }), /Forge assessment store unavailable/);
+
+  const exported = await exportTeacherAssessmentMarkdown(assessment, {
+    accountScope: "account:teacher-1",
+    workspaceId: "school-space",
+  });
+  assert.equal(exported.filename, "assessment.md");
+  assert.match(exported.content, /Teacher review required before classroom use: yes/);
+  assert.match(exported.content, /Student personal data: not_collected/);
+  assert.match(exported.content, /Success criteria:/);
+  assert.equal(typeof HEY.teacher.buildAssessmentArtifact, "function");
+  assert.equal(typeof HEY.teacher.saveAssessmentArtifact, "function");
+  assert.equal(typeof HEY.teacher.exportAssessmentMarkdown, "function");
+});
+
+test("assessment inputs reject student data, accessors, unsafe markup, and objectives outside the lesson", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ studentAnswers: ["private"] }), teacherContext()), /Student personal data is not accepted/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Other objective", prompt: "Question", expectedLearning: "Criteria", points: 1,
+  }] }), teacherContext()), /must target a lesson objective/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "<script>alert(1)</script>", expectedLearning: "Criteria", points: 1,
+  }] }), teacherContext()), /cannot contain HTML or active markup/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "Call student@example.org", expectedLearning: "Criteria", points: 1,
+  }] }), teacherContext()), /student contact information/);
+  const baseQuestion = assessmentInput().questions[0];
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: Array(21).fill(baseQuestion) }), teacherContext()), /at most 20 entries/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({
+    questions: Array(11).fill({ ...baseQuestion, points: 10 }),
+  }), teacherContext()), /total points cannot exceed 100/);
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Place unit fractions on a number line", prompt: "[click](javascript:alert(1))", expectedLearning: "Criteria", points: 1,
+  }] }), teacherContext()), /cannot contain HTML or active markup/);
+
+  const questions = [];
+  let arrayGetterCalled = false;
+  Object.defineProperty(questions, "0", { enumerable: true, get() { arrayGetterCalled = true; return {}; } });
+  questions.length = 1;
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions }), teacherContext()), /safe, bounded lesson and context data/);
+  assert.equal(arrayGetterCalled, false);
+  let promptGetterCalled = false;
+  const hostileQuestion = { objective: "Place unit fractions on a number line", expectedLearning: "Criteria", points: 1 };
+  Object.defineProperty(hostileQuestion, "prompt", { enumerable: true, get() { promptGetterCalled = true; return "Question"; } });
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [hostileQuestion] }), teacherContext()), /safe, bounded lesson and context data/);
+  assert.equal(promptGetterCalled, false);
+});
+
+test("assessment scope, source integrity, and sensitive-topic review gates fail closed", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput({
+    subject: "Health",
+    learningObjectives: ["Recognize warning signs of self-harm and find support"],
+  }));
+  await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Recognize warning signs of self-harm and find support", prompt: "Name a trusted adult", expectedLearning: "Identifies a support adult", points: 2,
+  }] }), { ...teacherContext(), currentWorkspaceId: "personal-space" }), /must match the active context/);
+
+  const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput({ questions: [{
+    objective: "Recognize warning signs of self-harm and find support", prompt: "Name a trusted adult", expectedLearning: "Identifies a support adult", points: 2,
+  }] }), teacherContext());
+  assert.deepEqual(assessment.metadata.safety.reviewReasons, ["self_harm"]);
+  await assert.rejects(exportTeacherAssessmentMarkdown(assessment, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  }), /safety review is required/);
+  await assert.rejects(exportTeacherAssessmentMarkdown(assessment, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+    safetyReview: { accountScope: "account:other", workspaceId: "school-space", reviewerId: "teacher-1", reviewedAt: "2026-10-15T10:00:00.000Z" },
+  }), /safety review is required/);
+  const reviewed = await exportTeacherAssessmentMarkdown(assessment, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+    safetyReview: { accountScope: "account:teacher-1", workspaceId: "school-space", reviewerId: "teacher-1", reviewedAt: "2026-10-15T10:00:00.000Z" },
+  });
+  assert.match(reviewed.content, /Safety review recorded for account\/workspace by: teacher-1/);
+
+  const forged = { ...assessment, content: { ...assessment.content, questions: [{ ...assessment.content.questions[0], prompt: "Forged" }] } };
+  const forgedVerification = await verifyTeacherAssessmentArtifact(forged, { accountScope: "account:teacher-1", workspaceId: "school-space" });
+  assert.equal(forgedVerification.valid, false);
+  assert.equal(forgedVerification.checks.trustedTeacherRuntime, false);
+  await assert.rejects(saveTeacherAssessmentArtifact(forged, teacherContext(), { createArtifact: async () => { throw new Error("must not persist"); } }), /Only an assessment artifact built in the active Teacher runtime/);
+  await assert.rejects(exportTeacherAssessmentMarkdown(forged, { accountScope: "account:teacher-1", workspaceId: "school-space" }), /Only an assessment artifact built in the active Teacher runtime/);
+});
+
+test("assessment markdown flattens hostile headings and never emits raw HTML tags", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput({
+    title: "Fractions #1 [check]",
+    directions: "Complete the items.\n## Injected heading",
+  }), teacherContext());
+  const exported = await exportTeacherAssessmentMarkdown(assessment, {
+    accountScope: "account:teacher-1", workspaceId: "school-space",
+  });
+  assert.doesNotMatch(exported.content, /## Injected heading/);
+  assert.doesNotMatch(exported.content, /<[^>]+>/);
+  assert.match(exported.content, /Fractions \\#1/);
 });
 
 test("teacher lesson artifact cannot be used across account or workspace boundaries", async () => {

@@ -5,16 +5,20 @@ const REQUEST_FIELDS = new Set([
   "curriculumReferences", "resources", "activities", "assessment", "accountScope",
   "workspaceId", "currentAccountScope", "currentWorkspaceId", "createdAt",
 ]);
+const ASSESSMENT_REQUEST_FIELDS = new Set(["title", "directions", "questions", "createdAt"]);
 const REFERENCE_FIELDS = new Set(["title", "url"]);
 const ACTIVITY_FIELDS = new Set(["title", "instructions", "minutes"]);
 const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
+const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "points"]);
 const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
 const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "studentDataPolicy", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
+const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
 const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "currentAccountScope", "currentWorkspaceId"]);
 const SAVE_OPTION_FIELDS = new Set(["createArtifact"]);
 const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
+const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "grades", "roster", "names", "email", "phone", "dateOfBirth",
@@ -31,14 +35,14 @@ const SENSITIVE_CONTENT = [
 
 /**
  * Teacher Mode contract for the frontend: provide the active account scope and
- * Space ID twice (request scope plus trusted current context), then call this
- * async builder and verifier, then await the Markdown export before offering
- * it. Verification rechecks a SHA-256 content digest for stale edits; this
+ * Space ID twice (request scope plus active context), then call the async
+ * lesson or assessment builder and verifier, then await the Markdown export
+ * before offering it. Verification rechecks a SHA-256 content digest for stale edits; this
  * digest detects changes but is not a signature or authenticity proof. Verified
- * lessons can be saved as draft documents through the shared Forge artifact
- * contract; this flow does not write lessons into Cosmos memory.
+ * lesson and assessment artifacts can be saved as draft documents through the
+ * shared Forge artifact contract; neither flow writes artifacts into Cosmos memory.
  * Do not pass student records. Curriculum references remain teacher-supplied
- * and unverified, and exported lessons always carry a teacher-review notice.
+ * and unverified, and exported artifacts always carry a teacher-review notice.
  */
 
 function isPlainRecord(value) {
@@ -97,6 +101,37 @@ function scanText(value, label) {
   return text;
 }
 
+function scanAssessmentText(value, label) {
+  const text = scanText(value, label);
+  if (/<\/?[a-z][^>]*>|<!--|<!doctype|\b(?:javascript|vbscript)\s*:|\bdata\s*:\s*text\/html/i.test(text)) {
+    throw new Error(`${label} cannot contain HTML or active markup`);
+  }
+  return text;
+}
+
+function normalizeAssessmentQuestions(questions, lessonObjectives) {
+  assertDenseArray(questions, "Assessment questions", 20);
+  if (questions.length < 1) throw new TypeError("Provide between 1 and 20 assessment questions");
+  const normalized = questions.map((question, index) => {
+    assertOnlyDataFields(question, `Assessment question ${index + 1}`, ASSESSMENT_QUESTION_FIELDS);
+    const objective = scanAssessmentText(question.objective, `Assessment question ${index + 1} objective`);
+    if (!lessonObjectives.includes(objective)) throw new Error(`Assessment question ${index + 1} must target a lesson objective`);
+    if (!Number.isInteger(question.points) || question.points < 1 || question.points > 10) {
+      throw new TypeError(`Assessment question ${index + 1} points must be an integer from 1 to 10`);
+    }
+    return Object.freeze({
+      objective,
+      prompt: scanAssessmentText(question.prompt, `Assessment question ${index + 1} prompt`),
+      expectedLearning: scanAssessmentText(question.expectedLearning, `Assessment question ${index + 1} success criteria`),
+      points: question.points,
+    });
+  });
+  if (normalized.reduce((total, question) => total + question.points, 0) > 100) {
+    throw new TypeError("Assessment total points cannot exceed 100");
+  }
+  return normalized;
+}
+
 function normalizeReferences(references = []) {
   assertDenseArray(references, "Curriculum references", 30);
   return references.map((reference, index) => {
@@ -131,8 +166,19 @@ function detectSafetyReview(lesson) {
   return [];
 }
 
+function detectAssessmentSafetyReview(assessment) {
+  const text = [assessment.title, assessment.sourceLessonTitle, assessment.subject, assessment.directions,
+    ...assessment.learningObjectives,
+    ...assessment.questions.map((question) => `${question.prompt} ${question.expectedLearning}`)].join("\n");
+  if (["pre-k", "kindergarten", "1-2", "3-5", "6-8"].includes(assessment.gradeBand)) {
+    return SENSITIVE_CONTENT.filter(({ pattern }) => pattern.test(text)).map(({ category }) => category);
+  }
+  return [];
+}
+
 function escapeMarkdown(value) {
-  return String(value).replace(/[\\`*_{}[\]()#+.!|>]/g, "\\$&").replace(/[\r\n]+/g, " ");
+  return String(value).replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/[\\`*_{}[\]()#+.!|]/g, "\\$&").replace(/[\r\n]+/g, " ");
 }
 
 function canonicalJson(value) {
@@ -349,15 +395,200 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
   return Object.freeze({ valid: Object.values(checks).every(Boolean), checks });
 }
 
+export async function buildTeacherAssessmentArtifact(lessonArtifact, input, context) {
+  if (!lessonArtifact || typeof lessonArtifact !== "object" || !BUILT_TEACHER_LESSON_ARTIFACTS.has(lessonArtifact)) {
+    throw new Error("Assessment requires a lesson built in the active Teacher runtime");
+  }
+  let stableLesson;
+  let stableInput;
+  let stableContext;
+  try {
+    stableLesson = snapshotLessonData(lessonArtifact);
+    stableInput = snapshotLessonData(input);
+    stableContext = snapshotLessonData(context);
+  } catch {
+    throw new Error("Assessment inputs must contain only safe, bounded lesson and context data");
+  }
+  assertOnlyDataFields(stableInput, "Teacher assessment request", ASSESSMENT_REQUEST_FIELDS);
+  assertOnlyDataFields(stableContext, "Teacher assessment context", SAVE_CONTEXT_FIELDS);
+  const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
+  const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
+    throw new Error("Assessment account and workspace must match the active context");
+  }
+  const lessonVerification = await verifyTeacherLessonArtifact(stableLesson, { accountScope, workspaceId });
+  if (!lessonVerification.valid) throw new Error("Assessment source lesson failed verification for the active account and workspace");
+
+  const lesson = stableLesson.content;
+  const title = scanAssessmentText(stableInput.title, "Assessment title");
+  const directions = scanAssessmentText(stableInput.directions, "Assessment directions");
+  const sourceLessonTitle = scanAssessmentText(lesson.title, "Source lesson title");
+  const subject = scanAssessmentText(lesson.subject, "Subject");
+  const learningObjectives = Object.freeze(lesson.learningObjectives.map((objective, index) =>
+    scanAssessmentText(objective, `Lesson objective ${index + 1}`)));
+  const questions = Object.freeze(normalizeAssessmentQuestions(stableInput.questions, learningObjectives));
+  const content = {
+    type: "teacher_assessment",
+    title,
+    sourceLessonTitle,
+    sourceLessonDigest: stableLesson.metadata.verification.contentDigest,
+    parentSafetyReviewReasons: [...stableLesson.metadata.safety.reviewReasons],
+    subject,
+    gradeBand: lesson.gradeBand,
+    directions,
+    learningObjectives: Object.freeze([...new Set(questions.map((question) => question.objective))]),
+    questions,
+  };
+  const parentSafetyReasons = [...stableLesson.metadata.safety.reviewReasons];
+  const reviewReasons = [...new Set([...parentSafetyReasons, ...detectAssessmentSafetyReview(content)])];
+  const createdAt = stableInput.createdAt || new Date().toISOString();
+  if (typeof createdAt !== "string" || !Number.isFinite(Date.parse(createdAt))) throw new TypeError("createdAt must be a valid date");
+  const contentDigest = await digestLesson(content);
+  const artifact = {
+    type: "document",
+    title,
+    description: `${subject} · ${lesson.gradeBand} · ${questions.length} questions`,
+    content,
+    metadata: {
+      workflow: "teacher_assessment",
+      accountScope,
+      workspaceId,
+      studentDataPolicy: "not_collected",
+      provenance: {
+        generatedBy: "HEY Teacher Assessment Workflow",
+        method: "structured_from_verified_teacher_lesson",
+        sourceLessonDigest: stableLesson.metadata.verification.contentDigest,
+        createdAt: new Date(createdAt).toISOString(),
+        factualClaimsVerified: false,
+      },
+      safety: {
+        gradeBand: lesson.gradeBand,
+        reviewRequired: reviewReasons.length > 0,
+        reviewReasons,
+        teacherReviewRequiredBeforeUse: true,
+      },
+      verification: {
+        valid: true,
+        checks: {
+          accountWorkspaceBound: true,
+          studentDataAbsent: true,
+          objectivesPresent: true,
+          questionsPresent: true,
+          sourceLessonBound: true,
+        },
+        contentDigest,
+      },
+    },
+  };
+  const frozenArtifact = freezeDeep(artifact);
+  BUILT_TEACHER_ASSESSMENT_ARTIFACTS.add(frozenArtifact);
+  return frozenArtifact;
+}
+
+export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId } = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(artifact)) {
+    return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
+  }
+  try {
+    artifact = snapshotLessonData(artifact);
+  } catch {
+    return Object.freeze({ valid: false, checks: Object.freeze({ safeSnapshot: false }) });
+  }
+  let contentShapeSafe = false;
+  let detectedSafetyReview = null;
+  try {
+    assertOnlyDataFields(artifact, "Assessment artifact", ARTIFACT_FIELDS);
+    assertOnlyDataFields(artifact.metadata, "Assessment metadata", METADATA_FIELDS);
+    assertOnlyDataFields(artifact.metadata.provenance, "Assessment provenance", new Set([
+      "generatedBy", "method", "sourceLessonDigest", "createdAt", "factualClaimsVerified",
+    ]));
+    assertOnlyDataFields(artifact.metadata.safety, "Assessment safety metadata", new Set([
+      "gradeBand", "reviewRequired", "reviewReasons", "teacherReviewRequiredBeforeUse",
+    ]));
+    assertOnlyDataFields(artifact.metadata.verification, "Assessment verification", VERIFICATION_FIELDS);
+    assertOnlyDataFields(artifact.metadata.verification.checks, "Assessment verification checks", ASSESSMENT_VERIFICATION_CHECK_FIELDS);
+    const content = artifact.content;
+    assertOnlyDataFields(content, "Assessment content", new Set([
+      "type", "title", "sourceLessonTitle", "sourceLessonDigest", "parentSafetyReviewReasons",
+      "subject", "gradeBand", "directions", "learningObjectives", "questions",
+    ]));
+    if (content.type !== "teacher_assessment" || !GRADE_BANDS.has(content.gradeBand)) throw new Error("Invalid assessment type or grade band");
+    scanAssessmentText(content.title, "Assessment title");
+    scanAssessmentText(content.sourceLessonTitle, "Source lesson title");
+    scanAssessmentText(content.subject, "Subject");
+    scanAssessmentText(content.directions, "Assessment directions");
+    assertDenseArray(content.learningObjectives, "Assessment learning objectives", 12);
+    if (content.learningObjectives.length < 1) throw new Error("Assessment must target at least one lesson objective");
+    content.learningObjectives.forEach((objective, index) => scanAssessmentText(objective, `Assessment objective ${index + 1}`));
+    assertDenseArray(content.questions, "Assessment questions", 20);
+    if (content.questions.length < 1) throw new Error("Assessment must contain at least one question");
+    let totalPoints = 0;
+    content.questions.forEach((question, index) => {
+      assertOnlyDataFields(question, `Assessment question ${index + 1}`, ASSESSMENT_QUESTION_FIELDS);
+      scanAssessmentText(question.objective, `Assessment question ${index + 1} objective`);
+      if (!content.learningObjectives.includes(question.objective)) throw new Error("Assessment question targets an unlisted objective");
+      scanAssessmentText(question.prompt, `Assessment question ${index + 1} prompt`);
+      scanAssessmentText(question.expectedLearning, `Assessment question ${index + 1} success criteria`);
+      if (!Number.isInteger(question.points) || question.points < 1 || question.points > 10) throw new Error("Invalid assessment question points");
+      totalPoints += question.points;
+    });
+    if (totalPoints > 100) throw new Error("Assessment total points cannot exceed 100");
+    const parentReasons = content.parentSafetyReviewReasons;
+    assertDenseArray(parentReasons, "Parent safety review reasons", SENSITIVE_CONTENT.length);
+    if (parentReasons.some((reason) => !SENSITIVE_CONTENT.some((entry) => entry.category === reason))) throw new Error("Invalid parent safety review reason");
+    if (!/^sha256:[a-f0-9]{64}$/.test(content.sourceLessonDigest || "")) throw new Error("Invalid source lesson digest");
+    detectedSafetyReview = [...new Set([...parentReasons, ...detectAssessmentSafetyReview(content)])];
+    contentShapeSafe = true;
+  } catch {
+    // Imported, mutated, and otherwise malformed assessment payloads fail verification.
+  }
+  let contentDigest;
+  try {
+    contentDigest = typeof artifact?.metadata?.verification?.contentDigest === "string"
+      && /^sha256:[a-f0-9]{64}$/.test(artifact.metadata.verification.contentDigest)
+      && await digestLesson(artifact.content) === artifact.metadata.verification.contentDigest;
+  } catch {
+    contentDigest = false;
+  }
+  const checks = {
+    workflow: artifact?.metadata?.workflow === "teacher_assessment",
+    artifactType: artifact?.type === "document",
+    titleMatchesContent: artifact?.title === artifact?.content?.title,
+    contentShapeSafe,
+    accountScope: typeof accountScope === "string" && artifact?.metadata?.accountScope === accountScope,
+    workspace: typeof workspaceId === "string" && artifact?.metadata?.workspaceId === workspaceId,
+    studentDataPolicy: artifact?.metadata?.studentDataPolicy === "not_collected",
+    provenance: artifact?.metadata?.provenance?.generatedBy === "HEY Teacher Assessment Workflow"
+      && artifact?.metadata?.provenance?.method === "structured_from_verified_teacher_lesson"
+      && artifact?.metadata?.provenance?.factualClaimsVerified === false
+      && /^sha256:[a-f0-9]{64}$/.test(artifact?.metadata?.provenance?.sourceLessonDigest || "")
+      && artifact?.metadata?.provenance?.sourceLessonDigest === artifact?.content?.sourceLessonDigest
+      && Number.isFinite(Date.parse(artifact?.metadata?.provenance?.createdAt || "")),
+    teacherReviewRequired: artifact?.metadata?.safety?.teacherReviewRequiredBeforeUse === true,
+    verificationEvidence: artifact?.metadata?.verification?.valid === true
+      && ASSESSMENT_VERIFICATION_CHECK_FIELDS.size === Object.keys(artifact?.metadata?.verification?.checks || {}).length
+      && [...ASSESSMENT_VERIFICATION_CHECK_FIELDS].every((field) => artifact.metadata.verification.checks[field] === true),
+    contentDigest,
+    safetyGradeMatchesContent: artifact?.metadata?.safety?.gradeBand === artifact?.content?.gradeBand,
+    objectives: Array.isArray(artifact?.content?.learningObjectives) && artifact.content.learningObjectives.length > 0,
+    questions: Array.isArray(artifact?.content?.questions) && artifact.content.questions.length > 0,
+    safetyReview: Array.isArray(detectedSafetyReview)
+      && artifact?.metadata?.safety?.reviewRequired === (detectedSafetyReview.length > 0)
+      && JSON.stringify(artifact?.metadata?.safety?.reviewReasons) === JSON.stringify(detectedSafetyReview),
+  };
+  return Object.freeze({ valid: Object.values(checks).every(Boolean), checks });
+}
+
 /**
  * Store a verified teacher lesson in the shared Forge artifact graph as a
  * draft document. The active account and Space must be supplied independently
  * of the artifact's embedded scope. This stores lesson-planning content only;
  * it does not send the lesson to Cosmos memory or claim database durability.
  */
-export async function saveTeacherLessonArtifact(artifact, context, options = {}) {
-  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_LESSON_ARTIFACTS.has(artifact)) {
-    throw new Error("Only a lesson artifact built in the active Teacher runtime can be saved");
+async function saveTeacherArtifact(artifact, context, options, builtArtifacts, verifyArtifact, label, contract, tags) {
+  if (!artifact || typeof artifact !== "object" || !builtArtifacts.has(artifact)) {
+    const article = label === "assessment" ? "an" : "a";
+    throw new Error(`Only ${article} ${label} artifact built in the active Teacher runtime can be saved`);
   }
   let stableArtifact;
   let stableContext;
@@ -367,19 +598,19 @@ export async function saveTeacherLessonArtifact(artifact, context, options = {})
     assertOnlyDataFields(stableContext, "Teacher artifact save context", SAVE_CONTEXT_FIELDS);
     assertOnlyDataFields(options, "Teacher artifact save options", SAVE_OPTION_FIELDS);
   } catch {
-    throw new Error("Lesson artifact failed verification for the active account and workspace");
+    throw new Error(`${label} artifact failed verification for the active account and workspace`);
   }
   const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
   const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
   if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId) {
-    throw new Error("Lesson artifact account and workspace must match the active context");
+    throw new Error(`${label} artifact account and workspace must match the active context`);
   }
   const createArtifact = options.createArtifact ?? createForgeArtifact;
   if (typeof createArtifact !== "function") throw new TypeError("Shared artifact creator must be a function");
 
+  const verification = await verifyArtifact(artifact, { accountScope, workspaceId });
+  if (!verification.valid) throw new Error(`${label} artifact failed verification for the active account and workspace`);
   freezeDeep(stableArtifact);
-  const verification = await verifyTeacherLessonArtifact(stableArtifact, { accountScope, workspaceId });
-  if (!verification.valid) throw new Error("Lesson artifact failed verification for the active account and workspace");
 
   const { content, metadata } = stableArtifact;
   return createArtifact({
@@ -390,12 +621,26 @@ export async function saveTeacherLessonArtifact(artifact, context, options = {})
     content,
     metadata: {
       ...metadata,
-      artifactContract: "hey.teacher.lesson.v1",
+      artifactContract: contract,
       accountScope,
       workspaceId,
     },
-    tags: ["teacher", "lesson-plan"],
+    tags,
   });
+}
+
+export async function saveTeacherLessonArtifact(artifact, context, options = {}) {
+  return saveTeacherArtifact(
+    artifact, context, options, BUILT_TEACHER_LESSON_ARTIFACTS, verifyTeacherLessonArtifact,
+    "lesson", "hey.teacher.lesson.v1", ["teacher", "lesson-plan"],
+  );
+}
+
+export async function saveTeacherAssessmentArtifact(artifact, context, options = {}) {
+  return saveTeacherArtifact(
+    artifact, context, options, BUILT_TEACHER_ASSESSMENT_ARTIFACTS, verifyTeacherAssessmentArtifact,
+    "assessment", "hey.teacher.assessment.v1", ["teacher", "assessment"],
+  );
 }
 
 export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
@@ -437,4 +682,62 @@ export async function exportTeacherLessonMarkdown(artifact, { accountScope, work
   return Object.freeze({ filename: "lesson-plan.md", mimeType: "text/markdown", content: lines.join("\n") });
 }
 
-export default { buildTeacherLessonArtifact, verifyTeacherLessonArtifact, saveTeacherLessonArtifact, exportTeacherLessonMarkdown };
+export async function exportTeacherAssessmentMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(artifact)) {
+    throw new Error("Only an assessment artifact built in the active Teacher runtime can be exported");
+  }
+  const verification = await verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId });
+  if (!verification.valid) throw new Error("Assessment artifact failed verification for the active account and workspace");
+  let stableArtifact;
+  let stableSafetyReview;
+  try {
+    stableArtifact = snapshotLessonData(artifact);
+    stableSafetyReview = safetyReview === undefined ? undefined : snapshotLessonData(safetyReview);
+  } catch {
+    throw new Error("Assessment artifact failed verification for the active account and workspace");
+  }
+  if (stableArtifact.metadata.safety.reviewRequired) {
+    if (!isPlainRecord(stableSafetyReview)) throw new Error("Teacher safety review is required for the active account and workspace before exporting this assessment");
+    assertOnlyDataFields(stableSafetyReview, "Teacher safety review", new Set(["accountScope", "workspaceId", "reviewerId", "reviewedAt"]));
+    if (stableSafetyReview.accountScope !== accountScope
+      || stableSafetyReview.workspaceId !== workspaceId
+      || typeof stableSafetyReview.reviewerId !== "string" || !stableSafetyReview.reviewerId.trim()
+      || !Number.isFinite(Date.parse(stableSafetyReview.reviewedAt || ""))) {
+      throw new Error("Teacher safety review is required for the active account and workspace before exporting this assessment");
+    }
+  }
+  const { content, metadata } = stableArtifact;
+  const lines = [
+    `# ${escapeMarkdown(content.title)}`, "", `**Subject:** ${escapeMarkdown(content.subject)}  `,
+    `**Grade band:** ${escapeMarkdown(content.gradeBand)}  `,
+    `**Based on lesson:** ${escapeMarkdown(content.sourceLessonTitle)}`, "",
+    "## Directions", escapeMarkdown(content.directions), "", "## Learning objectives",
+    ...content.learningObjectives.map((objective) => `- ${escapeMarkdown(objective)}`), "",
+    "## Questions", ...content.questions.flatMap((question, index) => [
+      `### ${index + 1}. ${escapeMarkdown(question.prompt)} (${question.points} points)`,
+      `**Objective:** ${escapeMarkdown(question.objective)}`,
+      `**Success criteria:** ${escapeMarkdown(question.expectedLearning)}`, "",
+    ]),
+    "## Provenance and review",
+    `- Source lesson digest: ${metadata.provenance.sourceLessonDigest}`,
+    "- Assessment claims and curriculum alignment: not independently verified",
+    `- Student personal data: ${metadata.studentDataPolicy}`,
+    "- Teacher review required before classroom use: yes",
+    ...(metadata.safety.reviewRequired ? [
+      `- Safety review recorded for account/workspace by: ${escapeMarkdown(safetyReview.reviewerId)}`,
+      `- Safety review time: ${new Date(safetyReview.reviewedAt).toISOString()}`,
+    ] : []),
+  ];
+  return Object.freeze({ filename: "assessment.md", mimeType: "text/markdown", content: lines.join("\n") });
+}
+
+export default {
+  buildTeacherLessonArtifact,
+  verifyTeacherLessonArtifact,
+  saveTeacherLessonArtifact,
+  exportTeacherLessonMarkdown,
+  buildTeacherAssessmentArtifact,
+  verifyTeacherAssessmentArtifact,
+  saveTeacherAssessmentArtifact,
+  exportTeacherAssessmentMarkdown,
+};
