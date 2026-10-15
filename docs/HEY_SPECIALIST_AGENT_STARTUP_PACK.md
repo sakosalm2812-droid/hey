@@ -2,7 +2,7 @@
 
 Updated: 2026-10-15  
 Repository: `sakosalm2812-droid/hey`  
-Latest coordinator checkpoint: `def50bd` on `codex/resume-emergency-2026-10-14`; source through `9088733`; full suite 293/293, scoped ESLint, build and diff check passed.
+Latest coordinator checkpoint: `ab4e6ce` on `codex/resume-emergency-2026-10-14`; full suite 304/304, scoped ESLint, diff check and production build passed. Root-wide ESLint traverses nested worktrees and stalled; the Wave 2 UI worker separately reported full lint passed.
 
 ## Session setup and current access
 
@@ -49,13 +49,14 @@ The follow-up assignments below began from their recorded historical checkpoints
 
 ## Wave 2 implementation tasks
 
-These isolated tasks continue implementation from coordinator checkpoint `b745752` after the first 11 specialist slices were reviewed and integrated. Model GPT-6 Luna / High was requested for each. Worktree paths are local and commits remain local until coordinator review.
+These isolated tasks continued from coordinator checkpoint `b745752`; all four are integrated through `ab4e6ce`. Worker task references are local collaboration agents, not standalone chats; commits remain local and have not been pushed.
 
 | Worker task | Branch | Worktree | Starting SHA | Scope |
 |---|---|---|---|---|
-| `/root/wave2_01_tool_ui` | `codex/wave2-01-tool-library-ui` | `work/hey-specialists/wave2-01-tool-library-ui` | `b745752` | Frontend Tools catalog view using canonical `HEY.tools.catalog`; no unsupported actions |
-| `/root/wave2_02_space_persistence` | `codex/wave2-02-space-persistence` | `work/hey-specialists/wave2-02-space-persistence` | `b745752` | Wire account-bound Space preview/confirmation into existing persistence contracts |
-| `/root/wave2_03_tool_lifecycle` | `codex/wave2-03-tool-lifecycle` | `work/hey-specialists/wave2-03-tool-lifecycle` | `b745752` | Canonical Tool Library lifecycle/search contract with permission and failure tests |
+| `/root/wave2_01_tool_ui` | `codex/wave2-01-tool-library-ui` | `work/hey-specialists/wave2-01-tool-library-ui` | `b745752` | Complete, worker `886cdb890fd765a0bb7c249f9d589bfd1827bc6d`, integrated `cb53953`; protected read-only catalog UI; 296 tests, lint and build passed |
+| `/root/wave2_02_space_persistence` | `codex/wave2-02-space-persistence` | `work/hey-specialists/wave2-02-space-persistence` | `b745752` | Complete, worker `c62666d`, integrated `1973f22`; account-bound preview confirmation, local persistence/read-back, replay and failure attacks; 10 focused, 295 full tests passed |
+| `/root/wave2_03_tool_lifecycle` | `codex/wave2-03-tool-lifecycle` | `work/hey-specialists/wave2-03-tool-lifecycle` | `b745752` | Complete, worker `21c2edebbe2c93175f55c8df9ea1cabc75bf9441`, integrated `bca038a`; guarded search/run API; 295 tests, scoped lint and diff check passed |
+| `/root/wave2_04_device_enrollment` | `codex/wave2-04-device-enrollment` | `work/hey-specialists/wave2-04-device-enrollment` | `f29485f` | Complete, worker `9051d8012250a64664131a82c0725a781fc94c55`, integrated `ab4e6ce`; versioned account-scoped local persistence/read-back/revocation; 297 tests, focused suites, scoped lint and diff check passed |
 
 ## Ready-to-paste startup prompts
 
