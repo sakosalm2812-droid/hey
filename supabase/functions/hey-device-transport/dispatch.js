@@ -6,6 +6,20 @@ const MAX_LEASE_MS = 300_000;
 function result(ok, body = {}) { return { ok, ...body }; }
 function validUuid(value) { return typeof value === "string" && UUID.test(value); }
 
+export function normalizeAccountDeviceRequest(body) {
+  try {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+    const keys = Reflect.ownKeys(body);
+    const descriptors = Object.getOwnPropertyDescriptors(body);
+    if (keys.length !== 2 || keys.some((key) => !["operation", "deviceId"].includes(key)
+      || !descriptors[key]?.enumerable || !Object.hasOwn(descriptors[key], "value"))) return null;
+    const operation = descriptors.operation?.value;
+    const deviceId = descriptors.deviceId?.value;
+    if (!["rotate", "revoke"].includes(operation) || !validUuid(deviceId)) return null;
+    return { operation, deviceId };
+  } catch { return null; }
+}
+
 export function normalizeTransportRequest(body) {
   try {
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
@@ -58,6 +72,20 @@ export async function issueDeviceCredential({ authenticatedAccountId, deviceId, 
     return result(true, { credential: token });
   } catch {
     return result(false, { reason: "Device credential service is unavailable." });
+  }
+}
+
+export async function revokeOwnedDeviceTransport({ authenticatedAccountId, deviceId, revokeDevice } = {}) {
+  if (!validUuid(authenticatedAccountId) || !validUuid(deviceId) || typeof revokeDevice !== "function") {
+    return result(false, { status: 400, reason: "Device revocation request is invalid." });
+  }
+  try {
+    if (await revokeDevice(authenticatedAccountId, deviceId) !== true) {
+      return result(false, { status: 404, reason: "The requested device is unavailable for this account." });
+    }
+    return result(true, { status: 200, revoked: true });
+  } catch {
+    return result(false, { status: 503, reason: "Device revocation is unavailable." });
   }
 }
 
