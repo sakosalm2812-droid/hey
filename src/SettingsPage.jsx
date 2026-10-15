@@ -13,9 +13,11 @@ import {
   Shield,
   Zap,
   Moon,
+  SlidersHorizontal,
 } from "lucide-react";
 
 import { useAuth } from "./AuthContext.jsx";
+import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
 import { buzz } from "./lib/heyFeedback.js";
 import { getSettings, toggleSetting } from "./lib/settingsManager.js";
 import { LOCALES, useLocale } from "./i18n/LocaleContext.jsx";
@@ -68,6 +70,14 @@ function Toggle({ on, disabled, onChange, label }) {
 
 export default function SettingsPage() {
   const { user, profile, plan, signOut } = useAuth();
+  const {
+    level: interfaceLevel,
+    loading: interfaceLoading,
+    saving: interfaceSaving,
+    persisted: interfacePersisted,
+    error: interfaceError,
+    changeLevel: changeInterfaceLevel,
+  } = useInterfaceLevel();
   const { t, locale, setLocale } = useLocale();
 
   const [enabled, setEnabled] = useState(defaultSettings);
@@ -282,6 +292,55 @@ export default function SettingsPage() {
             </button>
           </section>
 
+          <section className="hey-settings-card" aria-labelledby="hey-interface-level-title">
+            <header className="hey-settings-card-header">
+              <SlidersHorizontal size={20} aria-hidden="true" />
+              <div>
+                <h2 id="hey-interface-level-title">Interface level</h2>
+                <p>Choose how much technical detail the Tools catalog shows by default.</p>
+              </div>
+            </header>
+            <fieldset className="hey-interface-level-options" disabled={interfaceLoading || interfaceSaving || Boolean(savingSetting) || !user?.id}>
+              <legend className="hey-settings-hint">Choose an interface level</legend>
+              <label className={interfaceLevel === "simple" ? "selected" : ""}>
+                <input
+                  type="radio"
+                  name="hey-interface-level"
+                  value="simple"
+                  checked={interfaceLevel === "simple"}
+                  onChange={() => { void changeInterfaceLevel("simple"); }}
+                />
+                <span>
+                  <strong>Simple</strong>
+                  <small>Show essentials first and keep capability details available in a disclosure.</small>
+                </span>
+              </label>
+              <label className={interfaceLevel === "advanced" ? "selected" : ""}>
+                <input
+                  type="radio"
+                  name="hey-interface-level"
+                  value="advanced"
+                  checked={interfaceLevel === "advanced"}
+                  onChange={() => { void changeInterfaceLevel("advanced"); }}
+                />
+                <span>
+                  <strong>Advanced</strong>
+                  <small>Show tool identifiers, lifecycle state, and capabilities expanded.</small>
+                </span>
+              </label>
+            </fieldset>
+            {interfaceLoading && <p className="hey-interface-level-status" role="status">Loading your interface preference…</p>}
+            {interfaceSaving && <p className="hey-interface-level-status" role="status">Saving your interface preference…</p>}
+            {!interfaceLoading && !interfaceSaving && !interfaceError && user?.id && (
+              <p className="hey-interface-level-status" role="status">
+                {interfacePersisted
+                  ? `Saved to your account: ${interfaceLevel === "advanced" ? "Advanced" : "Simple"}.`
+                  : `Default level: ${interfaceLevel === "advanced" ? "Advanced" : "Simple"}. Choose a level to save your preference.`}
+              </p>
+            )}
+            {interfaceError && <p className="hey-interface-level-error" role="alert">{interfaceError}</p>}
+          </section>
+
           <section className="hey-settings-card">
             <header className="hey-settings-card-header">
               <Brain size={20} aria-hidden="true" />
@@ -303,7 +362,7 @@ export default function SettingsPage() {
                     </div>
                     <Toggle
                       on={isEnabled}
-                      disabled={Boolean(savingSetting)}
+                      disabled={Boolean(savingSetting) || interfaceSaving}
                       onChange={() => handleToggle(setting)}
                       label={`Toggle ${setting}`}
                     />

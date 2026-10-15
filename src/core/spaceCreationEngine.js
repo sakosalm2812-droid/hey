@@ -4,15 +4,23 @@ import { publish } from "./eventBus.js";
 import { safeStorage } from "../lib/safeStorage.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
+export const SPACE_STORAGE_CONTRACT_VERSION = 2;
+export const SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION = 1;
 export const SPACE_CREATION_LIMITS = Object.freeze({
   maxPromptLength: 500,
   maxNameLength: 80,
   maxSpacesPerAccount: 1000,
+  maxPreferenceIdsPerCategory: 32,
+  maxPreferenceIdLength: 64,
+  maxStoredChars: 1_000_000,
   previewLifetimeMs: 5 * 60 * 1000,
 });
 
 const STORAGE_KEY = "hey_spaces";
-const MAX_STORAGE_CHARS = 1_000_000;
+const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, SPACE_STORAGE_CONTRACT_VERSION]);
+const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds"]);
+const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
+const activeLayoutPreferenceWrites = new Set();
 const CREATE_SPACE_PROMPT = /^(?:please\s+)?create\s+(?:a\s+)?(?:private\s+)?space\s+(?:called|named)\s+(.+)$/i;
 const FORBIDDEN_INTENT = /\b(?:public|share|shared|sharing|invite|invites|members?|permissions?|access|roles?|admin|administrator|owner|grant|escalat(?:e|ion))\b/i;
 const SPACE_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'’()-]{0,79}$/u;
@@ -63,6 +71,10 @@ function cleanStoredSpace(id, value, scope) {
     const space = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
     if (space.id !== id || space.accountScope !== scope || typeof space.name !== "string" || !SPACE_NAME.test(space.name)) return null;
     if (space.visibility !== "private" || space.sharing !== "off") return null;
+    const layoutPreferences = space.layoutPreferences === undefined
+      ? createDefaultSpaceLayoutPreferences()
+      : normalizeSpaceLayoutPreferences(space.layoutPreferences);
+    if (!layoutPreferences) return null;
     return {
       id,
       accountScope: scope,
@@ -71,6 +83,7 @@ function cleanStoredSpace(id, value, scope) {
       visibility: "private",
       sharing: "off",
       createdAt: typeof space.createdAt === "string" ? space.createdAt.slice(0, 64) : null,
+      layoutPreferences,
     };
   } catch {
     return null;
@@ -78,7 +91,106 @@ function cleanStoredSpace(id, value, scope) {
 }
 
 function cloneSpace(space) {
-  return { ...space };
+  return { ...space, layoutPreferences: cloneSpaceLayoutPreferences(space.layoutPreferences) };
+}
+
+function createDefaultSpaceLayoutPreferences() {
+  return {
+    contractVersion: SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION,
+    revision: 0,
+    favoriteToolIds: [],
+    widgetIds: [],
+    shortcutIds: [],
+  };
+}
+
+function cloneSpaceLayoutPreferences(preferences) {
+  return {
+    contractVersion: preferences.contractVersion,
+    revision: preferences.revision,
+    favoriteToolIds: [...preferences.favoriteToolIds],
+    widgetIds: [...preferences.widgetIds],
+    shortcutIds: [...preferences.shortcutIds],
+  };
+}
+
+function normalizePreferenceIdList(value) {
+  if (!Array.isArray(value)) return null;
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.getOwnPropertySymbols(value).length > 0) return null;
+    const length = descriptors.length?.value;
+    if (!Number.isInteger(length) || length < 0 || length > SPACE_CREATION_LIMITS.maxPreferenceIdsPerCategory) return null;
+    if (Object.keys(descriptors).some((key) => key !== "length" && !/^(?:0|[1-9]\d*)$/.test(key))) return null;
+    const result = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[index];
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+      const id = descriptor.value;
+      if (typeof id !== "string" || id.length > SPACE_CREATION_LIMITS.maxPreferenceIdLength || !SPACE_LAYOUT_PREFERENCE_ID.test(id)) return null;
+      if (result.includes(id)) return null;
+      result.push(id);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSpaceLayoutPreferences(value) {
+  const safe = readDataRecord(value, ["contractVersion", "revision", ...SPACE_LAYOUT_PREFERENCE_FIELDS]);
+  if (safe.error) return null;
+  const input = safe.value;
+  if (input.contractVersion !== SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION
+    || !Number.isSafeInteger(input.revision) || input.revision < 0) return null;
+  const preferences = createDefaultSpaceLayoutPreferences();
+  preferences.revision = input.revision;
+  for (const field of SPACE_LAYOUT_PREFERENCE_FIELDS) {
+    if (!Object.hasOwn(input, field)) continue;
+    const values = normalizePreferenceIdList(input[field]);
+    if (!values) return null;
+    preferences[field] = values;
+  }
+  return preferences;
+}
+
+function normalizeSpaceLayoutPreferencePatch(value) {
+  const safe = readDataRecord(value, SPACE_LAYOUT_PREFERENCE_FIELDS);
+  if (safe.error || Object.keys(safe.value).length === 0) return { error: safe.error || "At least one layout preference is required" };
+  const patch = {};
+  for (const [field, values] of Object.entries(safe.value)) {
+    const normalized = normalizePreferenceIdList(values);
+    if (!normalized) return { error: `Invalid ${field}` };
+    patch[field] = normalized;
+  }
+  return { value: patch };
+}
+
+function parseStoredSpaces(stored, scope) {
+  if (stored == null) return new Map();
+  if (typeof stored !== "string" || stored.length > SPACE_CREATION_LIMITS.maxStoredChars) throw new Error("Space storage is invalid or too large");
+  const parsed = JSON.parse(stored);
+  if (!plainRecord(parsed) || !SUPPORTED_SPACE_STORAGE_VERSIONS.has(parsed.contractVersion) || parsed.accountScope !== scope || !plainRecord(parsed.spaces)) {
+    throw new Error("Space storage version or scope is invalid");
+  }
+  const entries = Object.entries(parsed.spaces);
+  if (entries.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) throw new Error("Space storage exceeds the account limit");
+  const spaces = new Map();
+  entries.forEach(([id, value]) => {
+    const clean = cleanStoredSpace(id, value, scope);
+    if (!clean) throw new Error("Space storage contains an invalid record");
+    spaces.set(id, clean);
+  });
+  return spaces;
+}
+
+function serializeSpaces(spaces, scope) {
+  const serialized = JSON.stringify({
+    contractVersion: SPACE_STORAGE_CONTRACT_VERSION,
+    accountScope: scope,
+    spaces: Object.fromEntries(spaces),
+  });
+  return serialized.length <= SPACE_CREATION_LIMITS.maxStoredChars ? serialized : null;
 }
 
 function readStorageItem(key) {
@@ -124,48 +236,75 @@ export class SpaceCreationEngine {
       this.load(this.accountScope);
       this.notify("account_scope_changed", { accountScope: this.accountScope });
     });
+    this.storageEventTarget = globalThis.window && typeof globalThis.window.addEventListener === "function"
+      ? globalThis.window
+      : null;
+    this.handleStorageEvent = (event) => {
+      if (!event || (event.key !== getAccountStorageKey(STORAGE_KEY, this.accountScope) && event.key !== null)) return;
+      try {
+        if (event.storageArea && globalThis.localStorage && event.storageArea !== globalThis.localStorage) return;
+      } catch {
+        return;
+      }
+      const refreshed = this.refreshFromStorage(this.accountScope, { notify: true });
+      if (refreshed.error) this.loadError = true;
+    };
+    this.storageEventTarget?.addEventListener("storage", this.handleStorageEvent);
   }
 
   load(scope = getAccountScope()) {
-    this.spaces.clear();
     this.accountScope = scope;
     this.loadError = false;
     try {
-      const stored = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
-      if (stored == null) return;
-      if (typeof stored !== "string" || stored.length > MAX_STORAGE_CHARS) throw new Error("Space storage is invalid or too large");
-      const parsed = JSON.parse(stored);
-      if (!plainRecord(parsed) || parsed.contractVersion !== SPACE_CREATION_CONTRACT_VERSION || parsed.accountScope !== scope || !plainRecord(parsed.spaces)) {
-        throw new Error("Space storage version or scope is invalid");
-      }
-      const entries = Object.entries(parsed.spaces);
-      if (entries.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) throw new Error("Space storage exceeds the account limit");
-      entries.forEach(([id, value]) => {
-        const clean = cleanStoredSpace(id, value, scope);
-        if (!clean) throw new Error("Space storage contains an invalid record");
-        this.spaces.set(id, clean);
-      });
+      const spaces = parseStoredSpaces(readStorageItem(getAccountStorageKey(STORAGE_KEY, scope)), scope);
+      if (getAccountScope() !== scope || this.accountScope !== scope) return;
+      this.spaces = spaces;
     } catch {
+      if (getAccountScope() !== scope || this.accountScope !== scope) return;
       this.spaces.clear();
       this.loadError = true;
     }
   }
 
-  save() {
-    if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; reload before saving" };
+  refreshFromStorage(scope = this.accountScope, { notify = false } = {}) {
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before reading" };
+    const previous = serializeSpaces(this.spaces, scope);
     try {
-      const key = getAccountStorageKey(STORAGE_KEY, this.accountScope);
-      const serialized = JSON.stringify({
-        contractVersion: SPACE_CREATION_CONTRACT_VERSION,
-        accountScope: this.accountScope,
-        spaces: Object.fromEntries(this.spaces),
-      });
-      if (serialized.length > MAX_STORAGE_CHARS) return { error: "Space storage limit reached" };
+      const spaces = parseStoredSpaces(readStorageItem(getAccountStorageKey(STORAGE_KEY, scope)), scope);
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before reading" };
+      this.spaces = spaces;
+      this.loadError = false;
+      if (notify && serializeSpaces(spaces, scope) !== previous) {
+        this.notify("storage_synced", { accountScope: scope, spaces: [...spaces.values()].map(cloneSpace) });
+      }
+      return { success: true };
+    } catch {
+      this.loadError = true;
+      return { error: "Space storage could not be read" };
+    }
+  }
+
+  destroy() {
+    this.storageEventTarget?.removeEventListener("storage", this.handleStorageEvent);
+    this.unsubscribeAccountScope?.();
+    this.listeners.clear();
+    this.previews.clear();
+  }
+
+  save() {
+    const scope = this.accountScope;
+    if (getAccountScope() !== scope) return { error: "Account scope changed; reload before saving" };
+    if (this.loadError) return { error: "Space storage could not be read; try again" };
+    try {
+      const key = getAccountStorageKey(STORAGE_KEY, scope);
+      const serialized = serializeSpaces(this.spaces, scope);
+      if (!serialized) return { error: "Space storage limit reached" };
       // safeStorage intentionally absorbs browser storage exceptions. Verify the
       // round trip here so callers never receive a persisted-success result when
       // the canonical per-account store rejected the write.
       safeStorage.setItem(key, serialized);
       if (safeStorage.getItem(key) !== serialized) return { error: "Space could not be saved" };
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before saving" };
       return { success: true };
     } catch {
       return { error: "Space could not be saved" };
@@ -179,6 +318,78 @@ export class SpaceCreationEngine {
     if (this.loadError) this.load(this.accountScope);
     if (this.loadError) throw new Error("Space storage could not be read");
     return [...this.spaces.values()].map(cloneSpace);
+  }
+
+  getLayoutPreferences(spaceId) {
+    if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    const refreshed = this.refreshFromStorage(this.accountScope);
+    if (refreshed.error) return refreshed;
+    const space = this.spaces.get(spaceId);
+    if (!space || space.accountScope !== this.accountScope) return { error: "Space not found" };
+    return {
+      success: true,
+      accountScope: this.accountScope,
+      spaceId,
+      ...cloneSpaceLayoutPreferences(space.layoutPreferences),
+    };
+  }
+
+  updateLayoutPreferences(request) {
+    const safeRequest = readDataRecord(request, ["accountScope", "spaceId", "expectedRevision", "preferences"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, spaceId, expectedRevision } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to update Space preferences" };
+    if (typeof accountScope !== "string" || accountScope !== scope || accountScope !== getAccountScope()) {
+      return { error: "Account scope mismatch" };
+    }
+    if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return { error: "A valid expected revision is required" };
+    const patch = normalizeSpaceLayoutPreferencePatch(safeRequest.value.preferences);
+    if (patch.error) return patch;
+    const writeLockKey = JSON.stringify([scope, spaceId]);
+    if (activeLayoutPreferenceWrites.has(writeLockKey)) return { error: "A Space preference update is already in progress", code: "write_in_progress" };
+
+    activeLayoutPreferenceWrites.add(writeLockKey);
+    try {
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error) return refreshed;
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the update" };
+      const currentSpace = this.spaces.get(spaceId);
+      if (!currentSpace || currentSpace.accountScope !== scope) return { error: "Space not found" };
+      const current = currentSpace.layoutPreferences;
+      if (current.revision !== expectedRevision) {
+        return {
+          error: "Space layout preferences changed; reload before updating",
+          code: "stale_revision",
+          current: { accountScope: scope, spaceId, ...cloneSpaceLayoutPreferences(current) },
+        };
+      }
+      if (current.revision === Number.MAX_SAFE_INTEGER) return { error: "Space layout preference revision limit reached" };
+
+      const updatedPreferences = { ...cloneSpaceLayoutPreferences(current), ...patch.value, revision: current.revision + 1 };
+      const updatedSpace = { ...currentSpace, layoutPreferences: updatedPreferences };
+      const nextSpaces = new Map(this.spaces);
+      nextSpaces.set(spaceId, updatedSpace);
+      const serialized = serializeSpaces(nextSpaces, scope);
+      if (!serialized) return { error: "Space storage limit reached" };
+      try {
+        const key = getAccountStorageKey(STORAGE_KEY, scope);
+        safeStorage.setItem(key, serialized);
+        if (safeStorage.getItem(key) !== serialized) return { error: "Space preferences could not be saved", code: "write_failed" };
+      } catch {
+        return { error: "Space preferences could not be saved", code: "write_failed" };
+      }
+
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the update" };
+      this.spaces = nextSpaces;
+      const result = { success: true, accountScope: scope, spaceId, ...cloneSpaceLayoutPreferences(updatedPreferences) };
+      this.notify("layout_preferences_updated", result);
+      publish("spaces.layout_preferences_updated", result);
+      return result;
+    } finally {
+      activeLayoutPreferenceWrites.delete(writeLockKey);
+    }
   }
 
   previewNaturalLanguageRequest(request) {
@@ -230,6 +441,8 @@ export class SpaceCreationEngine {
       this.previews.delete(previewId);
       return { error: "Preview expired; create a new preview" };
     }
+    const refreshed = this.refreshFromStorage(this.accountScope);
+    if (refreshed.error) return { error: "Space storage could not be read; try again" };
     if (this.spaces.size >= SPACE_CREATION_LIMITS.maxSpacesPerAccount) {
       this.previews.delete(previewId);
       return { error: "Space limit reached" };
@@ -248,11 +461,12 @@ export class SpaceCreationEngine {
       visibility: "private",
       sharing: "off",
       createdAt: new Date().toISOString(),
+      layoutPreferences: createDefaultSpaceLayoutPreferences(),
     };
     this.spaces.set(space.id, space);
     const saved = this.save();
     if (saved.error) {
-      this.spaces.delete(space.id);
+      if (this.accountScope === space.accountScope) this.spaces.delete(space.id);
       return saved;
     }
     const result = cloneSpace(space);
@@ -288,6 +502,21 @@ export function confirmNaturalLanguageSpaceCreation(request) {
 
 export function getPrivateSpaces() {
   return spaceCreationEngine.getSpaces();
+}
+
+export function getSpaceLayoutPreferences(spaceId) {
+  return spaceCreationEngine.getLayoutPreferences(spaceId);
+}
+
+/**
+ * Backend contract exposed as HEY.spaces.updateLayoutPreferences(request):
+ * { accountScope, spaceId, expectedRevision, preferences: Partial<{favoriteToolIds, widgetIds, shortcutIds}> }.
+ * Each category accepts up to 32 unique safe IDs of at most 64 characters. A
+ * successful result returns the new revision; stale writes return
+ * { code: "stale_revision", current }. Starter choices stay in onboarding.
+ */
+export function updateSpaceLayoutPreferences(request) {
+  return spaceCreationEngine.updateLayoutPreferences(request);
 }
 
 export function subscribeToPrivateSpaces(listener) {
