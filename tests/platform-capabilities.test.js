@@ -14,6 +14,8 @@ import { createTauriAdapter, isTauriRuntime } from "../src/lib/tauriAdapter.js";
 import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice, registerDeviceAdapter, unregisterDeviceAdapter, unregisterDevice, revokeDevice } from "../src/core/deviceGateway.js";
 import { VOICE_STATES, createVoiceState } from "../src/core/voiceState.js";
 import { executeRequest } from "../src/core/executionController.js";
+import { computerControlEngine, CONTROL_MODES, COMPUTER_CAPABILITIES } from "../src/core/computerControl.js";
+import { computerControlEngine as legacyComputerControlEngine, CONTROL_MODES as LEGACY_CONTROL_MODES } from "../src/core/computerControlEngine.js";
 import { createVoiceSession } from "../src/lib/voiceProviders.js";
 import { understandImage, validateImageInput } from "../src/core/visionEngine.js";
 import { setAccountScope } from "../src/core/accountScope.js";
@@ -473,6 +475,58 @@ test("chat computer execution fails closed without the trusted action lifecycle 
   assert.equal(result.result.code, "ACTION_AUTHORITY_UNAVAILABLE");
   assert.match(result.result.message, /trusted mandate and independent verification adapter/i);
   assert.equal(calls, 0);
+});
+
+test("legacy Act mode cannot turn its mode flag into authority or bypass the Trust Kernel lifecycle", async () => {
+  let calls = 0;
+  const adapterName = "voiceos-act-mode-attack";
+  computerControlEngine.registerAdapter(adapterName, {
+    capabilities: [COMPUTER_CAPABILITIES.OPEN_APP],
+    execute: async () => { calls += 1; return { success: true, verified: true }; },
+  });
+
+  try {
+    const guide = await computerControlEngine.executeComputerCapability({
+      capability: COMPUTER_CAPABILITIES.OPEN_APP,
+      target: "Calculator",
+      mode: CONTROL_MODES.GUIDE,
+    });
+    const direct = await computerControlEngine.executeComputerCapability({
+      capability: COMPUTER_CAPABILITIES.OPEN_APP,
+      target: "Calculator",
+      mode: CONTROL_MODES.ACT,
+    });
+    const assist = await computerControlEngine.executeComputerCapability({
+      capability: COMPUTER_CAPABILITIES.OPEN_APP,
+      target: "Calculator",
+      mode: CONTROL_MODES.ASSIST,
+    });
+    const legacy = await legacyComputerControlEngine.execute(
+      "computer.app.open",
+      { target: "Calculator" },
+      { mode: LEGACY_CONTROL_MODES.ACT },
+    );
+    const legacyAssist = await legacyComputerControlEngine.execute(
+      "computer.app.open",
+      { target: "Calculator" },
+      { mode: LEGACY_CONTROL_MODES.ASSIST, confirmed: true },
+    );
+
+    assert.equal(guide.status, "guide_only");
+    assert.equal(guide.code, "NO_ACTION_IN_GUIDE_MODE");
+    assert.equal(direct.status, "action_authority_unavailable");
+    assert.equal(direct.code, "ACTION_AUTHORITY_UNAVAILABLE");
+    assert.equal(assist.status, "preview_required");
+    assert.equal(assist.requiresConfirmation, true);
+    assert.equal(assist.preview.target, "Calculator");
+    assert.equal(legacy.status, "action_authority_unavailable");
+    assert.equal(legacy.code, "ACTION_AUTHORITY_UNAVAILABLE");
+    assert.equal(legacyAssist.status, "preview_required");
+    assert.equal(legacyAssist.requiresConfirmation, true);
+    assert.equal(calls, 0);
+  } finally {
+    computerControlEngine.unregisterAdapter(adapterName);
+  }
 });
 
 test("Chrome and YouTube request becomes an executable workflow", () => {

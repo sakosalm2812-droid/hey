@@ -240,6 +240,27 @@ class ComputerControlEngine {
 
   async execute(capability, input = {}, options = {}) {
     const mode = options.mode || this.currentMode;
+    if (!Object.values(CONTROL_MODES).includes(mode)) {
+      return { success: false, status: "invalid_mode", error: "A supported computer-control mode is required." };
+    }
+    if (mode === CONTROL_MODES.ACT) {
+      return {
+        success: false,
+        status: "action_authority_unavailable",
+        code: "ACTION_AUTHORITY_UNAVAILABLE",
+        error: "Act mode requires the trusted action lifecycle and an independent postcondition observer.",
+      };
+    }
+    if (mode === CONTROL_MODES.ASSIST) {
+      return {
+        authorized: false,
+        mode: CONTROL_MODES.ASSIST,
+        requiresConfirmation: true,
+        status: "preview_required",
+        action: capability,
+        preview: this.generatePreview(capability, input),
+      };
+    }
     const adapter = options.adapter ? this.getAdapter(options.adapter) : this.activeAdapter;
 
     if (!adapter) {
@@ -251,7 +272,7 @@ class ComputerControlEngine {
       capability,
       permission: capability,
       riskLevel: this.getRiskLevel(capability),
-      confirmed: mode === CONTROL_MODES.ACT || options.confirmed === true,
+      confirmed: false,
     };
 
     const authResult = authorizeExecution(authContext);
@@ -270,16 +291,6 @@ class ComputerControlEngine {
         mode: CONTROL_MODES.GUIDE,
         guidance: this.generateGuidance(capability, input),
         action: capability,
-      };
-    }
-
-    if (mode === CONTROL_MODES.ASSIST && !options.confirmed) {
-      return {
-        authorized: true,
-        mode: CONTROL_MODES.ASSIST,
-        requiresConfirmation: true,
-        action: capability,
-        preview: this.generatePreview(capability, input),
       };
     }
 
