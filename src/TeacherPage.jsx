@@ -74,6 +74,7 @@ export default function TeacherPage() {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [preparedJourney, setPreparedJourney] = useState(null);
+  const [journeySaveRequest, setJourneySaveRequest] = useState(null);
   const [journeyContext, setJourneyContext] = useState(null);
   const [persistenceConfirmed, setPersistenceConfirmed] = useState(false);
   const [savedJourney, setSavedJourney] = useState(null);
@@ -91,6 +92,7 @@ export default function TeacherPage() {
     setWorkspaceId("");
     setSavedJourney(null);
     setPreparedJourney(null);
+    setJourneySaveRequest(null);
     setJourneyContext(null);
     setSafetyReasons([]);
     setSafetyAcknowledged(false);
@@ -229,6 +231,12 @@ export default function TeacherPage() {
         currentWorkspaceId,
         currentClassId,
       };
+      const journeySaveRequest = {
+        lesson,
+        assessment,
+        context: { ...context, journeyCreatedAt: new Date().toISOString() },
+        journeyId: crypto.randomUUID(),
+      };
       const journey = await HEY.teacher.prepareLessonWorksheetJourney({ lesson, assessment, context });
       if (accountRef.current !== accountId || getAccountScope() !== accountScope) {
         throw new Error("Your account changed while the preview was being prepared. It was discarded.");
@@ -242,6 +250,7 @@ export default function TeacherPage() {
         ...(journey.studentArtifact.metadata.safety.reviewReasons || []),
       ])];
       setPreparedJourney(journey);
+      setJourneySaveRequest(journeySaveRequest);
       setJourneyContext(context);
       setSafetyReasons(reasons);
       setStatus("preview");
@@ -254,7 +263,7 @@ export default function TeacherPage() {
   }
 
   async function savePreparedJourney() {
-    if (!preparedJourney || !journeyContext || status !== "preview" || saveInFlightRef.current) return;
+    if (!preparedJourney || !journeySaveRequest || !journeyContext || !["preview", "partial-error"].includes(status) || saveInFlightRef.current) return;
     saveInFlightRef.current = true;
     setStatus("saving");
     setError("");
@@ -270,7 +279,7 @@ export default function TeacherPage() {
         throw new Error("Your account or class authorization changed before saving.");
       }
       saveStarted = true;
-      const journey = await HEY.teacher.saveLessonWorksheetJourney(preparedJourney, journeyContext);
+      const journey = await HEY.teacher.createLessonWorksheetJourney(journeySaveRequest);
       if (accountRef.current !== accountId || getAccountScope() !== journeyContext.accountScope) {
         throw new Error("Your account changed while Forge was saving. Verify the workspace before continuing.");
       }
@@ -286,7 +295,7 @@ export default function TeacherPage() {
       if (accountRef.current === accountId) {
         if (saveStarted) {
           setStatus("partial-error");
-          setError(`Forge did not confirm all three saves. One or more artifacts may already exist, so review the selected project in Forge before trying again. ${saveError.message || ""}`.trim());
+          setError(`Forge did not confirm the atomic save. The same journey can be retried safely using its stable recovery IDs. ${saveError.message || ""}`.trim());
         } else {
           setStatus("preview");
           setError(`The save could not start, so nothing was written. Check your teacher access and selected project, then retry. ${saveError.message || ""}`.trim());
@@ -314,6 +323,7 @@ export default function TeacherPage() {
   function discardPreview() {
     if (status !== "preview") return;
     setPreparedJourney(null);
+      setJourneySaveRequest(null);
     setJourneyContext(null);
     setSafetyReasons([]);
     setStatus("idle");
@@ -467,7 +477,7 @@ export default function TeacherPage() {
           )}
 
           {status === "export-error" && savedJourney && <div className="teacher-page__submit-row"><button type="button" className="teacher-page__primary" onClick={() => { setStatus(safetyReasons.length ? "review" : "saved"); setError(""); }}><RotateCw size={16} aria-hidden="true" /> Retry exports</button></div>}
-          {status === "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p><Link to="/forge">Open Forge and inspect the selected project</Link></div>}
+            {status === "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p><button type="button" className="teacher-page__secondary" onClick={savePreparedJourney} disabled={pageBusy}>Retry the same journey save</button><Link to="/forge">Open Forge to inspect the selected project</Link></div>}
           {error && status !== "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p></div>}
           {status === "saved" && persistenceConfirmed && <p className="teacher-page__success" role="status"><Check size={16} aria-hidden="true" /> Forge confirmed the lesson, teacher answer key, and student worksheet.</p>}
           {status === "complete" && persistenceConfirmed && <p className="teacher-page__success" role="status"><Check size={16} aria-hidden="true" /> Forge confirmed the lesson, teacher answer key, and student worksheet.</p>}
