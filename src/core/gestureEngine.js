@@ -64,6 +64,8 @@ export class GestureEngine {
     this.recognitionAdapter = null;
     this.recognitionAbortController = null;
     this.recognitionGeneration = 0;
+    this.cameraPermissionStatus = null;
+    this.cameraPermissionHandler = null;
     this.activeProfileId = null;
     this.frameCanvas = null;
     this.lastFrameAt = 0;
@@ -280,7 +282,7 @@ export class GestureEngine {
     this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "requesting" });
 
     try {
-      this.mediaStream = await globalThis.navigator.mediaDevices.getUserMedia({
+      const stream = await globalThis.navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: profile.cameraId ? { exact: profile.cameraId } : undefined,
           facingMode: "user",
@@ -290,20 +292,44 @@ export class GestureEngine {
       });
 
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        this.mediaStream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
       }
+      this.mediaStream = stream;
       this.videoElement = globalThis.document.createElement("video");
-      this.videoElement.srcObject = this.mediaStream;
-      this.videoElement.muted = true;
-      this.videoElement.playsInline = true;
-      await this.videoElement.play();
+      const video = this.videoElement;
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      await video.play();
+      if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
+        stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
+        video.pause?.();
+        video.srcObject = null;
+        if (this.mediaStream === stream) this.mediaStream = null;
+        if (this.videoElement === video) this.videoElement = null;
+        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+      }
 
-      const videoTrack = this.mediaStream.getVideoTracks?.()[0];
+      const videoTrack = stream.getVideoTracks?.()[0];
       if (!videoTrack || videoTrack.readyState === "ended") throw new Error("Camera track is unavailable.");
       videoTrack.addEventListener?.("ended", () => {
         if (generation === this.recognitionGeneration) this.stopRecognition("permission_revoked");
       }, { once: true });
+
+      const permissionAllowed = await this.watchCameraPermission(generation);
+      if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
+        stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
+        video.pause?.();
+        video.srcObject = null;
+        if (this.mediaStream === stream) this.mediaStream = null;
+        if (this.videoElement === video) this.videoElement = null;
+        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+      }
+      if (!permissionAllowed) {
+        this.stopRecognition("permission_revoked");
+        return { success: false, error: "Camera permission is denied.", code: "permission_denied" };
+      }
 
       this.recognitionState = GESTURE_STATES.ACTIVE;
       this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "active", visible: true, processing: "local_adapter" });
@@ -315,10 +341,38 @@ export class GestureEngine {
       
       return { success: true, profileId, camera: "active", visible: true, adapter: this.recognitionAdapter.kind || "custom" };
     } catch (error) {
+      if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
+        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+      }
       this.stopRecognition("start_failed");
       this.recognitionState = GESTURE_STATES.ERROR;
       this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: error.message });
       return { success: false, error: error.message, code: "camera_or_adapter_error" };
+    }
+  }
+
+  async watchCameraPermission(generation) {
+    const query = globalThis.navigator?.permissions?.query;
+    if (typeof query !== "function") return true;
+
+    try {
+      const status = await globalThis.navigator.permissions.query({ name: "camera" });
+      if (!status || generation !== this.recognitionGeneration) return false;
+      if (status.state === "denied") return false;
+
+      const onChange = () => {
+        if (generation === this.recognitionGeneration && status.state === "denied") {
+          this.stopRecognition("permission_revoked");
+        }
+      };
+      status.addEventListener?.("change", onChange);
+      this.cameraPermissionStatus = status;
+      this.cameraPermissionHandler = onChange;
+      return true;
+    } catch {
+      // The Permissions API does not expose camera permission state in every browser.
+      // getUserMedia and the live track remain the authoritative capability checks.
+      return true;
     }
   }
 
@@ -384,6 +438,8 @@ export class GestureEngine {
   }
 
   handleGestureDetection(gesture, profile) {
+    if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.activeProfileId !== profile?.id) return;
+
     const binding = Array.from(this.bindings.values()).find(b => 
       b.profileId === profile.id && 
       b.gestureId === gesture.id && 
@@ -452,6 +508,12 @@ export class GestureEngine {
     this.recognitionAbortController?.abort(reason);
     this.recognitionAbortController = null;
     this.recognitionState = GESTURE_STATES.INACTIVE;
+
+    if (this.cameraPermissionStatus && this.cameraPermissionHandler) {
+      this.cameraPermissionStatus.removeEventListener?.("change", this.cameraPermissionHandler);
+    }
+    this.cameraPermissionStatus = null;
+    this.cameraPermissionHandler = null;
     
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(t => t.stop());

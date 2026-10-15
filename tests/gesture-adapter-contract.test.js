@@ -6,6 +6,7 @@ globalThis.localStorage = {
   setItem(key, value) { storage.set(key, value); },
 };
 const { GestureEngine, GESTURE_STATES } = await import("../src/core/gestureEngine.js");
+const { subscribe, clearEventListeners } = await import("../src/core/eventBus.js");
 
 function makeEngine() {
   const engine = new GestureEngine();
@@ -65,6 +66,17 @@ test("camera permission denial leaves recognition inactive and reports no availa
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
 });
 
+test("camera capture fails closed when this platform has no browser capture capability", async () => {
+  const { engine, profile } = makeEngine();
+  engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {} });
+
+  const result = await engine.startRecognition(profile.id, { consent: true });
+
+  assert.equal(result.code, "camera_unsupported");
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+});
+
 test("supported adapter lifecycle is visible, pausable, revocable, and stopped without OS side effects", async () => {
   const { engine, profile } = makeEngine();
   const camera = installCamera();
@@ -97,6 +109,52 @@ test("supported adapter lifecycle is visible, pausable, revocable, and stopped w
   assert(states.some((state) => state.reason === "permission_revoked"));
 });
 
+test("browser camera permission revocation stops the session and unregisters its observer", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  const listeners = new Map();
+  const permissionStatus = {
+    state: "granted",
+    addEventListener(name, listener) { listeners.set(name, listener); },
+    removeEventListener(name, listener) {
+      if (listeners.get(name) === listener) listeners.delete(name);
+    },
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { return camera.stream; } },
+      permissions: { async query({ name }) { assert.equal(name, "camera"); return permissionStatus; } },
+    },
+  });
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  assert.equal(listeners.size, 1);
+  permissionStatus.state = "denied";
+  listeners.get("change")();
+
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(camera.stopped, 1);
+  assert.equal(adapterStops, 1);
+  assert.equal(listeners.size, 0);
+});
+
+test("gesture bindings cannot publish an action outside their active consented session", () => {
+  const { engine, profile } = makeEngine();
+  const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const events = [];
+  const unsubscribe = subscribe("gesture.action_executed", (event) => events.push(event));
+
+  engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+
+  unsubscribe();
+  clearEventListeners("gesture.action_executed");
+  assert.equal(binding.enabled, true);
+  assert.deepEqual(events, []);
+});
+
 test("stop during pending camera permission cancels startup and releases the late stream", async () => {
   const { engine, profile } = makeEngine();
   let resolveCamera;
@@ -123,6 +181,46 @@ test("stop during pending camera permission cancels startup and releases the lat
   assert.equal(result.code, "cancelled");
   assert.equal(track.stopped, 1);
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+});
+
+test("late camera permission from a cancelled startup cannot replace a newer session", async () => {
+  const { engine, profile } = makeEngine();
+  const pendingStreams = [];
+  const makeStream = () => {
+    const track = {
+      readyState: "live",
+      stopped: 0,
+      stop() { this.stopped += 1; this.readyState = "ended"; },
+      addEventListener() {},
+    };
+    return { track, getTracks: () => [track], getVideoTracks: () => [track] };
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia() { return new Promise((resolve) => pendingStreams.push(resolve)); },
+      },
+    },
+  });
+  globalThis.document = { createElement: () => ({ async play() {}, pause() {} }) };
+  globalThis.requestAnimationFrame = () => 1;
+  engine.setRecognitionAdapter({ async detect() { return null; } });
+
+  const staleStart = engine.startRecognition(profile.id, { consent: true });
+  engine.stopRecognition("user_emergency_stop");
+  const currentStart = engine.startRecognition(profile.id, { consent: true });
+  const currentStream = makeStream();
+  pendingStreams[1](currentStream);
+  assert.equal((await currentStart).success, true);
+
+  const staleStream = makeStream();
+  pendingStreams[0](staleStream);
+  assert.equal((await staleStart).code, "cancelled");
+  assert.equal(staleStream.track.stopped, 1);
+  assert.equal(currentStream.track.stopped, 0);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+  engine.stopRecognition("test_cleanup");
 });
 
 test("adapter output is validated against known gestures and profile confidence", async () => {
