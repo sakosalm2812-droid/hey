@@ -14,6 +14,7 @@ const workload = [
   "Plan the project schedule and prioritize the steps.",
   "Compare the study with the reference and write a summary.",
 ];
+const workloadFingerprint = createHash("sha256").update(JSON.stringify(workload), "utf8").digest("hex");
 const smokeMode = process.argv.includes("--smoke");
 const warmup = smokeMode ? 20 : 2_000;
 const samplesPerTrial = smokeMode ? 50 : 10_000;
@@ -81,6 +82,23 @@ for (let trial = 0; trial < trials; trial += 1) {
   }
 }
 const memoryAfter = process.memoryUsage();
+const runtimeEnvironment = {
+  runtime: {
+    name: "node",
+    version: process.version,
+    v8Version: process.versions.v8,
+  },
+  operatingSystem: {
+    platform: process.platform,
+    release: os.release(),
+    architecture: process.arch,
+  },
+  cpu: {
+    model: os.cpus()[0]?.model || "unknown",
+    logicalCpuCount: os.cpus().length,
+    totalMemoryBytes: os.totalmem(),
+  },
+};
 
 const emptyPairSamplesNs = [];
 for (let index = 0; index < timerOverheadSamples; index += 1) {
@@ -97,7 +115,15 @@ const report = {
   timerOverheadSamples,
   workloadCount: workload.length,
   workloadBytes: workload.reduce((sum, item) => sum + Buffer.byteLength(item), 0),
-  workloadSha256: createHash("sha256").update(JSON.stringify(workload)).digest("hex"),
+  workloadSha256: workloadFingerprint,
+  workloadFingerprint: {
+    version: 1,
+    algorithm: "sha256",
+    canonicalization: "UTF-8 bytes of JSON.stringify(queryArray)",
+    queryCount: workload.length,
+    queryUtf8Bytes: workload.reduce((sum, item) => sum + Buffer.byteLength(item), 0),
+    digest: workloadFingerprint,
+  },
   algorithms: {
     linear: {
       isDefault: true,
@@ -124,7 +150,14 @@ const report = {
   },
   selectionOnly: true,
   modelLoadingIncluded: false,
+  networkIncluded: false,
+  prefillIncluded: false,
+  decodeIncluded: false,
   inferenceIncluded: false,
+  performanceClaims: {
+    subMillisecondTargetVerified: false,
+    note: "Selection-only synthetic measurements do not verify an end-to-end or production latency target.",
+  },
   emptyTimerPairLatency: summarize(emptyPairSamplesNs),
   timingMethod: "Each operation is bracketed by process.hrtime.bigint(); each algorithm receives the same deterministic query sequence, call order rotates across algorithms to balance ordering effects, and empty timer-pair samples estimate timer overhead without subtraction.",
   node: process.version,
@@ -132,6 +165,7 @@ const report = {
   cpu: os.cpus()[0]?.model || "unknown",
   logicalCpuCount: os.cpus().length,
   totalMemoryBytes: os.totalmem(),
+  executionEnvironment: runtimeEnvironment,
   processMemoryBytes: {
     before: memoryBefore.rss,
     after: memoryAfter.rss,
