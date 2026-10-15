@@ -11,6 +11,7 @@
 .teacher-page__scope h2, .teacher-page__section-heading h2, .teacher-page__review h2, .teacher-page__outputs h2 { margin: 0; font-family: "Instrument Serif", "DM Serif Display", serif; font-size: 27px; font-weight: 400; }
 .teacher-page__scope p:not(.teacher-page__eyebrow), .teacher-page__section-heading p, .teacher-page__output header p, .teacher-page__review p, .teacher-page__outputs-heading p:not(.teacher-page__eyebrow) { margin: 5px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; line-height: 1.5; }
 .teacher-page__form-section { padding-top: 21px; }
+.teacher-page__form-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .teacher-page__section-heading { justify-content: flex-start; margin-bottom: 19px; }
 .teacher-page__section-heading > span { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid rgba(214,182,107,.3); border-radius: 11px; color: var(--gold-primary, #d6b66b); font-size: 11px; }
 .teacher-page__field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-bottom: 15px; }
@@ -36,6 +37,12 @@
 .teacher-page__privacy-note { margin: 15px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 11px; }
 .teacher-page__submit-row { justify-content: flex-end; margin-top: 18px; }
 .teacher-page .teacher-page__primary { min-height: 43px; padding: 9px 15px; border-color: rgba(214,182,107,.4); background: rgba(214,182,107,.15); color: var(--text-primary, #f5f2ec); font-size: 12px; font-weight: 600; }
+.teacher-page .teacher-page__secondary { color: var(--text-secondary, #c2bec8); }
+.teacher-page__preview { margin-top: 18px; padding: clamp(17px, 3vw, 26px); border: 1px solid rgba(214,182,107,.2); border-radius: 18px; background: rgba(255,255,255,.035); }
+.teacher-page__preview-content { padding: 14px 16px; color: var(--text-secondary, #c2bec8); font-size: 12px; line-height: 1.65; }
+.teacher-page__preview-content h4 { margin: 15px 0 6px; color: var(--text-primary, #f5f2ec); font-size: 12px; }
+.teacher-page__preview-content p { margin: 9px 0; }
+.teacher-page__preview-content ul, .teacher-page__preview-content ol { margin: 6px 0; padding-left: 20px; }
 .teacher-page__status, .teacher-page__success { margin: 14px 0; padding: 12px 14px; border-radius: 11px; background: rgba(255,255,255,.035); }
 .teacher-page__status { color: var(--text-secondary, #a7a4ae); }
 .teacher-page__success { border: 1px solid rgba(131,217,174,.22); background: rgba(131,217,174,.06); }

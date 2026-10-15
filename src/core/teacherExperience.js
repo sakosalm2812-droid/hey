@@ -23,6 +23,8 @@ const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "classId", "
 const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
+const PREPARED_TEACHER_JOURNEYS = new WeakSet();
+const SAVE_STARTED_TEACHER_JOURNEYS = new WeakSet();
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "studentName", "learnerName", "studentId", "learnerId", "studentEmail",
@@ -853,21 +855,39 @@ export async function saveTeacherWorksheetArtifact(artifact, context) {
   );
 }
 
-/** Build all three scoped documents first, then persist the lesson, private answer key, and student worksheet. */
-export async function createTeacherLessonWorksheetJourney({ lesson: lessonInput, assessment: assessmentInput, context } = {}) {
+/** Build all three scoped documents for a teacher to review before any Forge write occurs. */
+export async function prepareTeacherLessonWorksheetJourney({ lesson: lessonInput, assessment: assessmentInput, context } = {}) {
   const lesson = await buildTeacherLessonArtifact(lessonInput);
   const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput, context);
   const worksheet = await buildTeacherWorksheetArtifact(assessment, context);
+  const journey = Object.freeze({ lesson, teacherArtifact: assessment, studentArtifact: worksheet });
+  PREPARED_TEACHER_JOURNEYS.add(journey);
+  return journey;
+}
 
+/** Persist a prepared journey through the confirmed Forge artifact contract. */
+export async function saveTeacherLessonWorksheetJourney(journey, context) {
+  if (!journey || typeof journey !== "object" || !PREPARED_TEACHER_JOURNEYS.has(journey)) {
+    throw new Error("Only a journey prepared in the active Teacher runtime can be saved");
+  }
+  if (SAVE_STARTED_TEACHER_JOURNEYS.has(journey)) throw new Error("This prepared journey has already started saving; inspect Forge before creating another copy");
+  const { lesson, teacherArtifact, studentArtifact } = journey;
+  SAVE_STARTED_TEACHER_JOURNEYS.add(journey);
   const savedLesson = await saveTeacherLessonArtifact(lesson, context);
-  const savedTeacherArtifact = await saveTeacherAssessmentArtifact(assessment, context);
-  const savedStudentArtifact = await saveTeacherWorksheetArtifact(worksheet, context);
+  const savedTeacherArtifact = await saveTeacherAssessmentArtifact(teacherArtifact, context);
+  const savedStudentArtifact = await saveTeacherWorksheetArtifact(studentArtifact, context);
   return Object.freeze({
     lesson,
-    teacherArtifact: assessment,
-    studentArtifact: worksheet,
+    teacherArtifact,
+    studentArtifact,
     saved: Object.freeze({ lesson: savedLesson, teacherArtifact: savedTeacherArtifact, studentArtifact: savedStudentArtifact }),
   });
+}
+
+/** Compatibility journey: prepare and immediately persist all three scoped documents. */
+export async function createTeacherLessonWorksheetJourney(input = {}) {
+  const prepared = await prepareTeacherLessonWorksheetJourney(input);
+  return saveTeacherLessonWorksheetJourney(prepared, input.context);
 }
 
 export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
@@ -1025,5 +1045,7 @@ export default {
   verifyTeacherWorksheetArtifact,
   saveTeacherWorksheetArtifact,
   exportTeacherWorksheetMarkdown,
+  prepareTeacherLessonWorksheetJourney,
+  saveTeacherLessonWorksheetJourney,
   createTeacherLessonWorksheetJourney,
 };
