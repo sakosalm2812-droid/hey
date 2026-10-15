@@ -467,7 +467,7 @@ test("execution controller accepts only verified tool results", async () => {
 });
 
 test("natural commands reach permission gates instead of self-approving", async () => {
-  const result = await executeRequest({ input: "Open Chrome." });
+  const result = await executeRequest({ input: "Open https://example.com." });
   assert.equal(result.handled, true);
   assert.equal(result.status, "permission_required");
   assert.equal(result.result.requiresConfirmation, true);
@@ -482,10 +482,10 @@ test("Chrome and YouTube request becomes an executable workflow", () => {
   ]);
 });
 
-test("Chrome navigation maps YouTube to a validated URL", async () => {
+test("HEY maps an approved web URL through the browser tool", async () => {
   const calls = [];
   const result = await executeRequest(
-    { input: "Open Chrome and go to YouTube." },
+    { input: "Open https://www.youtube.com" },
     {
       confirmed: true,
       executeTool: async (name, input) => {
@@ -495,7 +495,7 @@ test("Chrome navigation maps YouTube to a validated URL", async () => {
     },
   );
   assert.equal(result.success, true);
-  assert.deepEqual(calls[1], ["computer.navigate_browser", { target: "YouTube", url: "https://www.youtube.com" }]);
+  assert.deepEqual(calls[0], ["computer.open_url", { url: "https://www.youtube.com" }]);
 });
 
 test("workflow execution stops after the first failed step", async () => {

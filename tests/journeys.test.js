@@ -81,7 +81,7 @@ test("full journey: permission request does not claim completion and leaves a de
   clearAuditEntries();
   const { executeRequest } = await import("../src/core/executionController.js");
 
-  const result = await executeRequest({ input: "Open Chrome." });
+  const result = await executeRequest({ input: "Open https://example.com." });
   assert.equal(result.handled, true);
   assert.equal(result.status, "permission_required");
   assert.equal(result.verified, false);

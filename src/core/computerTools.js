@@ -1,6 +1,6 @@
 import { registerOwnedTool } from "./toolRegistry.js";
 import { OS_CAPABILITIES, createBrowserOSAdapter, unsupportedCapability } from "./osAdapter.js";
-import { getCapability } from "./capabilityRegistry.js";
+import { getCapability, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { createTauriAdapter } from "../lib/tauriAdapter.js";
 
 const browserAdapter = typeof navigator !== "undefined" ? createBrowserOSAdapter() : null;
@@ -25,6 +25,11 @@ export function setComputerAdapter(adapter) {
   if (!adapter || typeof adapter.execute !== "function") throw new TypeError("A computer adapter with execute() is required.");
   activeAdapter = adapter;
   return activeAdapter;
+}
+
+/** Read capability availability against the adapter that will receive execution. */
+export function getComputerCapabilityAvailability(capability, platform = activeAdapter?.platform || browserAdapter?.platform || "web") {
+  return getCapabilityAvailability(capability, platform, activeAdapter);
 }
 
 function browserTool(capability, input, context = {}) {

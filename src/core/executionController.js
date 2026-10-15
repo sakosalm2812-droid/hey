@@ -1,7 +1,7 @@
 import { parseNaturalCommand } from "./commandParser.js";
 import { executeTool, getTool } from "./toolRegistry.js";
 import { recordAudit } from "./auditLog.js";
-import { registerComputerTools } from "./computerTools.js";
+import { getComputerCapabilityAvailability, registerComputerTools } from "./computerTools.js";
 import { publish } from "./eventBus.js";
 import { storeMemory } from "./memoryEngine.js";
 
@@ -71,7 +71,11 @@ function isVerified(result) {
 async function executeStep(step, options) {
   const resolved = resolveCommand(step);
   if (!resolved) return failure("HEY could not map that request to an executable tool.", { status: "unsupported", code: "NO_TOOL_MAPPING" });
-  if (!getTool(resolved.toolName)) return failure(`Tool ${resolved.toolName} is not registered.`, { status: "unavailable", code: "TOOL_UNAVAILABLE", tool: resolved.toolName, capability: resolved.capability });
+  const registeredTool = getTool(resolved.toolName);
+  if (!registeredTool) return failure(`Tool ${resolved.toolName} is not registered.`, { status: "unavailable", code: "TOOL_UNAVAILABLE", tool: resolved.toolName, capability: resolved.capability });
+  const capability = registeredTool.metadata.capabilities?.[0];
+  if (typeof capability !== "string") return failure(`Tool ${resolved.toolName} does not declare an executable capability.`, { status: "unsupported", code: "CAPABILITY_UNAVAILABLE", tool: resolved.toolName });
+  resolved.capability = capability;
 
   const availableTools = options.availableTools || [];
   if (availableTools.length > 0 && !availableTools.includes(resolved.toolName)) {
@@ -79,6 +83,25 @@ async function executeStep(step, options) {
   }
 
   publish("execution.step.started", { requestId: options.requestId, tool: resolved.toolName, capability: resolved.capability });
+
+  const availability = getComputerCapabilityAvailability(resolved.capability, options.platform);
+  if (availability.status !== "supported") {
+    const permissionRequired = availability.status === "permission_required";
+    const message = availability.error || `Capability ${resolved.capability} is ${availability.status}.`;
+    publish(permissionRequired ? "execution.step.permission_required" : "execution.step.failed", {
+      requestId: options.requestId,
+      tool: resolved.toolName,
+      capability: resolved.capability,
+      error: message,
+    });
+    return failure(message, {
+      status: availability.status,
+      code: permissionRequired ? "CAPABILITY_PERMISSION_REQUIRED" : "CAPABILITY_UNAVAILABLE",
+      requiresPermission: permissionRequired,
+      capability: resolved.capability,
+      tool: resolved.toolName,
+    });
+  }
 
   const result = await (options.executeTool || executeTool)(resolved.toolName, resolved.input, {
     requestId: options.requestId,
