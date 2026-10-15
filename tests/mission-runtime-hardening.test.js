@@ -89,7 +89,7 @@ test("checkpoint restore rejects malformed signed state before asking evidence v
     async verifyEnvelope() { verifierCalled = true; return { valid: true }; },
   } });
   const mission = center.createMission("Reject malformed checkpoint state.");
-  center.updateMission(mission.id, { checkpoint: {
+  mission.checkpoint = {
     schemaVersion: 1,
     missionId: mission.id,
     state: MISSION_STATES.COMPLETED,
@@ -98,10 +98,51 @@ test("checkpoint restore rejects malformed signed state before asking evidence v
     completedSteps: 1,
     progress: 100,
     evidenceEnvelope: { payload: "signed-looking" },
-  } });
+  };
   assert.deepEqual(await center.restoreCheckpoint(mission.id, { accountId: "acct" }), { restored: false, reason: "checkpoint_schema_invalid" });
   assert.equal(verifierCalled, false);
   assert.equal(center.getMission(mission.id).state, MISSION_STATES.DRAFT);
+});
+
+test("checkpoint restore rejects sparse and accessor-backed state without invoking getters", async () => {
+  let verifierCalls = 0;
+  let getterCalls = 0;
+  const center = new MissionCenter({ storage: new MemoryStore(), evidenceService: {
+    async verifyEnvelope() { verifierCalls += 1; return { valid: true }; },
+  } });
+  const mission = center.createMission("Reject unsafe checkpoint structures.");
+  const sparseSteps = [];
+  sparseSteps.length = 1;
+  center.updateMission(mission.id, { checkpoint: {
+    schemaVersion: 1,
+    missionId: mission.id,
+    state: MISSION_STATES.DRAFT,
+    steps: sparseSteps,
+    currentStepIndex: 0,
+    completedSteps: 0,
+    progress: 0,
+    timestamp: new Date().toISOString(),
+    evidenceEnvelope: { signature: "placeholder" },
+    evidenceStatus: "signed",
+  } });
+  assert.deepEqual(await center.restoreCheckpoint(mission.id, { accountId: "acct" }), { restored: false, reason: "checkpoint_schema_invalid" });
+
+  const accessorCheckpoint = {
+    schemaVersion: 1,
+    missionId: mission.id,
+    steps: [],
+    currentStepIndex: 0,
+    completedSteps: 0,
+    progress: 0,
+    timestamp: new Date().toISOString(),
+    evidenceEnvelope: { signature: "placeholder" },
+    evidenceStatus: "signed",
+  };
+  Object.defineProperty(accessorCheckpoint, "state", { enumerable: true, get() { getterCalls += 1; return MISSION_STATES.DRAFT; } });
+  mission.checkpoint = accessorCheckpoint;
+  assert.deepEqual(await center.restoreCheckpoint(mission.id, { accountId: "acct" }), { restored: false, reason: "checkpoint_schema_invalid" });
+  assert.equal(getterCalls, 0);
+  assert.equal(verifierCalls, 0);
 });
 
 test("queued and paused missions cancel without claiming cancellation while work is active", () => {

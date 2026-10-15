@@ -34,18 +34,63 @@ export const STEP_STATES = Object.freeze({
 });
 const STATE_UPDATE_TOKEN = Symbol("mission-state-transition");
 
+function isPlainJsonValue(value, ancestors = new WeakSet()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (!value || typeof value !== "object" || ancestors.has(value)) return false;
+  ancestors.add(value);
+  try {
+    const isArray = Array.isArray(value);
+    const prototype = Object.getPrototypeOf(value);
+    if (isArray ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string")) return false;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (isArray) {
+      if (keys.length !== value.length + 1 || !Object.hasOwn(descriptors, "length")) return false;
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.enumerable !== true || !isPlainJsonValue(descriptor.value, ancestors)) return false;
+      }
+      return true;
+    }
+    for (const key of keys) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.enumerable !== true || !isPlainJsonValue(descriptor.value, ancestors)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function isValidMissionCheckpoint(checkpoint, missionId) {
+  if (!isPlainJsonValue(checkpoint)) return false;
   if (!checkpoint || checkpoint.schemaVersion !== 1 || checkpoint.missionId !== missionId) return false;
   if (!Object.values(MISSION_STATES).includes(checkpoint.state) || !Array.isArray(checkpoint.steps)) return false;
+  const allowedCheckpointFields = new Set(["schemaVersion", "missionId", "state", "steps", "currentStepIndex", "completedSteps", "progress", "outcome", "verification", "timestamp", "evidenceEnvelope", "evidenceStatus"]);
+  if (Object.keys(checkpoint).some((key) => !allowedCheckpointFields.has(key))) return false;
+  if (checkpoint.evidenceStatus !== "signed" || typeof checkpoint.timestamp !== "string" || !Number.isFinite(Date.parse(checkpoint.timestamp))) return false;
   if (!Number.isSafeInteger(checkpoint.currentStepIndex) || checkpoint.currentStepIndex < -1 || checkpoint.currentStepIndex > checkpoint.steps.length) return false;
   if (!Number.isSafeInteger(checkpoint.completedSteps) || checkpoint.completedSteps < 0) return false;
   const completed = checkpoint.steps.filter((step) => step && step.state === STEP_STATES.COMPLETED).length;
   if (completed !== checkpoint.completedSteps) return false;
   if (checkpoint.currentStepIndex === -1 && completed !== checkpoint.steps.length) return false;
+  if (checkpoint.currentStepIndex === checkpoint.steps.length && checkpoint.steps.length > 0 && completed !== checkpoint.steps.length) return false;
   const expectedProgress = checkpoint.steps.length ? Math.round((completed / checkpoint.steps.length) * 100) : 0;
   if (!Number.isSafeInteger(checkpoint.progress) || checkpoint.progress !== expectedProgress) return false;
-  return checkpoint.steps.every((step) => step && typeof step === "object" && Object.values(STEP_STATES).includes(step.state)
-    && Number.isSafeInteger(step.attempts) && step.attempts >= 0 && Array.isArray(step.dependencies));
+  const seenStepIds = new Set();
+  return checkpoint.steps.every((step) => {
+    if (!step || typeof step !== "object" || Object.keys(step).some((key) => !["id", "description", "tool", "state", "result", "error", "startedAt", "completedAt", "attempts", "maxRetries", "dependencies"].includes(key))) return false;
+    if (typeof step.id !== "string" || !step.id || seenStepIds.has(step.id) || typeof step.description !== "string") return false;
+    seenStepIds.add(step.id);
+    return Object.values(STEP_STATES).includes(step.state)
+      && Number.isSafeInteger(step.attempts) && step.attempts >= 0
+      && Number.isSafeInteger(step.maxRetries) && step.maxRetries >= 0
+      && Array.isArray(step.dependencies) && step.dependencies.every((dependency) => typeof dependency === "string");
+  });
 }
 
 function generateMissionId() {
