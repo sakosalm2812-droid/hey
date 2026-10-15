@@ -27,6 +27,25 @@ function installMandateResponse(t, response = { data: { authorized: true, mandat
   });
 }
 
+function independentObservation(request, fields = {}) {
+  return {
+    verified: true,
+    actionId: request.actionId,
+    operationId: request.operationId,
+    accountId: request.accountId,
+    capability: request.capability,
+    permission: request.permission,
+    resource: request.resource,
+    operation: request.operation,
+    inputDigest: request.inputDigest,
+    observerId: "test.independent-observer",
+    observationId: crypto.randomUUID(),
+    observedAt: new Date().toISOString(),
+    evidence: null,
+    ...fields,
+  };
+}
+
 function strictOptions(verifyPostcondition) {
   return {
     user,
@@ -35,8 +54,8 @@ function strictOptions(verifyPostcondition) {
     requireIndependentVerification: true,
     mandate: { payload: { id: "mandate-voiceos-1" }, signature: { keyId: "test" } },
     resource: "app://calculator",
-    verifyTargetBinding: async ({ resource, input }) => ({ verified: resource === "app://calculator" && input.appId === "calculator" }),
-    verifyPostcondition,
+    verifyTargetBinding: async (request) => independentObservation(request, { verified: request.resource === "app://calculator" && request.input.appId === "calculator" }),
+    verifyPostcondition: async (request) => independentObservation(request, await verifyPostcondition(request)),
   };
 }
 
@@ -75,7 +94,7 @@ test("strict computer action denies executor self-report without an independent 
   }, { user, confirmed: true, requireMandate: true, requireIndependentVerification: true, mandate: { payload: { id: "mandate-voiceos-1" } }, resource: "app://calculator" });
 
   assert.equal(result.success, false);
-  assert.match(result.error, /independent verification/i);
+  assert.match(result.error, /bound observer|independent verification/i);
   assert.equal(executed, false);
   assert.equal(action.status, "queued");
 });
@@ -112,6 +131,101 @@ test("computer action binds immutable target input and trusts only separate post
   assert.equal(action.verification.resource, "app://calculator");
   assert.equal(action.verification.evidence.observedAppId, "calculator");
   assert.equal(action.verification.evidence.foreground, true);
+});
+
+test("sensitive computer capabilities require independent verification even without an opt-in flag", async () => {
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+  let dispatched = false;
+  const result = await executeAction(action.id, async () => {
+    dispatched = true;
+    return { success: true, verified: true };
+  }, { user, confirmed: true, requireMandate: true, mandate: { payload: { id: "mandate-voiceos-1" } }, resource: "app://calculator" });
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /bound observer/i);
+  assert.equal(dispatched, false);
+  assert.equal(action.status, "queued");
+});
+
+test("self-reported success cannot override forged, stale, wrong-resource, wrong-account, or wrong-operation observations", async (t) => {
+  const cases = [
+    ["wrong resource", () => ({ resource: "app://attacker" })],
+    ["wrong account", () => ({ accountId: "account-attacker" })],
+    ["wrong operation id", () => ({ operationId: crypto.randomUUID() })],
+    ["stale observation", () => ({ observedAt: new Date(Date.now() - 60_000).toISOString() })],
+  ];
+  installMandateResponse(t, undefined, cases.map(() => "computer.app.open"));
+  for (const [label, corrupt] of cases) {
+    clearActions();
+    const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+    const options = strictOptions(async () => ({ verified: true, evidence: { observerClaimsClosed: true } }));
+    options.verifyPostcondition = async (request) => independentObservation(request, corrupt(request));
+    const result = await executeAction(action.id, async () => ({ success: true, verified: true, claimedObservedState: "closed" }), options);
+
+    assert.equal(result.success, false, label);
+    assert.equal(action.status, "failed", label);
+    assert.equal(Object.hasOwn(action, "verification"), false, label);
+    assert.match(result.error, /observation/i, label);
+  }
+});
+
+test("concurrent forward calls get distinct operation ids but dispatch only one bound action", async (t) => {
+  installMandateResponse(t, undefined, ["computer.app.open", "computer.app.open"]);
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+  let releaseBindings = [];
+  let signalSecondBinding;
+  const bothBindingsStarted = new Promise((resolve) => { signalSecondBinding = resolve; });
+  const operationIds = [];
+  const handlerOperationIds = [];
+  const options = strictOptions(async (request) => ({ verified: true, evidence: { operationId: request.operationId } }));
+  options.verifyTargetBinding = (request) => {
+    operationIds.push(request.operationId);
+    return new Promise((resolve) => {
+      releaseBindings.push(() => resolve(independentObservation(request)));
+      if (releaseBindings.length === 2) signalSecondBinding();
+    });
+  };
+  const handler = async (_input, context) => {
+    handlerOperationIds.push(context.operationId);
+    return { success: true, verified: true };
+  };
+  const first = executeAction(action.id, handler, options);
+  const second = executeAction(action.id, handler, options);
+  await bothBindingsStarted;
+  assert.equal(new Set(operationIds).size, 2);
+  releaseBindings.forEach((release) => release());
+  const results = await Promise.all([first, second]);
+
+  assert.equal(results.filter((result) => result.success).length, 1);
+  assert.equal(handlerOperationIds.length, 1);
+  assert.equal(handlerOperationIds[0], action.verification.operationId);
+  assert.equal(action.verification.accountId, user.id);
+});
+
+test("account changes during independent observation fail the running action closed", async (t) => {
+  installMandateResponse(t);
+  clearActions();
+  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+  const account = { ...user };
+  let releaseObserver;
+  let signalObserver;
+  const observerStarted = new Promise((resolve) => { signalObserver = resolve; });
+  const options = strictOptions(() => new Promise((resolve) => {
+    releaseObserver = resolve;
+    signalObserver();
+  }));
+  options.user = account;
+  const execution = executeAction(action.id, async () => ({ success: true, verified: true }), options);
+  await observerStarted;
+  account.id = "account-switched";
+  releaseObserver({ verified: true, evidence: { observed: true } });
+  const result = await execution;
+
+  assert.equal(result.success, false);
+  assert.equal(action.status, "failed");
+  assert.equal(action.verification, undefined);
 });
 
 test("a strict computer action fails when independent observation rejects the requested state", async (t) => {
@@ -191,10 +305,10 @@ test("strict computer action snapshots capability and resource before async targ
     verified: resource === "app://calculator",
     evidence: { resource },
   }));
-  options.verifyTargetBinding = () => new Promise((resolve) => {
+  options.verifyTargetBinding = (request) => new Promise((resolve) => {
     releaseBinding = resolve;
     signalBindingStarted();
-  });
+  }).then((result) => independentObservation(request, result));
 
   const execution = executeAction(action.id, async (_input, context) => {
     assert.equal(context.tool, "computer.app.open");
@@ -252,6 +366,8 @@ test("strict computer undo uses a frozen target and independent postcondition ve
   assert.equal(action.status, "undone");
   assert.equal(undo.receipt, action.undoReceipt);
   assert.equal(undo.receipt.originalCapability, "computer.app.open");
+  assert.equal(undo.receipt.accountId, user.id);
+  assert.notEqual(undo.receipt.operationId, undo.receipt.originalOperationId);
   assert.equal(undo.receipt.originalPermission, "app.open");
   assert.equal(undo.receipt.originalRiskLevel, "low");
   assert.equal(undo.receipt.originalInputDigest, action.verification.inputDigest);
@@ -260,6 +376,8 @@ test("strict computer undo uses a frozen target and independent postcondition ve
   assert.equal(undo.receipt.mandate.authorized, true);
   assert.equal(undo.receipt.mandate.mandateId, "mandate-voiceos-1");
   assert.equal(undo.receipt.postcondition.verified, true);
+  assert.equal(undo.receipt.postcondition.observerId, "test.independent-observer");
+  assert.match(undo.receipt.postcondition.observationId, /^[0-9a-f-]{36}$/i);
   assert.match(undo.receipt.reverseResourceDigest, /^[a-f0-9]{64}$/);
   assert.match(undo.receipt.reverseInputDigest, /^[a-f0-9]{64}$/);
   assert.match(undo.receipt.postcondition.evidenceDigest, /^[a-f0-9]{64}$/);
@@ -277,7 +395,7 @@ test("strict computer undo uses a frozen target and independent postcondition ve
 test("strict undo refuses an original action without immutable independent verification", async (t) => {
   installMandateResponse(t);
   clearActions();
-  const action = createAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" }, undo: { appId: "calculator" } });
+  const action = createAction({ title: "Open Calculator", tool: "app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" }, undo: { appId: "calculator" } });
   assert.equal((await executeAction(action.id, async () => ({ success: true, verified: true }), { user, confirmed: true })).success, true);
   let bound = false;
   let dispatched = false;
@@ -384,10 +502,10 @@ test("strict undo reserves its proposal before async target binding to block dup
   let bindingCalls = 0;
   let dispatchCalls = 0;
   const options = strictUndoOptions(async () => ({ verified: true, evidence: { closed: true } }));
-  options.verifyTargetBinding = () => {
+  options.verifyTargetBinding = (request) => {
     bindingCalls += 1;
     signalBinding();
-    return new Promise((resolve) => { releaseBinding = resolve; });
+    return new Promise((resolve) => { releaseBinding = (result) => resolve(independentObservation(request, result)); });
   };
 
   const first = undoAction(action.id, async () => {
@@ -444,10 +562,10 @@ test("strict undo does not dispatch after its proposal is cancelled during targe
   const bindingStarted = new Promise((resolve) => { signalBinding = resolve; });
   let dispatchCalls = 0;
   const options = strictUndoOptions(async () => ({ verified: true, evidence: { closed: true } }));
-  options.verifyTargetBinding = () => new Promise((resolve) => {
+  options.verifyTargetBinding = (request) => new Promise((resolve) => {
     releaseBinding = resolve;
     signalBinding();
-  });
+  }).then((result) => independentObservation(request, result));
 
   const undo = undoAction(action.id, async () => {
     dispatchCalls += 1;

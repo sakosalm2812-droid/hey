@@ -624,8 +624,9 @@ Deno.serve(async (request) => {
       },
     });
     if (fusion.status !== "complete") {
+      const verificationDidNotComplete = ["conflict", "inconclusive", "verification_unavailable", "time_budget_exhausted", "budget_exhausted", "provider_contract_invalid"].includes(fusion.status);
       const status = fusion.status === "denied" ? 403
-        : fusion.status === "conflict" || fusion.status === "inconclusive" ? 409
+        : verificationDidNotComplete ? 409
         : fusion.status === "cancelled" ? 499
         : fusion.status === "invalid_request" ? 400
         : 503;
@@ -633,6 +634,10 @@ Deno.serve(async (request) => {
         : fusion.status === "conflict" || fusion.status === "inconclusive" ? "The providers did not independently confirm a safe answer."
         : fusion.status === "cancelled" ? "The fusion request was cancelled."
         : fusion.status === "invalid_request" ? "The fusion request exceeds the supported context limits."
+        : fusion.status === "verification_unavailable" ? "The independent provider check could not be completed, so no answer was delivered."
+        : fusion.status === "time_budget_exhausted" ? "The model verification exceeded its time limit, so no answer was delivered."
+        : fusion.status === "budget_exhausted" ? "The model verification exceeded its configured cost budget, so no answer was delivered."
+        : fusion.status === "provider_contract_invalid" ? "A provider returned invalid verification evidence, so no answer was delivered."
         : "Model fusion is unavailable until its provider permissions and pricing are configured.";
       return jsonResponse({ error }, status);
     }

@@ -4,14 +4,28 @@ const storage = new Map();
 globalThis.localStorage = {
   getItem(key) { return storage.get(key) ?? null; },
   setItem(key, value) { storage.set(key, value); },
+  removeItem(key) { storage.delete(key); },
 };
-const { GestureEngine, GESTURE_STATES } = await import("../src/core/gestureEngine.js");
+const { setAccountScope, getAccountStorageKey } = await import("../src/core/accountScope.js");
+setAccountScope("gesture-contract-test");
+const { GestureEngine, GESTURE_STATES, gestureEngine } = await import("../src/core/gestureEngine.js");
 const { subscribe, clearEventListeners } = await import("../src/core/eventBus.js");
 
+function makeStorage({ discardWrites = false } = {}) {
+  const values = new Map();
+  return {
+    values,
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { if (!discardWrites) values.set(key, value); },
+    removeItem(key) { values.delete(key); },
+  };
+}
+
 function makeEngine(options) {
-  const engine = new GestureEngine(options);
+  const storage = options?.storageProvider ? null : makeStorage();
+  const engine = new GestureEngine({ ...options, storageProvider: options?.storageProvider || (() => storage) });
   const profile = engine.createProfile({ name: "Contract test", confidence: 0.8 });
-  return { engine, profile };
+  return { engine, profile, storage };
 }
 
 function installCamera({ track = null } = {}) {
@@ -46,8 +60,173 @@ test("gesture recognition fails closed until explicit consent and a real adapter
   installCamera();
 
   assert.equal((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal((await engine.startRecognition(profile.id, { consent: 1 })).code, "consent_required");
+  assert.equal((await engine.startRecognition(profile.id, { consent: "true" })).code, "consent_required");
   assert.equal((await engine.startRecognition(profile.id, { consent: true })).code, "adapter_unavailable");
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+});
+
+test("calibration sensitivity and allowlisted mappings persist per account and reload by read-back", async () => {
+  const memory = makeStorage();
+  setAccountScope("gesture-owner-a");
+  const engine = new GestureEngine({ storageProvider: () => memory });
+  const profile = engine.createProfile({ name: "Personal", sensitivity: 0.45 });
+  const mapping = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const keyA = getAccountStorageKey("hey_gesture_profiles", "account:gesture-owner-a");
+  const saved = memory.getItem(keyA);
+  assert.equal(typeof saved, "string");
+  assert.equal(memory.getItem(keyA), saved);
+
+  const reloaded = new GestureEngine({ storageProvider: () => memory });
+  assert.equal(reloaded.getProfile(profile.id).sensitivity, 0.45);
+  assert.equal(reloaded.getBinding(mapping.id).action, "summon");
+
+  const camera = installCamera();
+  engine.setRecognitionAdapter({ async detect() { return null; } });
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+
+  setAccountScope("gesture-owner-b");
+  assert.equal(engine.refreshAccountScope().success, true);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(camera.stopped, 1);
+  assert.equal(engine.getProfile(profile.id), null);
+  assert.deepEqual(engine.getBindingsForProfile(profile.id), []);
+  const profileB = engine.createProfile({ sensitivity: 0.9 });
+
+  setAccountScope("gesture-owner-a");
+  assert.equal(engine.refreshAccountScope().success, true);
+  assert.equal(engine.getProfile(profile.id).sensitivity, 0.45);
+  assert.equal(engine.getProfile(profileB.id), null);
+  setAccountScope("gesture-contract-test");
+});
+
+test("malformed or unreadable gesture storage blocks profile mutation without replacing saved bytes", () => {
+  const memory = makeStorage();
+  setAccountScope("gesture-hostile-store");
+  const key = getAccountStorageKey("hey_gesture_profiles", "account:gesture-hostile-store");
+  memory.values.set(key, "{not-json");
+  const engine = new GestureEngine({ storageProvider: () => memory });
+  assert.equal(engine.storageStatus, "invalid_store");
+  assert.deepEqual(engine.getAllProfiles(), []);
+  assert.throws(() => engine.createProfile(), /valid account-scoped store/u);
+  assert.equal(memory.getItem(key), "{not-json");
+
+  const validStorage = makeStorage();
+  const valid = new GestureEngine({ storageProvider: () => validStorage });
+  const validProfile = valid.createProfile();
+  const envelope = JSON.parse(validStorage.getItem(getAccountStorageKey("hey_gesture_profiles", "account:gesture-hostile-store")));
+  envelope.profiles[0].sensitivity = 1.5;
+  memory.values.set(key, JSON.stringify(envelope));
+  const malformed = new GestureEngine({ storageProvider: () => memory });
+  assert.equal(malformed.storageStatus, "invalid_store");
+  assert.deepEqual(malformed.getAllProfiles(), []);
+  assert.throws(() => malformed.updateProfile(validProfile.id, { sensitivity: 0.6 }), /valid account-scoped store/u);
+
+  const partial = makeStorage();
+  const throwsAfterWrite = {
+    getItem(storageKey) { return partial.getItem(storageKey); },
+    removeItem(storageKey) { partial.removeItem(storageKey); },
+    setItem(storageKey, value) { partial.setItem(storageKey, value); throw new Error("write interrupted"); },
+  };
+  const interrupted = new GestureEngine({ storageProvider: () => throwsAfterWrite });
+  assert.throws(() => interrupted.createProfile(), /safely saved/u);
+  assert.equal(partial.getItem(key), null);
+
+  const discard = makeStorage({ discardWrites: true });
+  const writer = new GestureEngine({ storageProvider: () => discard });
+  assert.throws(() => writer.createProfile(), /safely saved/u);
+  assert.deepEqual(writer.getAllProfiles(), []);
+  setAccountScope("gesture-contract-test");
+});
+
+test("an account switch during profile persistence rolls back the old account write", () => {
+  setAccountScope("gesture-write-race-a");
+  const memory = makeStorage();
+  const storage = {
+    getItem(key) { return memory.getItem(key); },
+    removeItem(key) { memory.removeItem(key); },
+    setItem(key, value) {
+      memory.setItem(key, value);
+      setAccountScope("gesture-write-race-b");
+    },
+  };
+  const engine = new GestureEngine({ storageProvider: () => storage });
+  const oldKey = getAccountStorageKey("hey_gesture_profiles", "account:gesture-write-race-a");
+  assert.throws(() => engine.createProfile(), /safely saved/u);
+  assert.equal(memory.getItem(oldKey), null);
+  assert.deepEqual(engine.getAllProfiles(), []);
+  setAccountScope("gesture-contract-test");
+});
+
+test("the application gesture engine stops its camera and drops profiles on auth scope changes", async () => {
+  setAccountScope("gesture-singleton-a");
+  const profile = gestureEngine.createProfile({ name: "Account A" });
+  const camera = installCamera();
+  gestureEngine.setRecognitionAdapter({ async detect() { return null; } });
+
+  try {
+    assert.equal((await gestureEngine.startRecognition(profile.id, { consent: true })).success, true);
+    setAccountScope("gesture-singleton-b");
+    assert.equal(gestureEngine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(camera.stopped, 1);
+    assert.equal(gestureEngine.getProfile(profile.id), null);
+  } finally {
+    gestureEngine.stopRecognition("test_cleanup");
+    gestureEngine.setRecognitionAdapter(null);
+    setAccountScope("gesture-contract-test");
+  }
+});
+
+test("profile edits and mappings cannot alter action authority or select device actions", () => {
+  const { engine, profile } = makeEngine();
+  const returned = engine.getProfile(profile.id);
+  returned.sensitivity = 0.01;
+  returned.scope = "system-visible";
+  assert.equal(engine.getProfile(profile.id).sensitivity, 0.8);
+  assert.equal(engine.getProfile(profile.id).scope, profile.scope);
+
+  assert.throws(() => engine.updateProfile(profile.id, { scope: "system-visible" }), /protected or unsupported/u);
+  assert.throws(() => engine.updateProfile(profile.id, { systemWide: true }), /protected or unsupported/u);
+  assert.throws(() => engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "device.execute", actionType: "device" }), /allowlisted/u);
+  assert.throws(() => engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui", scope: "system-visible" }), /match its profile/u);
+  const unsubscribeEngine = engine.subscribe((event, value) => {
+    if (event === "binding_created") value.action = "device.execute";
+  });
+  const safeBinding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  assert.equal(safeBinding.action, "summon");
+  assert.equal(engine.getBinding(safeBinding.id).action, "summon");
+  assert.equal(engine.executeBinding(engine.bindings.get(safeBinding.id), { id: "G01", confidence: 1 }), false);
+
+  const events = [];
+  const unsubscribe = subscribe("gesture.action_executed", (event) => events.push(event));
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.activeProfileId = profile.id;
+  engine.bindings.set("forged", {
+    id: "forged", profileId: profile.id, gestureId: "G02", action: "device.execute", actionType: "device",
+    target: "device-1", riskLevel: "high", requiresConfirmation: false, parameters: {}, enabled: true, scope: profile.scope,
+  });
+  try {
+    engine.handleGestureDetection({ id: "G02", confidence: 1 }, profile);
+    assert.deepEqual(events, []);
+  } finally {
+    unsubscribe();
+    unsubscribeEngine();
+    engine.stopRecognition("test_cleanup");
+  }
+});
+
+test("gesture calibration samples are bounded and caller-supplied scores never claim detector validation", () => {
+  const { engine } = makeEngine();
+  const custom = engine.createCustomGesture({ name: "Open hand alias", gestureId: "G01", action: "summon", actionType: "ui" });
+  const added = engine.addGestureSample(custom.id, [0, 0.25, -0.5, 1]);
+  assert.equal(added.samples.length, 1);
+  assert.match(engine.addGestureSample(custom.id, [0, 2]).error, /bounded vector/u);
+  assert.throws(() => engine.addGestureSample(custom.id, [NaN]), /plain JSON/u);
+  const result = engine.testCustomGesture(custom.id, { truePositives: 10_000, falsePositives: 0 });
+  assert.equal(result.status, "unavailable");
+  assert.equal(engine.getCustomGesture(custom.id).tested, false);
+  assert.throws(() => engine.createCustomGesture({ name: "Danger", gestureId: "G01", action: "device.execute", actionType: "device" }), /allowlisted/u);
 });
 
 test("camera permission denial leaves recognition inactive and reports no availability", async () => {
@@ -97,6 +276,7 @@ test("supported adapter lifecycle is visible, pausable, revocable, and stopped w
 
   assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+  assert.throws(() => engine.updateProfile(profile.id, { sensitivity: 0.4 }), /Stop gesture recognition/u);
   assert.equal(engine.pauseRecognition(), true);
   assert.equal(engine.resumeRecognition(), true);
   camera.listeners.get("ended")(); // Camera permission/device revocation.
