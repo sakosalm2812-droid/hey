@@ -1,5 +1,6 @@
 import { recordAudit } from "./auditLog.js";
 import { executeWithPermission, authorizeExecution } from "./permissionManager.js";
+import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
 
 const tools = new Map();
 
@@ -121,6 +122,53 @@ export function getTool(name) {
 
 export function listTools() {
   return Array.from(tools.values(), describeTool);
+}
+
+/**
+ * Return a handler-free, policy-derived view for Tool Library discovery.
+ * A registered handler is not evidence that its declared capability is
+ * available on the requested platform; only the capability registry (and an
+ * explicitly supplied adapter) can establish that.
+ */
+export function listToolCatalog({ platform = "web", adapter = null } = {}) {
+  return Array.from(tools.values(), (tool) => {
+    const capabilities = Array.isArray(tool.metadata.capabilities)
+      ? tool.metadata.capabilities
+      : [];
+    const capabilityAvailability = capabilities.map((capability) => {
+      if (typeof capability !== "string" || !capability.trim()) {
+        return {
+          capability: null,
+          platform,
+          status: CAPABILITY_STATUS.unsupported,
+          available: false,
+          error: "Tool capability declaration is invalid.",
+        };
+      }
+      return getCapabilityAvailability(capability, platform, adapter);
+    });
+    const statuses = capabilityAvailability.map(({ status }) => status);
+    let status = "unsupported";
+    if (statuses.length > 0) {
+      if (statuses.includes(CAPABILITY_STATUS.restricted)) status = CAPABILITY_STATUS.restricted;
+      else if (statuses.every((value) => value === CAPABILITY_STATUS.supported)) status = CAPABILITY_STATUS.supported;
+      else if (statuses.every((value) => value === CAPABILITY_STATUS.supported || value === CAPABILITY_STATUS.permissionRequired)) status = CAPABILITY_STATUS.permissionRequired;
+    }
+
+    return Object.freeze({
+      name: tool.name,
+      status,
+      available: status === CAPABILITY_STATUS.supported,
+      platform,
+      capabilities: Object.freeze(capabilityAvailability.map((availability) => Object.freeze({ ...availability }))),
+      permissions: Object.freeze(Array.isArray(tool.metadata.permissions)
+        ? [...tool.metadata.permissions]
+        : tool.metadata.permission ? [tool.metadata.permission] : []),
+      riskLevel: tool.metadata.riskLevel,
+      requiresConfirmation: tool.metadata.requiresConfirmation === true,
+      lifecycle: "registered",
+    });
+  });
 }
 
 export async function executeTool(name, input, context = {}) {
@@ -260,5 +308,6 @@ export default {
   unregisterTool,
   getTool,
   listTools,
+  listToolCatalog,
   executeTool,
 };

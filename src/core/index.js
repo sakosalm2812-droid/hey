@@ -47,6 +47,7 @@ import {
   unregisterTool,
   getTool,
   listTools,
+  listToolCatalog,
   executeTool,
 } from "./toolRegistry.js";
 
@@ -512,6 +513,7 @@ import {
       unregister: unregisterTool,
       get: getTool,
       all: listTools,
+      catalog: listToolCatalog,
       execute: executeTool,
     },
 
