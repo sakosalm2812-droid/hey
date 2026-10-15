@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { attachEvaluationReport, clearProviders, listModels, registerProvider } from "../src/core/providerRegistry.js";
 import { selectModel, selectModelFromSnapshot, createProviderPlan } from "../src/core/providerRouter.js";
+import { clearPermissions, isProviderPermissionSnapshotCurrent, revokePermission, seedPermissions } from "../src/core/permissionManager.js";
+import { setAccountScope } from "../src/core/accountScope.js";
 import { createAdapterManifest, createAdapterServingTarget, createInferenceRequest, createEvaluationReport, createModelRecord, verifyEvaluationReport, INFERENCE_PROFILES, OPEN_MODEL_CANDIDATES } from "../src/core/modelPlatform.js";
 import { HEY } from "../src/core/index.js";
 
@@ -194,6 +196,11 @@ test("evaluation report digests bind provenance and exact measurement values wit
 
 test("provider registry attaches only verified evaluation evidence for its exact pinned model", async () => {
   clearProviders();
+  setAccountScope("evaluation-fixture-account");
+  seedPermissions([
+    { permission: "provider.remote", status: "granted", scope: "account" },
+    { permission: "provider:evaluation-fixture", status: "granted", scope: "account" },
+  ], "evaluation-fixture-account");
   const input = validEvaluationRun();
   input.evaluatedAt = new Date(Date.now() - 60_000).toISOString();
   const provider = registerProvider({
@@ -229,6 +236,8 @@ test("provider registry attaches only verified evaluation evidence for its exact
     assert.equal(getterCalls, 0);
   } finally {
     clearProviders();
+    clearPermissions();
+    setAccountScope(null);
   }
 });
 
@@ -312,6 +321,7 @@ test("Fast, Balanced, and Maximum Quality profiles are measurable constraints, n
 
 test("canonical provider router applies profile limits only to registered permitted models with fresh reports", async () => {
   clearProviders();
+  setAccountScope("model-fixture-account");
   try {
     const candidates = [
       { id: "too-costly", quality: 0.78, latencyP95Ms: 800, inputUsdPerMillion: 5, outputUsdPerMillion: 5 },
@@ -328,6 +338,11 @@ test("canonical provider router applies profile limits only to registered permit
       id: "fixture", name: "Fixture", capabilities: ["chat"],
       models: candidates.map(({ id, revision, weightSha256, local }) => ({ id, revision, weightSha256, local })),
     });
+    seedPermissions([
+      { permission: "provider.remote", status: "granted", scope: "account" },
+      { permission: "provider.local", status: "granted", scope: "account" },
+      ...["fixture", "stale-provider", "missing-provider"].map((providerId) => ({ permission: `provider:${providerId}`, status: "granted", scope: "account" })),
+    ], "model-fixture-account");
     for (const candidate of candidates) {
       const report = await createEvaluationReport(modelEvaluation(candidate, candidate));
       await attachEvaluationReport("fixture", candidate.id, report);
@@ -343,6 +358,11 @@ test("canonical provider router applies profile limits only to registered permit
     assert.equal(selectModel({ profile: "maximum_quality", allowedProviders: ["fixture"] }).selected, null, "models without measured quality above the profile floor fail closed");
     assert.equal(selectModel({ profile: "fast", privacyMode: "no_cloud", allowedProviders: ["fixture"] }).selected.id, "local");
     assert.equal(selectModel({ profile: "fast" }).selected, null, "a profile requires explicit provider permission");
+    const spoofedProvider = { id: "spoofed", revision: "revision-spoofed", weightSha256: "9".repeat(64) };
+    registerProvider({ id: "rogue-provider", name: "Rogue", capabilities: ["chat"], models: [spoofedProvider] });
+    await attachEvaluationReport("rogue-provider", spoofedProvider.id, await createEvaluationReport(modelEvaluation(spoofedProvider)));
+    assert.equal(selectModel({ profile: "fast", allowedProviders: ["rogue-provider"] }).selected, null,
+      "a caller preference cannot grant a provider without a trusted account grant");
     assert.throws(() => selectModelFromSnapshot([], { profile: "fast", allowedProviders: [" fixture"] }), /non-empty strings/i);
     const hostileAllowlist = Object.defineProperty([], "0", { enumerable: true, get() { throw new Error("must not run"); } });
     assert.throws(() => selectModelFromSnapshot([], { profile: "fast", allowedProviders: hostileAllowlist }), /accessors/i);
@@ -362,8 +382,14 @@ test("canonical provider router applies profile limits only to registered permit
     const failedFallback = createProviderPlan({ profile: "fast", allowedProviders: ["stale-provider", "missing-provider"] });
     assert.equal(failedFallback.selected, null);
     assert.deepEqual(failedFallback.attempts, [], "no fallback is planned when every candidate fails its evidence gates");
+    const planned = createProviderPlan({ profile: "fast", allowedProviders: ["fixture"] });
+    assert.equal(isProviderPermissionSnapshotCurrent(planned.permissionSnapshot), true);
+    revokePermission("provider:fixture", "account");
+    assert.equal(isProviderPermissionSnapshotCurrent(planned.permissionSnapshot), false, "a plan cannot outlive its provider permission epoch");
   } finally {
     clearProviders();
+    clearPermissions();
+    setAccountScope(null);
   }
 });
 
