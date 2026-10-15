@@ -12,6 +12,8 @@ export default function ChatInput({
   disabled = false,
   onVoiceCall,
   onDictationInsert,
+  fusionEnabled = false,
+  setFusionEnabled,
 }) {
   const { t } = useLocale();
   const { user } = useAuth();
@@ -47,6 +49,16 @@ export default function ChatInput({
 
   return (
     <div className="hey-chat-composer">
+      <label className="hey-chat-fusion-opt-in">
+        <input
+          type="checkbox"
+          checked={fusionEnabled}
+          onChange={(event) => setFusionEnabled?.(event.target.checked)}
+          disabled={disabled}
+          aria-label="Use model fusion for this request"
+        />
+        <span>Use model fusion for this request</span>
+      </label>
       <DictationControl key={user?.id || "signed-out"} onInsert={insertDictation} disabled={disabled} />
       <div className="hey-chat-input-shell">
         <textarea

@@ -45,6 +45,28 @@ async function getHEYSession() {
   return session;
 }
 
+export function withFusionRequestOptIn(payload, fusionEnabled = false) {
+  const safePayload = { ...payload };
+  delete safePayload.fusion;
+  return fusionEnabled === true ? { ...safePayload, fusion: true } : safePayload;
+}
+
+export function isSameHEYAccount(requestSession, currentSession) {
+  return Boolean(requestSession?.user?.id) && requestSession.user.id === currentSession?.user?.id;
+}
+
+export function getHEYChatError(response, details = {}, fusion = false) {
+  if (response.status === 401) return "Your session expired. Please sign in again.";
+  if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
+  if (fusion && response.status === 409) return "The providers could not independently confirm an answer. No answer was delivered.";
+  if (fusion && response.status === 503) return "Model fusion is unavailable because its provider permissions or pricing are not configured.";
+  if (response.status === 429) return "HEY is receiving too many requests. Wait a moment and try again.";
+  if (response.status >= 500) return fusion
+    ? "Model fusion is unavailable right now. No answer was delivered."
+    : "HEY could not reach its AI provider. Check the server configuration and try again.";
+  return details.error || "HEY could not send this message.";
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new DOMException("The request timed out.", "TimeoutError")), timeoutMs);
@@ -104,17 +126,21 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false, signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false, fusion = false, signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
     const session = await getHEYSession();
-    const executionIdentity = await getExecutionIdentity(session);
-    const execution = await executeRequest(
+    const executionIdentity = fusion ? null : await getExecutionIdentity(session);
+    const execution = fusion ? null : await executeRequest(
       { input: message, command: brainResult.command, tools: brainResult.tools, primaryTools: brainResult.primaryTools },
       { confirmed, user: executionIdentity },
     );
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
+    const currentBeforeSend = await getHEYSession();
+    if (!isSameHEYAccount(session, currentBeforeSend)) {
+      throw new DOMException("The signed-in account changed while this request was running.", "AbortError");
+    }
     onExecutionResult?.(execution, message);
     if (execution.handled) {
       const answer = execution.result?.message || "HEY could not complete that action.";
@@ -129,7 +155,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
           ? { Authorization: `Bearer ${session.access_token}` }
           : {}),
       },
-      body: JSON.stringify({
+      body: JSON.stringify(withFusionRequestOptIn({
         message,
         requestId: crypto.randomUUID(),
         system: `${HEY_SYSTEM}\n\n${brainResult.instruction}`,
@@ -146,25 +172,29 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         primaryTools: brainResult.primaryTools,
         responseStyle: brainResult.responseStyle,
         conversationId,
-      })
+      }, fusion))
     }, { signal })
 
     if (!response.ok) {
       const details = await response.json().catch(() => ({}));
-      const friendly = response.status === 401 ? 'Your session expired. Please sign in again.'
-        : response.status === 429 ? 'HEY is receiving too many requests. Wait a moment and try again.'
-        : response.status >= 500 ? 'HEY could not reach its AI provider. Check the server configuration and try again.'
-        : details.error || 'HEY could not send this message.';
-      throw new Error(friendly);
+      throw new Error(getHEYChatError(response, details, fusion));
     }
 
     const data = await response.json()
+    if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
+    const currentSession = await getHEYSession();
+    if (!isSameHEYAccount(session, currentSession)) {
+      throw new DOMException("The signed-in account changed while this request was running.", "AbortError");
+    }
 
     if (data.conversationId && onConversationId) {
       onConversationId(data.conversationId);
     }
 
-    const answer = data.response || 'HEY could not generate a response.';
+    if (typeof data.response !== "string" || !data.response.trim()) {
+      throw new Error(fusion ? "Model fusion did not return a verified answer. No answer was delivered." : "HEY did not return a response. Please try again.");
+    }
+    const answer = data.response;
     const qualityReport = evaluateResponse(answer, brainResult.safety);
     saveQualityReport(qualityReport, data.conversationId || conversationId).catch((error) => {
       recordAudit({ action: "quality.report_failed", status: "failed", metadata: { reason: error.message } });

@@ -104,6 +104,9 @@
 .hey-chat-suggestions button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--glass-bg); color: var(--text-secondary); font-size: 10px; cursor: pointer; }
 .hey-chat-suggestions button:hover { border-color: var(--accent); color: var(--text-primary); }
 .hey-chat-composer { display: grid; gap: 8px; }
+.hey-chat-fusion-opt-in { display: flex; align-items: center; gap: 8px; width: fit-content; color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.hey-chat-fusion-opt-in input { accent-color: var(--accent); }
+.hey-chat-fusion-opt-in:has(input:disabled) { opacity: .6; cursor: default; }
 .hey-dictation { display: grid; gap: 8px; min-width: 0; }
 .hey-dictation__controls { display: flex; min-height: 30px; align-items: center; }
 .hey-dictation__trigger,

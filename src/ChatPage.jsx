@@ -57,6 +57,7 @@ function ChatWorkspace() {
   const [conversationId, setConversationId] = useState(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [fusionEnabled, setFusionEnabled] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatError, setChatError] = useState("");
   const [conversationsLoading, setConversationsLoading] = useState(true);
@@ -65,6 +66,9 @@ function ChatWorkspace() {
   const [executionStatus, setExecutionStatus] = useState("");
   const [pendingExecution, setPendingExecution] = useState(null);
   const skipNextDraftPersistenceRef = useRef(false);
+  const activeRequestControllerRef = useRef(null);
+
+  useEffect(() => () => activeRequestControllerRef.current?.abort(), []);
 
   const [mode, setMode] = useState("text");
   const [voiceState, setVoiceState] = useState("idle");
@@ -198,32 +202,45 @@ function ChatWorkspace() {
   async function sendUserMessage(userMessage, { confirmed = false, displayUserMessage = true } = {}) {
     const trimmedMessage = userMessage.trim();
     if (!trimmedMessage || isSending) return;
+    const requestedFusion = fusionEnabled;
+    setFusionEnabled(false);
 
     if (displayUserMessage) setMessages((current) => [...current, { role: "user", text: trimmedMessage }]);
     setMessage("");
     setChatError("");
     setIsSending(true);
     followingRef.current = true;
+    const controller = new AbortController();
+    activeRequestControllerRef.current = controller;
 
     try {
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
         confirmed,
+        fusion: requestedFusion,
+        signal: controller.signal,
         onExecutionResult: (execution, originalMessage) => {
           if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
           else setPendingExecution(null);
         },
       });
+      if (controller.signal.aborted) return;
 
       setMessages((current) => [...current, { role: "hey", text: response }]);
       await refreshConversations();
     } catch (error) {
+      if (error.name === "AbortError") return;
       setChatError(error.message || 'Could not send your message.');
       setMessage(trimmedMessage);
     } finally {
-      setIsSending(false);
-      window.setTimeout(() => setExecutionStatus(""), 1800);
+      if (activeRequestControllerRef.current === controller) {
+        activeRequestControllerRef.current = null;
+        if (!controller.signal.aborted) {
+          setIsSending(false);
+          window.setTimeout(() => setExecutionStatus(""), 1800);
+        }
+      }
     }
   }
 
@@ -484,6 +501,8 @@ function ChatWorkspace() {
                 setValue={setMessage}
                 onSend={() => sendUserMessage(message)}
                 disabled={isSending}
+                fusionEnabled={fusionEnabled}
+                setFusionEnabled={setFusionEnabled}
                 onVoiceCall={toggleVoiceCall}
                 onDictationInsert={insertDictationTranscript}
               />
