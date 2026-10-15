@@ -16,6 +16,13 @@ import {
   verifyTeacherWorksheetArtifact,
 } from "../src/core/teacherExperience.js";
 import HEY from "../src/core/index.js";
+import { supabaseClient } from "../src/lib/supabase.js";
+import { authorizeTeacherArtifactRead } from "../src/core/teacherArtifactAccess.js";
+
+supabaseClient.auth.getUser = async () => ({ data: { user: {
+  id: "teacher-1",
+  app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+} }, error: null });
 
 const lessonInput = (overrides = {}) => ({
   title: "Fractions on a number line",
@@ -40,6 +47,8 @@ const teacherContext = () => ({
   workspaceId: "school-space",
   currentAccountScope: "account:teacher-1",
   currentWorkspaceId: "school-space",
+  classId: "class-1",
+  currentClassId: "class-1",
 });
 
 const assessmentInput = (overrides = {}) => ({
@@ -72,6 +81,52 @@ test("teacher workflow creates a scoped, provenance-bearing Forge-compatible exp
   assert.match(exported.content, /Teacher review required before classroom use: yes/);
   assert.ok(Object.isFrozen(artifact.content.activities[0]));
   assert.throws(() => { artifact.metadata.safety.reviewRequired = false; }, TypeError);
+});
+
+test("answer-key access ignores audience metadata and requires authenticated teacher claims", () => {
+  const artifact = {
+    content: { type: "teacher_assessment", questions: [{ teacherAnswer: "4" }] },
+    metadata: { audience: "student", accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  const teacher = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  assert.equal(authorizeTeacherArtifactRead(artifact, {}, teacher), true);
+  assert.equal(authorizeTeacherArtifactRead(artifact, {}, { ...teacher, app_metadata: { ...teacher.app_metadata, hey_role: "student" } }), false);
+  assert.equal(authorizeTeacherArtifactRead({ ...artifact, metadata: { ...artifact.metadata, audience: "teacher_only" } }, {}, null), false);
+});
+
+test("answer-key access denies missing role and account or class claim mismatches", () => {
+  const artifact = {
+    content: { questions: [{ teacherAnswer: "4" }] },
+    metadata: { accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  const claims = { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] };
+  assert.equal(authorizeTeacherArtifactRead(artifact, {}, { id: "teacher-1", app_metadata: { ...claims, hey_role: undefined } }), false);
+  assert.equal(authorizeTeacherArtifactRead(artifact, {}, { id: "teacher-1", app_metadata: { ...claims, hey_account_scope: "account:other" } }), false);
+  assert.equal(authorizeTeacherArtifactRead(artifact, {}, { id: "teacher-1", app_metadata: { ...claims, hey_class_ids: ["class-2"] } }), false);
+  assert.equal(authorizeTeacherArtifactRead(artifact, { classId: "class-2" }, { id: "teacher-1", app_metadata: claims }), false);
+});
+
+test("canonical artifact reads deny cached answer keys to students", async () => {
+  const artifact = await HEY.artifacts.create({
+    projectId: "school-space", type: "document", title: "Scoped key", content: { questions: [{ teacherAnswer: "4" }] },
+    metadata: { workflow: "teacher_assessment", audience: "student", accountScope: "account:teacher-1", classId: "class-1" },
+  });
+  assert.equal((await HEY.artifacts.get(artifact.id)).id, artifact.id);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+  } }, error: null });
+  assert.equal(await HEY.artifacts.get(artifact.id), null);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "other-teacher", app_metadata: { hey_role: "teacher", hey_account_scope: "account:other", hey_class_ids: ["class-1"] },
+  } }, error: null });
+  assert.equal(await HEY.artifacts.get(artifact.id), null);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "other-class-teacher", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-2"] },
+  } }, error: null });
+  assert.equal(await HEY.artifacts.get(artifact.id), null);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+  } }, error: null });
 });
 
 test("verified lessons are stored through the shared Forge artifact contract with scope and review provenance", async () => {
