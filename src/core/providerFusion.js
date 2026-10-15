@@ -268,23 +268,6 @@ export async function runProviderFusion({
     if (!parsedOutput) {
       return result("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });
     }
-    if (!parsedOutput.evidence.length) {
-      return result("inconclusive", { reason: "candidate_evidence_missing", calls: dispatchedCalls, reservedCostUsd });
-    }
-    if (index === 0 && !primaryFailed) {
-      if (mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck || parsedOutput.confidence < minConfidence) {
-        independentCheckRequired = true;
-        if (!hasBoundAnswerEvidence(parsedOutput)) {
-          return result("provider_contract_invalid", { reason: "candidate_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
-        }
-      }
-    } else if ((independentCheckRequired || primaryFailed) && !hasBoundAnswerEvidence(parsedOutput)) {
-      return result("provider_contract_invalid", {
-        reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "checker_answer_not_bound_to_evidence",
-        calls: dispatchedCalls,
-        reservedCostUsd,
-      });
-    }
     outputs.push({
       providerId: model.providerId,
       modelId: model.id,
