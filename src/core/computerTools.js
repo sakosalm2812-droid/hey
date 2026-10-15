@@ -1,4 +1,4 @@
-import { registerOwnedTool } from "./toolRegistry.js";
+import { registerOwnedTool, setToolCapabilityAvailabilityResolver } from "./toolRegistry.js";
 import { OS_CAPABILITIES, createBrowserOSAdapter, unsupportedCapability } from "./osAdapter.js";
 import { getCapability, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { createTauriAdapter } from "../lib/tauriAdapter.js";
@@ -44,8 +44,10 @@ function browserTool(capability, input, context = {}) {
 }
 
 export function registerComputerTools() {
+  setToolCapabilityAvailabilityResolver((capability, platform) => getCapabilityAvailability(capability, platform, activeAdapter), COMPUTER_TOOL_OWNER);
   registerOwnedTool("computer.system_info", computerToolHandlers.get(OS_CAPABILITIES.systemInfo), {
     category: "system",
+    description: "Read basic information about this device using an available platform adapter.",
     capabilities: [OS_CAPABILITIES.systemInfo],
     permissions: ["system.info"],
     permission: "system.info",
@@ -56,16 +58,23 @@ export function registerComputerTools() {
 
   registerOwnedTool("computer.open_url", computerToolHandlers.get(OS_CAPABILITIES.openUrl), {
     category: "browser",
+    description: "Open an HTTP or HTTPS link in a new browser tab. Your browser may block popups; HEY reports whether it accepted the tab.",
     capabilities: [OS_CAPABILITIES.openUrl],
     permission: "browser.open_url",
     riskLevel: "medium",
     requiresConfirmation: true,
     inputSchema: { type: "object", required: ["url"], properties: { url: { type: "string" } } },
+    outputSchema: {
+      type: "object",
+      required: ["success", "verified"],
+      properties: { success: { type: "boolean" }, verified: { type: "boolean" }, url: { type: "string" } },
+    },
     source: "browser_adapter",
   }, COMPUTER_TOOL_OWNER);
 
   registerOwnedTool("computer.capture_screen", computerToolHandlers.get(OS_CAPABILITIES.screenshot), {
     category: "vision",
+    description: "Capture a selected display after the browser or operating system grants screen access.",
     capabilities: [OS_CAPABILITIES.screenshot],
     permission: "screen.capture",
     riskLevel: "high",
@@ -98,6 +107,7 @@ export function registerComputerTools() {
     const definition = getCapability(capability);
     registerOwnedTool(name, computerToolHandlers.get(capability), {
       category: "computer",
+      description: definition?.name || `Use the registered ${capability} capability through an approved platform adapter.`,
       capabilities: [capability],
       permission: capability,
       riskLevel: definition.riskLevel,

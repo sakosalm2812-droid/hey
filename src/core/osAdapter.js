@@ -109,7 +109,22 @@ export function createBrowserOSAdapter() {
         return { success: false, error: "Only HTTP and HTTPS URLs can be opened from the browser.", verified: false };
       }
       try {
-        const opened = window.open(parsed.href, "_blank", "noopener,noreferrer");
+        // `noopener` and `noreferrer` force `window.open()` to return null even
+        // when it creates a tab, so they cannot be used as a popup-block check.
+        // Sever the opener immediately after creation, before the destination
+        // can run, then report only whether the browser accepted a live tab.
+        const opened = window.open(parsed.href, "_blank");
+        if (opened?.closed === true) {
+          return { success: false, url: parsed.href, error: "The browser opened or isolated a tab, but HEY could not verify its state. Check the browser before retrying.", verified: false };
+        }
+        if (opened) {
+          try {
+            opened.opener = null;
+          } catch {
+            try { opened.close(); } catch { /* Best-effort containment of an unsafe popup. */ }
+            return { success: false, url: parsed.href, error: "The browser opened a tab that HEY could not safely isolate.", verified: false };
+          }
+        }
         return {
           success: Boolean(opened),
           url: parsed.href,

@@ -163,3 +163,92 @@ test("output schema violations stop a plan and report a contract failure", async
     setAccountScope(null);
   }
 });
+
+test("invocation plans are one-use, cancellation is checked before dispatch, and authorization stays in each receipt", async () => {
+  const name = "test.plan.single_use";
+  const capability = "test.plan.single_use_capability";
+  addCapability(capability);
+  setAccountScope("plan-single-use-account");
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], "plan-single-use-account");
+  let executions = 0;
+  try {
+    registerTool(name, async ({ value }) => {
+      executions += 1;
+      return { value };
+    }, {
+      capabilities: [capability], permission: "filesystem.read",
+      inputSchema: objectSchema({ value: { type: "string" } }),
+      outputSchema: objectSchema({ value: { type: "string" } }),
+    });
+
+    const cancelledPlan = createToolInvocationPlan([{ id: "cancel", toolName: name, input: { value: "never dispatched" } }]);
+    const controller = new AbortController();
+    controller.abort();
+    const cancelled = await executeToolInvocationPlan(cancelledPlan, {
+      platform: "web", user: { id: "plan-single-use-account", plan: "elite" }, signal: controller.signal,
+    });
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(executions, 0);
+    assert.equal((await executeToolInvocationPlan(cancelledPlan)).status, "invalid_plan");
+
+    const plan = createToolInvocationPlan([{ id: "once", toolName: name, input: { value: "run once" } }]);
+    const result = await executeToolInvocationPlan(plan, {
+      platform: "web", user: { id: "plan-single-use-account", plan: "elite" },
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.results[0].authorization.authorized, true);
+    assert.equal(result.results[0].metadata.source, "tool_registry");
+    assert.equal((await executeToolInvocationPlan(plan)).status, "invalid_plan");
+    assert.equal(executions, 1);
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("cancellation after a completed step preserves its receipt and prevents later dispatch", async () => {
+  const firstName = "test.plan.cancel_after_dispatch_source";
+  const secondName = "test.plan.cancel_after_dispatch_target";
+  const firstCapability = "test.plan.cancel_after_dispatch_source_capability";
+  const secondCapability = "test.plan.cancel_after_dispatch_target_capability";
+  addCapability(firstCapability);
+  addCapability(secondCapability);
+  setAccountScope("plan-cancel-after-dispatch-account");
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], "plan-cancel-after-dispatch-account");
+  const controller = new AbortController();
+  let laterDispatches = 0;
+  try {
+    registerTool(firstName, async () => {
+      controller.abort(new Error("User cancelled after dispatch."));
+      return { completed: true };
+    }, {
+      capabilities: [firstCapability], permission: "filesystem.read",
+      inputSchema: objectSchema({}), outputSchema: objectSchema({ completed: { type: "boolean" } }),
+    });
+    registerTool(secondName, async () => {
+      laterDispatches += 1;
+      return { completed: true };
+    }, {
+      capabilities: [secondCapability], permission: "filesystem.read",
+      inputSchema: objectSchema({}), outputSchema: objectSchema({ completed: { type: "boolean" } }),
+    });
+
+    const plan = createToolInvocationPlan([
+      { id: "first", toolName: firstName, input: {} },
+      { id: "second", toolName: secondName, input: {} },
+    ]);
+    const result = await executeToolInvocationPlan(plan, {
+      platform: "web", user: { id: "plan-cancel-after-dispatch-account", plan: "elite" }, signal: controller.signal,
+    });
+    assert.equal(result.status, "cancelled");
+    assert.deepEqual(result.completed, ["first"]);
+    assert.equal(result.results[0].success, true);
+    assert.equal(laterDispatches, 0);
+  } finally {
+    unregisterTool(firstName);
+    unregisterTool(secondName);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});

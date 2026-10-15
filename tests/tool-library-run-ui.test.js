@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("Tool Library exposes typed run, explicit permission decisions, confirmation, cancellation, and receipts", async () => {
+  const source = await readFile(new URL("../src/ToolLibraryPage.jsx", import.meta.url), "utf8");
+  assert.match(source, /HEY\.tools\.plan\(/);
+  assert.match(source, /HEY\.tools\.executePlan\(/);
+  assert.match(source, /HEY\.permissions\.request\(/);
+  assert.match(source, /HEY\.permissions\.grant\(/);
+  assert.match(source, /Allow account permission/);
+  assert.match(source, /onClick=\{denyPendingAction\}/);
+  assert.match(source, /Confirm and run/);
+  assert.match(source, /HEY\.audit\.record\(/);
+  assert.match(source, /Cancellation requested/);
+  assert.match(source, /role=\{\["error", "denied"\]/);
+  assert.match(source, /onActivityChanged\(\)/);
+  assert.match(source, /HEY\.permissions\.revoke\(/);
+  assert.match(source, /summary>Help/);
+  assert.match(source, /summary>Activity/);
+  assert.match(source, /tool\.description/);
+  assert.match(source, /tool\.category/);
+  assert.match(source, /activeCategory/);
+  assert.match(source, /Check the destination before retrying/);
+  assert.match(source, /stepReceipt\.stepId !== run\.stepId/);
+  assert.match(source, /safeResultText\(pendingRun\.input\)/);
+  assert.match(source, /tool\.permissions\.length === 1/);
+  assert.match(source, /cannot authorize all of them together/);
+  assert.match(source, /status: "unverified"/);
+});

@@ -12,6 +12,8 @@ const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
 const invocationPlans = new WeakMap();
+let capabilityAvailabilityResolver = null;
+let capabilityAvailabilityResolverOwner = null;
 export const toolLibraryPreferenceStore = createToolLibraryPreferenceStore({
   isToolRegistered: (name) => tools.has(name),
 });
@@ -31,6 +33,13 @@ subscribeAccountScope((previousScope) => {
 
 function cloneMetadata(metadata) {
   return cloneMetadataValue(metadata, new WeakSet());
+}
+
+function declaredToolPermissions(metadata) {
+  const values = [];
+  if (metadata.permission !== undefined) values.push(metadata.permission);
+  if (metadata.permissions !== undefined) values.push(...metadata.permissions);
+  return [...new Set(values)];
 }
 
 function cloneMetadataValue(value, ancestors) {
@@ -107,6 +116,15 @@ function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   }
 
   const safeMetadata = cloneMetadata(metadata);
+  if (safeMetadata.permission !== undefined && (typeof safeMetadata.permission !== "string" || !safeMetadata.permission.trim())) {
+    throw new TypeError("Tool permission must be a non-empty string.");
+  }
+  if (safeMetadata.permissions !== undefined && (!Array.isArray(safeMetadata.permissions) || safeMetadata.permissions.some((permission) => typeof permission !== "string" || !permission.trim()))) {
+    throw new TypeError("Tool permissions must be an array of non-empty strings.");
+  }
+  if (safeMetadata.permissions && new Set(safeMetadata.permissions).size !== safeMetadata.permissions.length) {
+    throw new TypeError("Tool permissions must not contain duplicates.");
+  }
   if (safeMetadata.inputSchema !== undefined) safeMetadata.inputSchema = normalizeToolSchema(safeMetadata.inputSchema);
   if (safeMetadata.outputSchema !== undefined) safeMetadata.outputSchema = normalizeToolSchema(safeMetadata.outputSchema);
   const lifecycle = safeMetadata.lifecycle;
@@ -151,6 +169,18 @@ export function registerOwnedTool(name, handler, metadata, ownerToken) {
     throw new TypeError("An opaque tool owner token is required.");
   }
   return registerToolWithOwner(name, handler, metadata, ownerToken);
+}
+
+/** Bind catalog discovery to the adapter resolver owned by the computer runtime. */
+export function setToolCapabilityAvailabilityResolver(resolver, ownerToken) {
+  if (typeof resolver !== "function" || !ownerToken || (typeof ownerToken !== "object" && typeof ownerToken !== "function")) {
+    throw new TypeError("A capability resolver and opaque owner token are required.");
+  }
+  if (capabilityAvailabilityResolverOwner && capabilityAvailabilityResolverOwner !== ownerToken) {
+    throw new Error("The tool capability resolver is already owned by another runtime.");
+  }
+  capabilityAvailabilityResolver = resolver;
+  capabilityAvailabilityResolverOwner = ownerToken;
 }
 
 export function unregisterTool(name) {
@@ -228,9 +258,11 @@ export function createToolInvocationPlan(steps) {
 export async function executeToolInvocationPlan(plan, context = {}) {
   const steps = invocationPlans.get(plan);
   if (!steps) return { success: false, status: "invalid_plan", error: "Invocation plan is invalid or was not created by this registry.", completed: [], results: [] };
+  invocationPlans.delete(plan);
   const byId = new Map();
   const results = [];
   for (const step of steps) {
+    if (context.signal?.aborted) return { success: false, status: "cancelled", failedStepId: step.id, error: "Invocation plan was cancelled before dispatch.", completed: results.map(({ stepId }) => stepId), results };
     if (tools.get(step.toolName) !== step.tool) {
       return { success: false, status: "stale_registration", failedStepId: step.id, error: `Tool registration changed for ${step.toolName}.`, completed: results.map(({ stepId }) => stepId), results };
     }
@@ -245,7 +277,20 @@ export async function executeToolInvocationPlan(plan, context = {}) {
     const inputError = validateToolValue(input, step.tool.metadata.inputSchema, `Input for ${step.toolName}`);
     if (inputError) return { success: false, status: "binding_failed", failedStepId: step.id, error: inputError, completed: results.map(({ stepId }) => stepId), results };
     const result = await runToolLibraryEntry(step.toolName, input, context);
-    results.push({ stepId: step.id, success: result?.success === true, status: result?.status || (result?.success ? "completed" : "failed"), result: result?.result ?? null, error: result?.error || null });
+    const receipt = {
+      stepId: step.id,
+      toolName: step.toolName,
+      success: result?.success === true,
+      status: result?.status || (result?.success ? "completed" : "failed"),
+      result: result?.result ?? null,
+      error: result?.error || null,
+      requiresConfirmation: result?.requiresConfirmation === true,
+      requiresPermission: result?.requiresPermission === true,
+      request: result?.request || null,
+      authorization: result?.authorization || null,
+      metadata: result?.metadata || null,
+    };
+    results.push(receipt);
     if (!result?.success) return { success: false, status: result?.status || "failed", failedStepId: step.id, error: result?.error || "Tool invocation failed.", completed: results.slice(0, -1).map(({ stepId }) => stepId), results };
     byId.set(step.id, { output: result.result });
   }
@@ -281,6 +326,12 @@ export function listToolCatalog({ platform = "web", adapter = null } = {}) {
           error: "Tool capability declaration is invalid.",
         };
       }
+      if (!adapter && capabilityAvailabilityResolver) {
+        try { return capabilityAvailabilityResolver(capability, platform); }
+        catch {
+          return { capability, platform, status: CAPABILITY_STATUS.unsupported, available: false, error: "Runtime capability availability could not be verified." };
+        }
+      }
       return getCapabilityAvailability(capability, platform, adapter);
     });
     const statuses = capabilityAvailability.map(({ status }) => status);
@@ -299,9 +350,7 @@ export function listToolCatalog({ platform = "web", adapter = null } = {}) {
       available: status === CAPABILITY_STATUS.supported,
       platform,
       capabilities: Object.freeze(capabilityAvailability.map((availability) => Object.freeze({ ...availability }))),
-      permissions: Object.freeze(Array.isArray(tool.metadata.permissions)
-        ? [...tool.metadata.permissions]
-        : tool.metadata.permission ? [tool.metadata.permission] : []),
+      permissions: Object.freeze(declaredToolPermissions(tool.metadata)),
       riskLevel: tool.metadata.riskLevel,
       requiresConfirmation: tool.metadata.requiresConfirmation === true,
       lifecycle: "registered",
@@ -340,7 +389,11 @@ export async function runToolLibraryEntry(name, input, context = {}) {
   if (!tool) return fail(`Tool not found: ${name}`, "not_found");
 
   const declaredCapabilities = tool.metadata.capabilities;
-  const permission = tool.metadata.permission || tool.metadata.permissions?.[0];
+  const permissions = declaredToolPermissions(tool.metadata);
+  if (permissions.length > 1) {
+    return fail("This tool requires multiple permissions, but the current canonical execution path can authorize only one. No action was dispatched.", "unsupported_authorization");
+  }
+  const permission = permissions[0];
   if (!Array.isArray(declaredCapabilities) || declaredCapabilities.length === 0) {
     return fail("Tool has no registered capability and cannot be run from the Tool Library.");
   }
@@ -348,7 +401,7 @@ export async function runToolLibraryEntry(name, input, context = {}) {
     return fail("Tool has no account permission requirement and cannot be run from the Tool Library.");
   }
 
-  const catalogEntry = listToolCatalog({ platform: context.platform || "web", adapter: context.adapter || null })
+  const catalogEntry = listToolCatalog({ platform: context.platform || "web" })
     .find((entry) => entry.name === name);
   if (!catalogEntry || catalogEntry.status !== CAPABILITY_STATUS.supported) {
     const status = catalogEntry?.status || CAPABILITY_STATUS.unsupported;
@@ -359,6 +412,14 @@ export async function runToolLibraryEntry(name, input, context = {}) {
   const user = context.user || context.session?.user || context.account || null;
   const accountId = user?.id || user?.userId || user?.accountId || null;
   if (!accountId || !hasPermission(permission, "account", accountId)) {
+    recordAudit({
+      action: "tool.authorization_blocked",
+      tool: name,
+      riskLevel: tool.metadata.riskLevel || "low",
+      status: "denied",
+      requestId,
+      metadata: { reason: "canonical_account_permission_missing", permission },
+    });
     return fail(`Missing canonical account permission: ${permission}.`, "denied");
   }
 
@@ -412,11 +473,17 @@ export function startToolLibraryEntry(name, input, context = {}) {
   }
   if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
 
-  const permission = tool.metadata.permission || tool.metadata.permissions?.[0];
+  const permissions = declaredToolPermissions(tool.metadata);
+  if (permissions.length > 1) {
+    return { success: false, status: "unsupported_authorization", error: "This tool requires multiple permissions, but the current canonical execution path can authorize only one." };
+  }
+  const permission = permissions[0] || null;
   if (!permission || !hasPermission(permission, "account", identity.accountId)) {
     return { success: false, status: "denied", error: "Canonical account permission is required to start this tool." };
   }
-  const catalogEntry = listToolCatalog({ platform: context.platform || "web", adapter: context.adapter || null }).find((entry) => entry.name === name);
+  // Lifecycle starts share the same trusted runtime adapter as ordinary runs;
+  // a caller-supplied adapter is discovery data, never execution authority.
+  const catalogEntry = listToolCatalog({ platform: context.platform || "web" }).find((entry) => entry.name === name);
   if (catalogEntry?.status !== CAPABILITY_STATUS.supported) {
     return { success: false, status: catalogEntry?.status || CAPABILITY_STATUS.unsupported, error: `Tool ${name} is not supported on ${context.platform || "web"}.` };
   }
@@ -547,7 +614,13 @@ export async function executeTool(name, input, context = {}) {
     return { success: false, result: null, error: inputError, metadata: { requestId, source: "tool_registry" } };
   }
 
-  const permission = metadata.permission || metadata.permissions?.[0];
+  const permissions = declaredToolPermissions(metadata);
+  if (permissions.length > 1) {
+    const error = "This tool requires multiple permissions, but the current canonical execution path can authorize only one. No action was dispatched.";
+    recordAudit({ action: "tool.authorization_blocked", tool: name, riskLevel: metadata.riskLevel || "low", status: "denied", requestId, metadata: { reason: "multiple_permissions_unsupported", permissionCount: permissions.length } });
+    return { success: false, result: null, error, status: "unsupported_authorization", metadata: { requestId, source: metadata.source || "tool_registry", confidence: 0 } };
+  }
+  const permission = permissions[0];
   const authorizationContext = {
     user: context.user || context.session?.user || context.account || null,
     capability: metadata.capabilities?.[0] || permission,
@@ -692,6 +765,7 @@ function isTransientFailure(value) {
 export default {
   registerTool,
   registerOwnedTool,
+  setToolCapabilityAvailabilityResolver,
   unregisterTool,
   getTool,
   listTools,
