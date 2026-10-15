@@ -1,5 +1,6 @@
 import { recordAudit } from "./auditLog.js";
 import { authorizeExecution } from "./permissionManager.js";
+import { evaluateApprovalPolicy } from "./trustKernelPolicy.js";
 import { publish } from "./eventBus.js";
 import supabaseClient from "../lib/supabase.js";
 
@@ -80,7 +81,7 @@ async function verifyActionMandate(action, options) {
     const { data, error } = await invoke.call(supabaseClient.functions, "hey-mandate", {
       body: {
         mandate,
-        action: action.tool || action.permission,
+        action: options.authorizationAction || action.tool || action.permission,
         resource: options.resource || action.permission,
         idempotencyKey: options.idempotencyKey || action.id,
       },
@@ -216,21 +217,55 @@ export async function executeAction(actionId, handler, options = {}) {
 export async function undoAction(actionId, handler, options = {}) {
   const action = getAction(actionId);
   if (!action || action.status !== "completed" || typeof handler !== "function") return { success: false, error: "Action cannot be undone." };
+  const requiresIndependentVerification = options.requireIndependentVerification === true;
+  const strictResource = options.resource;
+  const verifyTargetBinding = options.verifyTargetBinding;
+  const verifyPostcondition = options.verifyPostcondition;
+  const undoCapability = options.undoCapability;
+  const undoPermission = options.undoPermission;
+  let policyDecision;
+  if (requiresIndependentVerification) {
+    if (!options.requireMandate || typeof verifyTargetBinding !== "function" || typeof verifyPostcondition !== "function"
+      || typeof strictResource !== "string" || !strictResource.trim()
+      || typeof undoCapability !== "string" || !undoCapability.trim()
+      || typeof undoPermission !== "string" || !undoPermission.trim()
+      || !options.policy || !options.user?.id) {
+      return { success: false, error: "Strict undo requires a reverse capability, Trust Kernel policy, exact resource, mandate, and independent verifiers.", action };
+    }
+    let strictPolicy;
+    try { strictPolicy = freezePlainJson(copyPlainJson(options.policy)); }
+    catch { return { success: false, error: "Strict undo Trust Kernel policy must be bounded plain JSON data.", action };
+    }
+    if (JSON.stringify(strictPolicy).length > 64 * 1024) {
+      return { success: false, error: "Strict undo Trust Kernel policy exceeds the size limit.", action };
+    }
+    try {
+      policyDecision = evaluateApprovalPolicy({
+        actorId: options.user.id,
+        action: undoCapability,
+        resource: strictResource,
+        risk: action.riskLevel,
+        offline: options.offline === true,
+        authStrength: options.authStrength,
+      }, strictPolicy);
+    } catch {
+      return { success: false, error: "Trust Kernel denied strict undo because policy evaluation failed.", action };
+    }
+    if (policyDecision.decision !== "allow") {
+      return { success: false, error: `Trust Kernel denied strict undo: ${policyDecision.reason || "policy_not_allowed"}.`, action, policyDecision };
+    }
+  }
   const authorization = authorizeExecution({
     user: options.user,
-    capability: action.tool || action.permission,
-    permission: action.permission,
+    capability: requiresIndependentVerification ? undoCapability : action.tool || action.permission,
+    permission: requiresIndependentVerification ? undoPermission : action.permission,
     riskLevel: action.riskLevel,
     requiresConfirmation: true,
     confirmed: options.confirmed === true,
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
-  const requiresIndependentVerification = options.requireIndependentVerification === true;
-  const strictResource = options.resource;
-  const verifyTargetBinding = options.verifyTargetBinding;
-  const verifyPostcondition = options.verifyPostcondition;
   const strictAction = requiresIndependentVerification
-    ? Object.freeze({ id: action.id, tool: action.tool, permission: action.permission, riskLevel: action.riskLevel })
+    ? Object.freeze({ id: action.id, tool: undoCapability, permission: undoPermission, riskLevel: action.riskLevel })
     : action;
   let strictMandate = options.mandate;
   if (requiresIndependentVerification && options.mandate !== undefined) {
@@ -238,36 +273,43 @@ export async function undoAction(actionId, handler, options = {}) {
     catch { return { success: false, error: "Strict computer undo mandate must be bounded plain JSON data.", action }; }
   }
   const strictOptions = requiresIndependentVerification
-    ? { ...options, mandate: strictMandate, resource: strictResource }
+    ? { ...options, authorizationAction: undoCapability, idempotencyKey: `${action.id}:undo`, mandate: strictMandate, resource: strictResource }
     : options;
-  if (options.requireIndependentVerification === true
-    && (!options.requireMandate || typeof verifyTargetBinding !== "function" || typeof verifyPostcondition !== "function" || typeof strictResource !== "string" || !strictResource.trim())) {
-    return { success: false, error: "Target binding, independent verification, a signed mandate, and an exact resource target are required.", action };
-  }
   let undoInput = action.undo;
   let undoContext = action;
   if (requiresIndependentVerification) {
     try { undoInput = freezePlainJson(copyPlainJson(action.undo)); }
     catch { return { success: false, error: "Strict computer undo input must be bounded plain JSON data.", action }; }
-    undoContext = Object.freeze({ ...strictAction, resource: strictResource, input: undoInput });
-    let binding;
-    try {
-      binding = await verifyTargetBinding({ actionId: undoContext.id, capability: undoContext.tool || undoContext.permission, resource: strictResource, input: undoContext.input, operation: "undo" });
-    } catch {
-      return { success: false, error: "The exact computer undo target could not be independently bound.", action };
-    }
-    if (binding?.verified !== true) {
-      return { success: false, error: binding?.reason || "The exact computer undo target could not be independently bound.", action };
-    }
+    undoContext = Object.freeze({ ...strictAction, capability: undoCapability, operation: "undo", resource: strictResource, input: undoInput });
   }
+  // Reserve before yielding to target binding or mandate verification. This
+  // lets only one strict undo proposal pass the execution boundary at a time.
   action.status = "undo_authorizing";
   action.updatedAt = new Date();
+  publish("action.updated", action);
+  const releaseReservation = (error) => {
+    if (actions.get(actionId) === action && action.status === "undo_authorizing") {
+      action.status = "completed";
+      action.updatedAt = new Date();
+      publish("action.updated", action);
+    }
+    return { success: false, error, action, policyDecision };
+  };
+  if (requiresIndependentVerification) {
+    let binding;
+    try {
+      binding = await verifyTargetBinding({ actionId: undoContext.id, capability: undoCapability, resource: strictResource, input: undoContext.input, operation: "undo" });
+    } catch {
+      return releaseReservation("The exact computer undo target could not be independently bound.");
+    }
+    if (actions.get(actionId) !== action || action.status !== "undo_authorizing") return { success: false, error: "Action is no longer available for undo.", action };
+    if (binding?.verified !== true) return releaseReservation(binding?.reason || "The exact computer undo target could not be independently bound.");
+  }
   const mandate = await verifyActionMandate(strictAction, strictOptions);
   if (!mandate.authorized) {
-    action.status = "completed";
-    action.updatedAt = new Date();
-    return { success: false, error: mandate.reason, action, mandate };
+    return { ...releaseReservation(mandate.reason), mandate };
   }
+  if (actions.get(actionId) !== action || action.status !== "undo_authorizing") return { success: false, error: "Action is no longer available for undo.", action };
   action.status = "undoing";
   action.updatedAt = new Date();
   publish("action.updated", action);
@@ -286,7 +328,7 @@ export async function undoAction(actionId, handler, options = {}) {
     action.updatedAt = new Date();
     publish("action.updated", action);
     recordAudit({ action: "action.undone", tool: action.tool, status: "completed", metadata: { actionId } });
-    return { success: true, action };
+    return { success: true, action, policyDecision };
   } catch (error) {
     action.status = "undo_failed";
     action.error = error instanceof Error ? error.message : String(error);
