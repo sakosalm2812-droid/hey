@@ -26,6 +26,7 @@ import {
   SlidersHorizontal,
   Mic2,
   ChevronLeft,
+  GraduationCap,
 } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { buzz } from "../../lib/heyFeedback";
@@ -44,6 +45,7 @@ const navSections = [
       { label: "Calendar", path: "/calendar", icon: CalendarDays },
       { label: "Projects", path: "/projects", icon: FolderGit2 },
       { label: "Studio", path: "/studio", icon: Sparkles },
+      { label: "Teacher", path: "/teacher", icon: GraduationCap },
     ],
   },
   {
