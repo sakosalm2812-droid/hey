@@ -63,6 +63,25 @@ test("dictation exposes keyboard, microphone, cancellation, unsupported and acco
   assert.match(control, /!requesting && !isActive && !transcript/);
 });
 
+test("dictation preferences are accessible, account-scoped, and snapshotted when starting a session", async () => {
+  const control = await source("../src/components/chat/DictationControl.jsx");
+  assert.match(control, /dictationPreferenceStore\.load\(\)/);
+  assert.match(control, /dictationPreferenceStore\.save\(normalized\)/);
+  assert.match(control, /dictationPreferenceStore\.clear\(\)/);
+  assert.match(control, /<details className="hey-dictation__preferences"/);
+  assert.match(control, /aria-label=\{t\("chat\.dictation\.language"\)\}/);
+  assert.match(control, /corrections: \[\s*\.\.\.snapshot\.corrections,\s*\.\.\.snapshot\.snippets\.map/);
+  assert.match(control, /language: snapshot\.language/);
+  assert.match(control, /createSessionRef\.current\?\.\(preferences\)/);
+  assert.match(control, /subscribeAccountScope/);
+  assert.match(control, /scopeRef\.current = nextScope/);
+  assert.match(control, /setTranscript\(""\)/);
+  assert.match(control, /getAccountScope\(\) !== startingScope \|\| scopeRef\.current !== startingScope/);
+  assert.match(control, /start\(\{ consentGiven: true \}\)/);
+  assert.match(control, /onInsert\(text\)/);
+  assert.doesNotMatch(control, /sendUserMessage|askHEY|sessionStorage|localStorage/);
+});
+
 test("dictation UI strings are translated for every supported locale", () => {
   const locales = Object.keys(translations);
   const englishKeys = Object.keys(translations.en.chat.dictation).sort();

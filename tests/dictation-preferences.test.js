@@ -6,6 +6,7 @@ import {
   normalizeDictationPreferences,
 } from "../src/lib/dictationPreferences.js";
 import { createBrowserSpeechProvider, createDictationSession } from "../src/lib/voiceProviders.js";
+import { setAccountScope } from "../src/core/accountScope.js";
 
 class MemoryStorage {
   values = new Map();
@@ -89,6 +90,37 @@ test("configured speech language reaches both dictation sessions and browser rec
   assert.equal(recognition.lang, "ku-Arab");
   provider.stop(recognition);
   assert.equal(provider.start({ language: "bad_locale" }).lang, "en-US");
+});
+
+test("a dictation session snapshots account language, corrections and snippets and drops callbacks after account change", async () => {
+  setAccountScope("dictation-snapshot-a");
+  let callbacks;
+  let startOptions;
+  const transcripts = [];
+  const sessionPreferences = normalizeDictationPreferences({
+    language: "ku-Arab",
+    corrections: [{ from: "hey orbit", to: "HEY Orbit" }],
+    snippets: [{ name: "my address", text: "Private address" }],
+  });
+  const session = createDictationSession({
+    language: sessionPreferences.language,
+    corrections: [
+      ...sessionPreferences.corrections,
+      ...sessionPreferences.snippets.map(({ name, text }) => ({ from: name, to: text })),
+    ],
+    speechProvider: { start(value) { startOptions = value; callbacks = value; return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } } },
+    onTranscript: (text) => transcripts.push(text),
+  });
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  assert.equal(startOptions.language, "ku-Arab");
+  callbacks.onTranscript("Hey Orbit use my address");
+  assert.deepEqual(transcripts, ["HEY Orbit use Private address"]);
+  setAccountScope("dictation-snapshot-b");
+  callbacks.onTranscript("late account text");
+  assert.deepEqual(transcripts, ["HEY Orbit use Private address"]);
+  session.destroy();
+  setAccountScope(null);
 });
 
 test("preference persistence reports account, storage and read-back failures without fake success", () => {

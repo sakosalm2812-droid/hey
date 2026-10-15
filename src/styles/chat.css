@@ -108,6 +108,23 @@
 .hey-chat-fusion-opt-in input { accent-color: var(--accent); }
 .hey-chat-fusion-opt-in:has(input:disabled) { opacity: .6; cursor: default; }
 .hey-dictation { display: grid; gap: 8px; min-width: 0; }
+.hey-dictation__preferences { padding: 8px 10px; border: 1px solid var(--border); border-radius: 11px; color: var(--text-secondary); font-size: 11px; }
+.hey-dictation__preferences summary { width: fit-content; color: var(--text-secondary); cursor: pointer; }
+.hey-dictation__preferences fieldset { display: grid; gap: 10px; min-width: 0; margin: 10px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 9px; }
+.hey-dictation__preferences legend { padding: 0 4px; color: var(--text-primary); }
+.hey-dictation__preferences label { display: grid; gap: 4px; color: var(--text-secondary); }
+.hey-dictation__preferences input,
+.hey-dictation__preferences textarea { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--glass-bg); color: var(--text-primary); font: inherit; }
+.hey-dictation__preferences input:focus-visible,
+.hey-dictation__preferences textarea:focus-visible,
+.hey-dictation__preferences button:focus-visible,
+.hey-dictation__preferences summary:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.hey-dictation__preference-group { display: grid; gap: 8px; }
+.hey-dictation__preference-group h4 { margin: 0; color: var(--text-primary); font-size: 11px; }
+.hey-dictation__preference-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; gap: 8px; }
+.hey-dictation__preferences fieldset:disabled { opacity: .65; }
+.hey-dictation__preferences fieldset button { min-height: 29px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+@media (max-width: 480px) { .hey-dictation__preference-row { grid-template-columns: 1fr; } }
 .hey-dictation__controls { display: flex; min-height: 30px; align-items: center; }
 .hey-dictation__trigger,
 .hey-dictation__stop { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--glass-bg); color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
