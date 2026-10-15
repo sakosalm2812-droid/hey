@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { evaluateAttentionCandidate, isWithinQuietHours } from "../src/core/attentionPolicy.js";
 import { presentNotification } from "../src/core/notificationCenter.js";
-import { createVoiceSession } from "../src/lib/voiceProviders.js";
+import { createDictationSession, createVoiceSession } from "../src/lib/voiceProviders.js";
 import { VOICE_STATES } from "../src/core/voiceState.js";
 import { ProactiveEngine } from "../src/core/proactiveEngine.js";
 import { setAccountScope } from "../src/core/accountScope.js";
@@ -80,6 +80,67 @@ test("concurrent voice starts share one provider session; ended sessions cannot 
   assert.equal(starts, 1);
   session.destroy();
   assert.equal((await session.start()).success, false);
+});
+
+test("dictation requires explicit consent and forwards text without invoking a submission path", async () => {
+  let callbacks;
+  let permissionRequests = 0;
+  const transcripts = [];
+  const session = createDictationSession({
+    speechProvider: { start(value) { callbacks = value; return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => { permissionRequests += 1; return { getTracks: () => [] }; } } } },
+    onTranscript: (text) => transcripts.push(text),
+  });
+
+  assert.equal((await session.start()).status, "consent_required");
+  assert.equal(permissionRequests, 0);
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks.onTranscript("  turn this into a note  ");
+  assert.deepEqual(transcripts, ["turn this into a note"]);
+  session.destroy();
+});
+
+test("dictation cancellation during permission prompt cannot start recognition or emit stale text", async () => {
+  let resolvePermission;
+  let recognitionStarts = 0;
+  const transcripts = [];
+  const session = createDictationSession({
+    speechProvider: { start() { recognitionStarts += 1; return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: () => new Promise((resolve) => { resolvePermission = resolve; }) } } },
+    onTranscript: (text) => transcripts.push(text),
+  });
+
+  const starting = session.start({ consentGiven: true });
+  await Promise.resolve();
+  session.stop();
+  resolvePermission({ getTracks: () => [] });
+  assert.equal((await starting).status, "cancelled");
+  assert.equal(recognitionStarts, 0);
+  assert.deepEqual(transcripts, []);
+  session.destroy();
+});
+
+test("dictation account switch ends the session and suppresses late transcript callbacks", async () => {
+  let callbacks;
+  let stops = 0;
+  const transcripts = [];
+  setAccountScope("dictation-account-a");
+  const session = createDictationSession({
+    speechProvider: { start(value) { callbacks = value; return {}; }, stop() { stops += 1; } },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } } },
+    onTranscript: (text) => transcripts.push(text),
+  });
+  try {
+    assert.equal((await session.start({ consentGiven: true })).success, true);
+    setAccountScope("dictation-account-b");
+    callbacks.onTranscript("private text from prior account");
+    assert.equal(stops, 1);
+    assert.deepEqual(transcripts, []);
+    assert.equal((await session.start({ consentGiven: true })).status, "session_ended");
+  } finally {
+    session.destroy();
+    setAccountScope(null);
+  }
 });
 
 test("proactive event retries deduplicate, persistence recovers, and unsupported channels never claim delivery", () => {

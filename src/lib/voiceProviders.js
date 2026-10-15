@@ -1,5 +1,6 @@
 import { VOICE_STATES, createVoiceState } from "../core/voiceState.js";
 import { resolveUtteranceVoice, stripWakePhrase } from "../core/heyVoiceSettings.js";
+import { getAccountScope, subscribeAccountScope } from "../core/accountScope.js";
 
 export function createBrowserSpeechProvider(environment = globalThis) {
   const Recognition = environment.SpeechRecognition || environment.webkitSpeechRecognition;
@@ -155,4 +156,119 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
   return { start, stop, interrupt: stop, destroy, snapshot: () => state.snapshot() };
 }
 
-export default { createBrowserSpeechProvider, createBrowserSpeechSynthesisProvider, requestMicrophonePermission, stripWakeWord, createVoiceSession };
+/**
+ * A dictation-only session. It requires an explicit per-start consent signal,
+ * forwards recognized text only to the caller, and never stores or submits it.
+ * Browser speech recognition may send audio to the browser vendor; callers
+ * should disclose that before asking the user to consent.
+ */
+export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange } = {}) {
+  const state = createVoiceState();
+  const startingScope = getAccountScope();
+  let recognition = null;
+  let generation = 0;
+  let starting = null;
+  let destroyed = false;
+  let active = false;
+
+  function transition(nextState, error = null) {
+    const result = state.transition(nextState);
+    if (result.success && !destroyed) onStateChange?.({ ...result, error });
+    return result;
+  }
+
+  function stop() {
+    generation += 1;
+    active = false;
+    try { speechProvider?.stop(recognition); } catch { /* The local session is still stopped. */ }
+    recognition = null;
+    if ([VOICE_STATES.listening, VOICE_STATES.interrupted].includes(state.state)) {
+      if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.interrupted);
+      transition(VOICE_STATES.idle);
+    }
+  }
+
+  const unsubscribeScope = subscribeAccountScope(() => {
+    if (getAccountScope() !== startingScope) {
+      stop();
+      destroyed = true;
+      unsubscribeScope();
+    }
+  });
+
+  async function start({ consentGiven = false } = {}) {
+    if (destroyed || getAccountScope() !== startingScope) {
+      return { success: false, status: "session_ended", error: "Dictation session ended after the account changed." };
+    }
+    if (consentGiven !== true) {
+      return { success: false, status: "consent_required", error: "Consent is required before dictation starts." };
+    }
+    if (state.state === VOICE_STATES.listening) return { success: true, status: state.state, reused: true };
+    if (starting) return starting;
+    starting = startListening();
+    try { return await starting; } finally { starting = null; }
+  }
+
+  async function startListening() {
+    if (!speechProvider) {
+      transition(VOICE_STATES.error, "Speech recognition is unavailable in this runtime.");
+      return { success: false, status: VOICE_STATES.error, error: "Speech recognition is unavailable in this runtime." };
+    }
+    if (environment.navigator?.onLine === false) {
+      transition(VOICE_STATES.offline, "The browser is offline.");
+      return { success: false, status: VOICE_STATES.offline, error: "The browser is offline." };
+    }
+    const currentGeneration = ++generation;
+    const permission = await requestMicrophonePermission(environment);
+    if (destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) {
+      return { success: false, status: "cancelled", error: "Dictation start was cancelled." };
+    }
+    if (!permission.granted) {
+      transition(VOICE_STATES.permissionRequired, permission.error);
+      return { success: false, status: VOICE_STATES.permissionRequired, error: permission.error };
+    }
+    if (destroyed || getAccountScope() !== startingScope) {
+      return { success: false, status: "session_ended", error: "Dictation session ended after the account changed." };
+    }
+    if ([VOICE_STATES.error, VOICE_STATES.offline, VOICE_STATES.permissionRequired].includes(state.state)) state.transition(VOICE_STATES.idle);
+    active = true;
+    transition(VOICE_STATES.listening);
+    try {
+      recognition = speechProvider.start({
+        onTranscript: (transcript) => {
+          const text = typeof transcript === "string" ? transcript.trim() : "";
+          if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope || !text) return;
+          onTranscript?.(text);
+        },
+        onError: (error) => {
+          if (currentGeneration === generation && !destroyed) {
+            active = false;
+            transition(VOICE_STATES.error, error);
+          }
+        },
+        onEnd: () => {
+          if (currentGeneration !== generation) return;
+          active = false;
+          recognition = null;
+          if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.idle);
+        },
+      });
+    } catch (error) {
+      active = false;
+      transition(VOICE_STATES.error, error?.message || "Speech recognition could not start.");
+      return { success: false, status: VOICE_STATES.error, error: error?.message || "Speech recognition could not start." };
+    }
+    return { success: true, status: VOICE_STATES.listening };
+  }
+
+  function destroy() {
+    if (destroyed) return;
+    stop();
+    destroyed = true;
+    unsubscribeScope();
+  }
+
+  return { start, stop, destroy, snapshot: () => state.snapshot() };
+}
+
+export default { createBrowserSpeechProvider, createBrowserSpeechSynthesisProvider, requestMicrophonePermission, stripWakeWord, createVoiceSession, createDictationSession };
