@@ -55,6 +55,8 @@ import {
   getToolLifecycleContract,
   toolLibraryPreferenceStore,
   executeTool,
+  createToolInvocationPlan,
+  executeToolInvocationPlan,
 } from "./toolRegistry.js";
 
 import {
@@ -86,7 +88,7 @@ import {
 
 import { evaluateResponse, buildQualityInstruction } from "./qualityEngine.js";
 import { processInputFusion, createTextInput, createVoiceInput, createImageInput, createScreenInput, createGestureInput, createFileInput, createSelectionInput, createEventInput, MODALITIES, INPUT_STAGES } from "./inputFusion.js";
-import { createAction, listActions, getAction, approveAction, executeAction, undoAction } from "./actionEngine.js";
+import { createAction, listActions, getAction, approveAction, executeAction, undoAction, invalidateActionPreviews } from "./actionEngine.js";
 import { issueActionMandate, verifyAndConsumeMandate, InMemoryMandateStore, MandateStoreContract } from "./actionMandate.js";
 import { SupabaseMandateStore } from "./supabaseMandateStore.js";
 import { createEvidenceEnvelope, verifyEvidenceEnvelope, invalidateEvidence, InMemoryEvidenceStore, EvidenceStoreContract, EVIDENCE_ENVELOPE_FORMAT, EVIDENCE_STORE_CONTRACT_VERSION } from "./evidenceIntegrity.js";
@@ -97,7 +99,7 @@ import { createMission, getMission, getAllMissions, getActiveMissions, getMissio
 import { parseNaturalCommand } from "./commandParser.js";
 import { understandVoiceCommand } from "./voiceCommandUnderstanding.js";
 import { createDictationEditSession } from "../lib/dictationEditProposals.js";
-import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
+import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, setOnboardingMotivations, getOnboardingMotivations, rankOnboardingStarterSuggestions, ONBOARDING_MOTIVATIONS, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
 import { defaultTutorials } from "./tutorialCatalog.js";
 import { workspaceEngine, createWidget, getWidget, getAllWidgets, getWidgetsByFamily, getActiveWidgets, updateWidget, setWidgetState, moveWidget, resizeWidget, bringWidgetToFront, sendWidgetToBack, pinWidget, groupWidgets, ungroupWidgets, dockWidget, undockWidget, closeWidget, deleteWidget, handleSemanticDrop, saveLayout, loadLayout, getLayouts, deleteLayout, handleMonitorChange, subscribeToWorkspace, WIDGET_STATES, WIDGET_FAMILIES, DRAG_TYPES, SNAP_MODES } from "./workspaceEngine.js";
 import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
@@ -546,6 +548,8 @@ import {
       stop: stopToolLibraryEntry,
       lifecycle: getToolLifecycleContract,
       execute: executeTool,
+      plan: createToolInvocationPlan,
+      executePlan: executeToolInvocationPlan,
       preferences: toolLibraryPreferenceStore,
     },
 
@@ -633,6 +637,7 @@ import {
       approve: approveAction,
       execute: executeAction,
       undo: undoAction,
+      invalidatePreviews: invalidateActionPreviews,
     },
 
     mandates: {
@@ -782,6 +787,9 @@ import {
       setAccessibility: setOnboardingAccessibility,
       setStarterSpaces: setOnboardingStarterSpaces,
       getStarterSpaces: getOnboardingStarterSpaces,
+      setMotivations: setOnboardingMotivations,
+      getMotivations: getOnboardingMotivations,
+      rankStarterSuggestions: rankOnboardingStarterSuggestions,
       selectPracticeTask,
       completePracticeTask,
       getPracticeTasks,
@@ -801,6 +809,7 @@ import {
       stages: ONBOARDING_STAGES,
       steps: ONBOARDING_STEPS,
       practiceTasks: PRACTICE_TASKS,
+      motivations: ONBOARDING_MOTIVATIONS,
       defaultTutorials,
     },
 
@@ -1022,6 +1031,7 @@ import {
 export const events = HEY.events;
 export const onboarding = HEY.onboarding;
 export const spaces = HEY.spaces;
+export { setOnboardingMotivations, getOnboardingMotivations, rankOnboardingStarterSuggestions, ONBOARDING_MOTIVATIONS };
 export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
 export { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS };
 export { understandVoiceCommand, createDictationEditSession };

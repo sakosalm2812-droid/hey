@@ -55,16 +55,21 @@ test("transport binds claim, acknowledgement and failure to authenticated device
   const calls = [];
   const queue = {
     async claimNext(...args) { calls.push(["claim", ...args]); return { commandId, envelope: { action: "computer.open_url" }, leaseToken }; },
+    async renewLease(...args) { calls.push(["renew", ...args]); return { renewed: true, leaseUntil: Date.parse("2026-10-15T10:00:30.000Z"), idempotent: true }; },
     async acknowledge(...args) { calls.push(["ack", ...args]); return true; },
     async recordFailure(...args) { calls.push(["fail", ...args]); return true; },
   };
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, leaseMs: 10_000 }, credentialStore, queue }), {
     ok: true, status: 200, claim: { commandId, envelope: { action: "computer.open_url" }, leaseToken },
   });
+  assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew-one", leaseMs: 10_000 }, credentialStore, queue }), {
+    ok: true, status: 200, renewal: { renewed: true, leaseUntil: Date.parse("2026-10-15T10:00:30.000Z"), idempotent: true },
+  });
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "ack", deviceId, commandId, leaseToken }, credentialStore, queue }), { ok: true, status: 200, accepted: true });
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "fail", deviceId, commandId, leaseToken }, credentialStore, queue }), { ok: true, status: 200, accepted: true });
   assert.deepEqual(calls, [
     ["claim", accountId, deviceId, 10_000],
+    ["renew", accountId, deviceId, commandId, leaseToken, "renew-one", 10_000],
     ["ack", accountId, deviceId, commandId, leaseToken],
     ["fail", accountId, deviceId, commandId, leaseToken],
   ]);
@@ -76,6 +81,8 @@ test("malformed, spoofed, revoked and mismatched credentials fail before queue a
   const queue = { async claimNext() { queueCalls += 1; return null; } };
   const goodStore = { async authenticate() { return { accountId, deviceId, active: true }; } };
   assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, leaseMs: 300_001 }), null);
+  assert.equal(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew", leaseMs: 300_001 }), null);
+  assert.equal(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "" }), null);
   const accessorRequest = { operation: "claim", deviceId };
   let getterCalls = 0;
   Object.defineProperty(accessorRequest, "leaseMs", { enumerable: true, get() { getterCalls += 1; return 30_000; } });

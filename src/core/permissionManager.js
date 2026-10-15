@@ -2,9 +2,12 @@ import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { resolveAccountPlan } from "../lib/accountRecords.js";
 import { canGrantPermission } from "../lib/permissionPolicy.js";
+import { getAccountScope } from "./accountScope.js";
 
 const permissions = new Map();
+const providerPermissionSnapshots = new WeakMap();
 let permissionOwnerId = null;
+let permissionRevision = 0;
 
 export const PERMISSION_RISK = Object.freeze({
   low: 0,
@@ -231,6 +234,7 @@ export function grantPermission(
   };
 
   permissions.set(key, value);
+  permissionRevision += 1;
 
   publish("permission.updated", value);
 
@@ -276,6 +280,7 @@ export function revokePermission(
   };
 
   permissions.set(key, value);
+  permissionRevision += 1;
 
   publish("permission.updated", value);
 
@@ -319,6 +324,7 @@ export function listPermissions() {
 export function clearPermissions() {
   permissions.clear();
   permissionOwnerId = null;
+  permissionRevision += 1;
 }
 
 export function seedPermissions(records = [], userId = null) {
@@ -355,9 +361,57 @@ export function seedPermissions(records = [], userId = null) {
                 Date.now(),
             ),
     });
+    permissionRevision += 1;
   });
 
   return permissions.size;
+}
+
+/** Capture provider grants from the owner-bound permission store for one account epoch. */
+export function getProviderPermissionSnapshot(models, accountScope = getAccountScope()) {
+  const currentScope = getAccountScope();
+  const ownerMatches = typeof permissionOwnerId === "string" && permissionOwnerId.length > 0
+    && accountScope === `account:${permissionOwnerId}`;
+  const accountMatches = accountScope === currentScope && accountScope !== "anonymous" && ownerMatches;
+  const permittedModels = [];
+  if (accountMatches && Array.isArray(models)) {
+    for (const model of models) {
+      const providerId = model?.providerId;
+      const local = model?.local === true;
+      const basePermission = local ? "provider.local" : "provider.remote";
+      if (typeof providerId !== "string" || !providerId.trim()) continue;
+      if (!hasPermission(basePermission, "account", permissionOwnerId)
+        || !hasPermission(`provider:${providerId}`, "account", permissionOwnerId)) continue;
+      if (!permittedModels.some((entry) => entry.providerId === providerId && entry.local === local)) {
+        permittedModels.push(Object.freeze({ providerId, local }));
+      }
+    }
+  }
+  const snapshot = Object.freeze({
+    permissionRevision,
+    permittedModels: Object.freeze(permittedModels),
+  });
+  providerPermissionSnapshots.set(snapshot, { accountScope, permissionRevision, permissionOwnerId });
+  return snapshot;
+}
+
+export function isProviderPermissionSnapshotCurrent(snapshot) {
+  const binding = snapshot && typeof snapshot === "object" ? providerPermissionSnapshots.get(snapshot) : null;
+  if (!binding || binding.accountScope !== getAccountScope()
+    || binding.accountScope === "anonymous" || binding.permissionRevision !== permissionRevision
+    || binding.permissionOwnerId !== permissionOwnerId || binding.accountScope !== `account:${permissionOwnerId}`
+    || snapshot.permissionRevision !== permissionRevision
+    || !Array.isArray(snapshot.permittedModels)) return false;
+  return snapshot.permittedModels.every(({ providerId, local }) => hasPermission(
+    local ? "provider.local" : "provider.remote",
+    "account",
+    permissionOwnerId,
+  ) && hasPermission(`provider:${providerId}`, "account", permissionOwnerId));
+}
+
+export function isProviderModelPermitted(snapshot, model) {
+  if (!isProviderPermissionSnapshotCurrent(snapshot)) return false;
+  return snapshot.permittedModels.some((entry) => entry.providerId === model?.providerId && entry.local === (model?.local === true));
 }
 
 export function authorizeExecution(
@@ -863,6 +917,9 @@ export default {
   grantPermission,
   revokePermission,
   hasPermission,
+  getProviderPermissionSnapshot,
+  isProviderPermissionSnapshotCurrent,
+  isProviderModelPermitted,
   listPermissions,
   clearPermissions,
   seedPermissions,
