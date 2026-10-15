@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Check, CircleHelp, LockKeyhole, Search, ShieldAlert, Wrench } from "lucide-react";
 import { HEY } from "./core/index.js";
+import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
 import "./ToolLibraryPage.css";
 
 const STATUS_DETAILS = {
@@ -14,7 +15,24 @@ function describeName(name) {
   return name.split(".").map((word) => word.replaceAll(/[_-]/g, " ")).join(" / ");
 }
 
-function ToolCard({ tool }) {
+function CapabilityDetails({ capabilities, errors }) {
+  return (
+    <div className="tool-library__meta-group">
+      <h3>Capabilities</h3>
+      <ul>
+        {capabilities.map((capability, index) => (
+          <li key={`${capability.capability || "unknown"}-${index}`}>
+            <span>{capability.capability || "Invalid capability declaration"}</span>
+            <span className="tool-library__capability-status">{capability.status.replaceAll("_", " ")}</span>
+          </li>
+        ))}
+      </ul>
+      {errors.map((message) => <p className="tool-library__capability-error" key={message}>{message}</p>)}
+    </div>
+  );
+}
+
+function ToolCard({ tool, interfaceLevel }) {
   const status = STATUS_DETAILS[tool.status] || STATUS_DETAILS.unsupported;
   const StatusIcon = status.Icon;
   const capabilityErrors = tool.capabilities
@@ -31,10 +49,10 @@ function ToolCard({ tool }) {
         </span>
       </div>
       <h2 id={`tool-${encodeURIComponent(tool.name)}`}>{describeName(tool.name)}</h2>
-      <p className="tool-library__tool-name">{tool.name}</p>
+      {interfaceLevel === "advanced" && <p className="tool-library__tool-name">{tool.name}</p>}
       <dl className="tool-library__details">
         <div><dt>Risk</dt><dd>{tool.riskLevel || "Not specified"}</dd></div>
-        <div><dt>Lifecycle</dt><dd>{tool.lifecycle}</dd></div>
+        {interfaceLevel === "advanced" && <div><dt>Lifecycle</dt><dd>{tool.lifecycle}</dd></div>}
         {tool.requiresConfirmation && <div><dt>Confirmation</dt><dd>Required before execution</dd></div>}
       </dl>
       {tool.permissions.length > 0 && (
@@ -44,18 +62,14 @@ function ToolCard({ tool }) {
         </div>
       )}
       {tool.capabilities.length > 0 && (
-        <div className="tool-library__meta-group">
-          <h3>Capabilities</h3>
-          <ul>
-            {tool.capabilities.map((capability, index) => (
-              <li key={`${capability.capability || "unknown"}-${index}`}>
-                <span>{capability.capability || "Invalid capability declaration"}</span>
-                <span className="tool-library__capability-status">{capability.status.replaceAll("_", " ")}</span>
-              </li>
-            ))}
-          </ul>
-          {capabilityErrors.map((message) => <p className="tool-library__capability-error" key={message}>{message}</p>)}
-        </div>
+        interfaceLevel === "advanced"
+          ? <CapabilityDetails capabilities={tool.capabilities} errors={capabilityErrors} />
+          : (
+            <details className="tool-library__advanced-details">
+              <summary>Technical capabilities ({tool.capabilities.length})</summary>
+              <CapabilityDetails capabilities={tool.capabilities} errors={capabilityErrors} />
+            </details>
+          )
       )}
       {tool.status === "permission_required" && (
         <p className="tool-library__permission-note" role="note">This tool needs the listed permission before its capability can be used.</p>
@@ -71,6 +85,7 @@ function ToolCard({ tool }) {
 }
 
 export default function ToolLibraryPage() {
+  const { level: interfaceLevel } = useInterfaceLevel();
   const [tools, setTools] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -110,7 +125,11 @@ export default function ToolLibraryPage() {
         <div>
           <p className="tool-library__eyebrow">HEY workspace</p>
           <h1 id="tool-library-title">Tools</h1>
-          <p className="tool-library__intro">Review registered tools, the capabilities they require, and their availability on this platform.</p>
+          <p className="tool-library__intro">
+            {interfaceLevel === "advanced"
+              ? "Review registered tools, the capabilities they require, and their availability on this platform."
+              : "Scan registered tools, the access they need, and whether they are available here."}
+          </p>
         </div>
         {!loading && !error && <p className="tool-library__count" aria-live="polite">{tools.length} {tools.length === 1 ? "tool" : "tools"} registered</p>}
       </header>
@@ -152,7 +171,7 @@ export default function ToolLibraryPage() {
 
       {!loading && !error && filteredTools.length > 0 && (
         <div className="tool-library__grid">
-          {filteredTools.map((tool) => <ToolCard key={tool.name} tool={tool} />)}
+          {filteredTools.map((tool) => <ToolCard key={tool.name} tool={tool} interfaceLevel={interfaceLevel} />)}
         </div>
       )}
     </section>

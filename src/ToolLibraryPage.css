@@ -163,6 +163,25 @@
 .tool-library__capability-error { margin: 8px 0 0; color: #ff9b8b; font-size: 12px; }
 .tool-library__permission-note { margin: 16px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; line-height: 1.5; }
 
+.tool-library__advanced-details {
+  margin-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  padding-top: 14px;
+}
+
+.tool-library__advanced-details summary {
+  width: fit-content;
+  color: var(--text-secondary, #a7a4ae);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tool-library__advanced-details summary:focus-visible {
+  outline: 2px solid var(--gold-primary, #d6b66b);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
 .tool-library__message {
   display: flex;
   align-items: center;

@@ -38,6 +38,7 @@ import {
 import { useEffect, useRef, useState, useCallback } from "react";
 
 import { useHEYTheme } from "../../context/ThemeContext";
+import { useInterfaceLevel } from "../../context/InterfaceLevelContext.jsx";
 import { buzz, confirmSound } from "../../lib/heyFeedback";
 import { springs } from "../../lib/heyMotion";
 import DynamicIsland from "./DynamicIsland";
@@ -85,6 +86,7 @@ const bottomNavItems = [
 
 export default function AppLayout() {
   const location = useLocation();
+  const { level: interfaceLevel } = useInterfaceLevel();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
@@ -174,7 +176,7 @@ export default function AppLayout() {
   );
 
   return (
-    <div className="hey-app-shell">
+    <div className="hey-app-shell" data-interface-level={interfaceLevel}>
       <BlockBackground />
       
       {/* SIDEBAR */}

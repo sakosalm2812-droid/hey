@@ -1758,6 +1758,79 @@ textarea {
   line-height: 1.5;
 }
 
+.hey-interface-level-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.hey-interface-level-options legend {
+  grid-column: 1 / -1;
+  margin-bottom: 8px;
+}
+
+.hey-interface-level-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .025);
+  cursor: pointer;
+  transition: border-color .2s var(--ease), background .2s var(--ease);
+}
+
+.hey-interface-level-options label.selected {
+  border-color: var(--gold-primary);
+  background: rgba(247, 201, 111, .08);
+}
+
+.hey-interface-level-options input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--gold-primary);
+}
+
+.hey-interface-level-options input:focus-visible {
+  outline: 2px solid var(--gold-primary);
+  outline-offset: 3px;
+}
+
+.hey-interface-level-options span {
+  display: grid;
+  gap: 5px;
+}
+
+.hey-interface-level-options strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.hey-interface-level-options small,
+.hey-interface-level-status,
+.hey-interface-level-error {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hey-interface-level-status,
+.hey-interface-level-error {
+  margin: 12px 0 0;
+}
+
+.hey-interface-level-error {
+  color: var(--coral);
+}
+
 .hey-settings-rows {
   display: flex;
   flex-direction: column;
@@ -2037,6 +2110,10 @@ textarea {
 }
 
 @media (max-width: 520px) {
+  .hey-interface-level-options {
+    grid-template-columns: 1fr;
+  }
+
   .hey-settings-status {
     grid-template-columns: 1fr;
   }

@@ -118,6 +118,28 @@ function snapshotObject(value, label) {
   return snapshot;
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+async function sha256Canonical(value) {
+  if (!globalThis.crypto?.subtle || typeof globalThis.TextEncoder !== "function") {
+    throw new Error("Web Crypto is required to seal evaluation reports.");
+  }
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function requireExactKeys(value, expectedKeys, label) {
+  const actual = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new TypeError(`${label} contains missing or unsupported fields.`);
+  }
+}
+
 function requireFiniteNonNegative(value, label) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new TypeError(`${label} must be a finite non-negative number.`);
@@ -143,7 +165,7 @@ function percentileNearestRank(sortedValues, percentile) {
  * bounded evaluation run. The inputs are observations supplied by the caller;
  * this function does not execute a model or verify their external origin.
  */
-export function createEvaluationReport(input) {
+export async function createEvaluationReport(input) {
   const source = snapshotObject(input, "Evaluation run");
   const model = snapshotObject(source.model, "Evaluation model");
   const modelId = requireText(model.id, "Evaluation model id");
@@ -156,6 +178,9 @@ export function createEvaluationReport(input) {
   const datasetSha256 = requireHash(source.datasetSha256, "Evaluation dataset hash");
   const evaluatedAt = requireCanonicalTimestamp(source.evaluatedAt, "Evaluation timestamp");
   const hardware = requireText(source.hardware, "Evaluation hardware");
+  const runtime = requireText(source.runtime, "Evaluation runtime");
+  const runtimeVersion = requireText(source.runtimeVersion, "Evaluation runtime version");
+  if (/^(main|master|latest|stable)$/i.test(runtimeVersion)) throw new TypeError("Evaluation runtime version must be pinned.");
   const runId = requireText(source.runId, "Evaluation run id");
   const pricing = snapshotObject(source.pricing, "Evaluation pricing");
   const inputUsdPerMillion = requireFiniteNonNegative(pricing.inputUsdPerMillion, "Input token price");
@@ -165,6 +190,7 @@ export function createEvaluationReport(input) {
   }
 
   const caseIds = new Set();
+  const measuredRows = [];
   let passedCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -186,12 +212,18 @@ export function createEvaluationReport(input) {
     outputTokens += entry.outputTokens;
     if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) throw new TypeError("Evaluation token totals exceed the safe integer range.");
     latencies.push(entry.latencyMs);
+    measuredRows.push([entry.passed, entry.latencyMs, entry.inputTokens, entry.outputTokens]);
   }
 
   latencies.sort((left, right) => left - right);
   const totalCostUsd = (inputTokens * inputUsdPerMillion + outputTokens * outputUsdPerMillion) / 1_000_000;
   if (!Number.isFinite(totalCostUsd)) throw new TypeError("Evaluation cost is outside the supported numeric range.");
   const sampleCount = source.samples.length;
+  const measurementsDigest = await sha256Canonical(measuredRows.sort((left, right) => {
+    const leftKey = canonicalJson(left);
+    const rightKey = canonicalJson(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  }));
   const evaluation = Object.freeze({
     suite,
     suiteRevision,
@@ -200,9 +232,12 @@ export function createEvaluationReport(input) {
     qualityScore: passedCount / sampleCount,
     latencyP95Ms: percentileNearestRank(latencies, 0.95),
     hardware,
+    runtime,
+    runtimeVersion,
     runId,
+    measurementsDigest,
   });
-  return Object.freeze({
+  const report = {
     schemaVersion: 1,
     modelId,
     modelRevision,
@@ -216,9 +251,65 @@ export function createEvaluationReport(input) {
     latencyP99Ms: percentileNearestRank(latencies, 0.99),
     inputTokens,
     outputTokens,
+    inputUsdPerMillion,
+    outputUsdPerMillion,
     totalCostUsd,
     averageCostUsd: totalCostUsd / sampleCount,
-  });
+  };
+  report.reportDigest = await sha256Canonical(report);
+  return Object.freeze(report);
+}
+
+/** Return a detached report snapshot only when its canonical digest is valid. */
+export async function getVerifiedEvaluationReport(input) {
+  try {
+    const report = snapshotObject(input, "Evaluation report");
+    requireExactKeys(report, [
+      "schemaVersion", "modelId", "modelRevision", "modelWeightSha256", "evaluation", "sampleCount", "passedCount", "failedCount",
+      "latencyP50Ms", "latencyP95Ms", "latencyP99Ms", "inputTokens", "outputTokens", "inputUsdPerMillion", "outputUsdPerMillion",
+      "totalCostUsd", "averageCostUsd", "reportDigest",
+    ], "Evaluation report");
+    requireExactKeys(report.evaluation, [
+      "suite", "suiteRevision", "datasetSha256", "evaluatedAt", "qualityScore", "latencyP95Ms", "hardware", "runtime", "runtimeVersion", "runId", "measurementsDigest",
+    ], "Evaluation metadata");
+    if (report.schemaVersion !== 1 || !MODEL_ID_PATTERN.test(requireText(report.modelId, "Model id"))) return null;
+    requireText(report.modelRevision, "Model revision");
+    if (/^(main|master|latest|stable)$/i.test(report.modelRevision)) return null;
+    requireHash(report.modelWeightSha256, "Model weight hash");
+    requireHash(report.evaluation.datasetSha256, "Dataset hash");
+    if (typeof report.evaluation.measurementsDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(report.evaluation.measurementsDigest)) return null;
+    requireCanonicalTimestamp(report.evaluation.evaluatedAt, "Evaluation timestamp");
+    requireText(report.evaluation.suite, "Evaluation suite");
+    requireText(report.evaluation.suiteRevision, "Evaluation suite revision");
+    requireText(report.evaluation.hardware, "Evaluation hardware");
+    requireText(report.evaluation.runtime, "Evaluation runtime");
+    requireText(report.evaluation.runtimeVersion, "Evaluation runtime version");
+    if (/^(main|master|latest|stable)$/i.test(report.evaluation.runtimeVersion)) return null;
+    requireText(report.evaluation.runId, "Evaluation run id");
+    if (!Number.isSafeInteger(report.sampleCount) || report.sampleCount < 1 || report.sampleCount > MAX_EVALUATION_CASES
+      || !Number.isSafeInteger(report.passedCount) || report.passedCount < 0 || report.passedCount > report.sampleCount
+      || report.failedCount !== report.sampleCount - report.passedCount
+      || report.evaluation.qualityScore !== report.passedCount / report.sampleCount
+      || report.evaluation.latencyP95Ms !== report.latencyP95Ms
+      || ![report.latencyP50Ms, report.latencyP95Ms, report.latencyP99Ms].every((value) => Number.isFinite(value) && value > 0)
+      || report.latencyP50Ms > report.latencyP95Ms || report.latencyP95Ms > report.latencyP99Ms
+      || !Number.isSafeInteger(report.inputTokens) || report.inputTokens < 0
+      || !Number.isSafeInteger(report.outputTokens) || report.outputTokens < 0) return null;
+    const inputUsdPerMillion = requireFiniteNonNegative(report.inputUsdPerMillion, "Input token price");
+    const outputUsdPerMillion = requireFiniteNonNegative(report.outputUsdPerMillion, "Output token price");
+    const expectedCost = (report.inputTokens * inputUsdPerMillion + report.outputTokens * outputUsdPerMillion) / 1_000_000;
+    if (!Number.isFinite(expectedCost) || report.totalCostUsd !== expectedCost || report.averageCostUsd !== expectedCost / report.sampleCount) return null;
+    if (typeof report.reportDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(report.reportDigest)) return null;
+    const { reportDigest, ...body } = report;
+    return await sha256Canonical(body) === reportDigest ? report : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Verify the canonical, content-free digest on a previously created report. */
+export async function verifyEvaluationReport(input) {
+  return Boolean(await getVerifiedEvaluationReport(input));
 }
 
 /** Validate and freeze reproducible model/version/evaluation metadata. */
