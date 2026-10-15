@@ -8,9 +8,9 @@ export function createBrowserSpeechProvider(environment = globalThis) {
 
   return {
     kind: "browser",
-    start({ onTranscript, onError, onEnd }) {
+    start({ onTranscript, onError, onEnd, language = "en-US" }) {
       const recognition = new Recognition();
-      recognition.lang = "en-US";
+      recognition.lang = normalizeSpeechLanguage(language);
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
       recognition.onresult = (event) => onTranscript(event.results?.[0]?.[0]?.transcript?.trim() || "");
@@ -21,6 +21,12 @@ export function createBrowserSpeechProvider(environment = globalThis) {
     },
     stop(recognition) { recognition?.stop(); },
   };
+}
+
+function normalizeSpeechLanguage(language) {
+  if (typeof language !== "string" || language.length > 64) return "en-US";
+  try { return Intl.getCanonicalLocales(language)[0] || "en-US"; }
+  catch { return "en-US"; }
 }
 
 export function createBrowserSpeechSynthesisProvider(environment = globalThis) {
@@ -208,7 +214,7 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
  * Browser speech recognition may send audio to the browser vendor; callers
  * should disclose that before asking the user to consent.
  */
-export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, corrections = [] } = {}) {
+export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, corrections = [], language = "en-US" } = {}) {
   // Validate once when the session is created. The immutable snapshot keeps
   // later caller mutation from changing what an active microphone session emits.
   applyDictationCorrections("", corrections);
@@ -285,6 +291,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     transition(VOICE_STATES.listening);
     try {
       recognition = speechProvider.start({
+        language: normalizeSpeechLanguage(language),
         onTranscript: (transcript) => {
           const text = typeof transcript === "string" ? transcript.trim() : "";
           if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope || !text) return;
