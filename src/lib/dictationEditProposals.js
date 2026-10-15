@@ -4,6 +4,8 @@ import { normalizeDictationApplicationId, resolveDictationPreferences } from "./
 
 const MAX_EDIT_TEXT_LENGTH = 4096;
 const MAX_IN_FLIGHT_PROPOSALS = 2;
+const DEFAULT_REWRITE_TIMEOUT_MS = 15_000;
+const MAX_REWRITE_TIMEOUT_MS = 120_000;
 const TERMINAL_PUNCTUATION = /[.,!?;:…،؛؟۔。？！]+$/u;
 
 function readDataRecord(value, name, allowedKeys) {
@@ -152,10 +154,14 @@ function readProviderText(value) {
  * released only by the separate confirm call and is never inserted or sent.
  */
 export function createDictationEditSession(options = {}) {
-  const config = readDataRecord(options, "Dictation edit session options", ["preferences", "applicationId", "rewriteProvider"]);
+  const config = readDataRecord(options, "Dictation edit session options", ["preferences", "applicationId", "rewriteProvider", "rewriteTimeoutMs"]);
   const preferences = config.preferences ?? {};
   const applicationId = config.applicationId;
   const rewriteProvider = config.rewriteProvider;
+  const rewriteTimeoutMs = config.rewriteTimeoutMs ?? DEFAULT_REWRITE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(rewriteTimeoutMs) || rewriteTimeoutMs < 1 || rewriteTimeoutMs > MAX_REWRITE_TIMEOUT_MS) {
+    throw new TypeError(`rewriteTimeoutMs must be an integer between 1 and ${MAX_REWRITE_TIMEOUT_MS}.`);
+  }
   const identity = applicationId === undefined || applicationId === null
     ? null
     : normalizeDictationApplicationId(applicationId);
@@ -251,12 +257,25 @@ export function createDictationEditSession(options = {}) {
           selectionDigest: request.selectionDigest,
           signal: controller.signal,
         });
+        let timeoutId;
+        let timedOut = false;
         try {
-          proposedText = readProviderText(await Reflect.apply(rewrite, rewriteProvider, [providerInput]));
+          const rewriteRequest = Promise.resolve(Reflect.apply(rewrite, rewriteProvider, [providerInput]));
+          const timeout = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => {
+              timedOut = true;
+              controller.abort();
+              reject(new Error("Rewrite provider timed out."));
+            }, rewriteTimeoutMs);
+          });
+          proposedText = readProviderText(await Promise.race([rewriteRequest, timeout]));
         } catch {
           if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
-          return fail("provider_failed", "rewrite_provider_failed");
+          return timedOut
+            ? fail("provider_timeout", "rewrite_provider_timed_out")
+            : fail("provider_failed", "rewrite_provider_failed");
         } finally {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
           controllers.delete(controller);
         }
         if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
