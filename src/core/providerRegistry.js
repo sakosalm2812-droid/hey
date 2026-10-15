@@ -87,6 +87,11 @@ export function getProvider(providerId) {
   return providers.get(providerId) || null;
 }
 
+export function isProviderEnabled(providerId) {
+  const provider = providers.get(providerId);
+  return Boolean(provider && provider.enabled === true);
+}
+
 export function listProviders({ enabledOnly = false } = {}) {
   return Array.from(providers.values()).filter((provider) => !enabledOnly || provider.enabled);
 }
@@ -111,6 +116,7 @@ export default {
   attachEvaluationReport,
   unregisterProvider,
   getProvider,
+  isProviderEnabled,
   listProviders,
   listModels,
   clearProviders,

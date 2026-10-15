@@ -2,6 +2,7 @@ import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./
 import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { getTool } from "./toolRegistry.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
 export const SPACE_STORAGE_CONTRACT_VERSION = 2;
@@ -12,13 +13,15 @@ export const SPACE_CREATION_LIMITS = Object.freeze({
   maxSpacesPerAccount: 1000,
   maxPreferenceIdsPerCategory: 32,
   maxPreferenceIdLength: 64,
+  maxToolsPerSpace: 64,
+  maxToolNameLength: 160,
   maxStoredChars: 1_000_000,
   previewLifetimeMs: 5 * 60 * 1000,
 });
 
 const STORAGE_KEY = "hey_spaces";
 const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, SPACE_STORAGE_CONTRACT_VERSION]);
-const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds"]);
+const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
 const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
 const activeLayoutPreferenceWrites = new Set();
 const CREATE_SPACE_PROMPT = /^(?:please\s+)?create\s+(?:a\s+)?(?:private\s+)?space\s+(?:called|named)\s+(.+)$/i;
@@ -101,6 +104,7 @@ function createDefaultSpaceLayoutPreferences() {
     favoriteToolIds: [],
     widgetIds: [],
     shortcutIds: [],
+    toolIds: [],
   };
 }
 
@@ -111,6 +115,7 @@ function cloneSpaceLayoutPreferences(preferences) {
     favoriteToolIds: [...preferences.favoriteToolIds],
     widgetIds: [...preferences.widgetIds],
     shortcutIds: [...preferences.shortcutIds],
+    toolIds: [...preferences.toolIds],
   };
 }
 
@@ -137,6 +142,42 @@ function normalizePreferenceIdList(value) {
   }
 }
 
+function normalizeSpaceToolIds(value) {
+  if (!Array.isArray(value)) return null;
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.getOwnPropertySymbols(value).length > 0) return null;
+    const length = descriptors.length?.value;
+    if (!Number.isInteger(length) || length < 0 || length > SPACE_CREATION_LIMITS.maxToolsPerSpace) return null;
+    if (Object.keys(descriptors).some((key) => key !== "length" && !/^(?:0|[1-9]\d*)$/.test(key))) return null;
+    const result = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[index];
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+      const name = descriptor.value;
+      if (!isSafeSpaceToolName(name)) return null;
+      if (result.includes(name)) return null;
+      result.push(name);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+function isSafeSpaceToolName(name) {
+  return typeof name === "string" && name.length > 0 && name.length <= SPACE_CREATION_LIMITS.maxToolNameLength
+    && name === name.trim()
+    && ![...name].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f);
+    });
+}
+
+function isCanonicalToolRegistered(name) {
+  try { return Boolean(getTool(name)); } catch { return false; }
+}
+
 function normalizeSpaceLayoutPreferences(value) {
   const safe = readDataRecord(value, ["contractVersion", "revision", ...SPACE_LAYOUT_PREFERENCE_FIELDS]);
   if (safe.error) return null;
@@ -147,7 +188,7 @@ function normalizeSpaceLayoutPreferences(value) {
   preferences.revision = input.revision;
   for (const field of SPACE_LAYOUT_PREFERENCE_FIELDS) {
     if (!Object.hasOwn(input, field)) continue;
-    const values = normalizePreferenceIdList(input[field]);
+    const values = field === "toolIds" ? normalizeSpaceToolIds(input[field]) : normalizePreferenceIdList(input[field]);
     if (!values) return null;
     preferences[field] = values;
   }
@@ -159,7 +200,7 @@ function normalizeSpaceLayoutPreferencePatch(value) {
   if (safe.error || Object.keys(safe.value).length === 0) return { error: safe.error || "At least one layout preference is required" };
   const patch = {};
   for (const [field, values] of Object.entries(safe.value)) {
-    const normalized = normalizePreferenceIdList(values);
+    const normalized = field === "toolIds" ? normalizeSpaceToolIds(values) : normalizePreferenceIdList(values);
     if (!normalized) return { error: `Invalid ${field}` };
     patch[field] = normalized;
   }
@@ -366,6 +407,11 @@ export class SpaceCreationEngine {
         };
       }
       if (current.revision === Number.MAX_SAFE_INTEGER) return { error: "Space layout preference revision limit reached" };
+      if (Object.hasOwn(patch.value, "toolIds")) {
+        const existingToolIds = new Set(current.toolIds);
+        const unregistered = patch.value.toolIds.find((name) => !existingToolIds.has(name) && !isCanonicalToolRegistered(name));
+        if (unregistered) return { error: "Tool is not registered in the canonical registry", code: "tool_not_registered" };
+      }
 
       const updatedPreferences = { ...cloneSpaceLayoutPreferences(current), ...patch.value, revision: current.revision + 1 };
       const updatedSpace = { ...currentSpace, layoutPreferences: updatedPreferences };
@@ -386,10 +432,54 @@ export class SpaceCreationEngine {
       const result = { success: true, accountScope: scope, spaceId, ...cloneSpaceLayoutPreferences(updatedPreferences) };
       this.notify("layout_preferences_updated", result);
       publish("spaces.layout_preferences_updated", result);
+      if (Object.hasOwn(patch.value, "toolIds")) {
+        this.notify("tool_membership_updated", result);
+        publish("spaces.tool_membership_updated", result);
+      }
       return result;
     } finally {
       activeLayoutPreferenceWrites.delete(writeLockKey);
     }
+  }
+
+  setToolMembership(request) {
+    const safeRequest = readDataRecord(request, ["accountScope", "spaceId", "toolName", "member", "expectedRevision"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, spaceId, toolName, member, expectedRevision } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to update Space tool membership" };
+    if (typeof accountScope !== "string" || accountScope !== scope || accountScope !== getAccountScope()) return { error: "Account scope mismatch" };
+    if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    if (!isSafeSpaceToolName(toolName)) {
+      return { error: "A valid canonical tool name is required" };
+    }
+    if (typeof member !== "boolean") return { error: "Tool membership must be explicitly enabled or disabled" };
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return { error: "A valid expected revision is required" };
+    if (member && !isCanonicalToolRegistered(toolName)) return { error: "Tool is not registered in the canonical registry", code: "tool_not_registered" };
+
+    const current = this.getLayoutPreferences(spaceId);
+    if (current.error) return current;
+    if (current.revision !== expectedRevision) {
+      return {
+        error: "Space layout preferences changed; reload before updating",
+        code: "stale_revision",
+        current,
+      };
+    }
+    const toolIds = new Set(current.toolIds);
+    if (member === toolIds.has(toolName)) return { ...current, changed: false };
+    if (member) {
+      if (toolIds.size >= SPACE_CREATION_LIMITS.maxToolsPerSpace) return { error: "Space tool limit reached", code: "space_tool_limit" };
+      toolIds.add(toolName);
+    } else toolIds.delete(toolName);
+
+    const updated = this.updateLayoutPreferences({
+      accountScope,
+      spaceId,
+      expectedRevision,
+      preferences: { toolIds: [...toolIds] },
+    });
+    return updated.success ? { ...updated, changed: true } : updated;
   }
 
   previewNaturalLanguageRequest(request) {
@@ -517,6 +607,16 @@ export function getSpaceLayoutPreferences(spaceId) {
  */
 export function updateSpaceLayoutPreferences(request) {
   return spaceCreationEngine.updateLayoutPreferences(request);
+}
+
+/**
+ * `HEY.spaces.setToolMembership({ accountScope, spaceId, toolName, member, expectedRevision })`.
+ * HEY private Spaces are general-purpose containers. This revision-checked
+ * reference membership requires a registered tool when adding; it does not
+ * grant permission or imply that the tool can execute in the current context.
+ */
+export function setSpaceToolMembership(request) {
+  return spaceCreationEngine.setToolMembership(request);
 }
 
 export function subscribeToPrivateSpaces(listener) {
