@@ -1,7 +1,11 @@
 const TAURI_PROTOCOL = "tauri:";
 
 export function isTauriRuntime() {
-  return typeof window !== "undefined" && window.location.protocol === TAURI_PROTOCOL;
+  if (typeof window === "undefined" || !window.location) return false;
+  const { protocol, hostname } = window.location;
+  if ((protocol === TAURI_PROTOCOL && hostname === "localhost")
+    || ((protocol === "http:" || protocol === "https:") && hostname === "tauri.localhost")) return true;
+  return Boolean(window.__TAURI_INTERNALS__);
 }
 
 function detectDesktopPlatform() {

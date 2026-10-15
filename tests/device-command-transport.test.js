@@ -160,6 +160,8 @@ test("edge stop route authenticates the account JWT and never accepts caller-sup
   assert.match(edge, /normalizeAccountDeviceRequest\(parsed\.value\)/);
   assert.match(edge, /revokeOwnedDeviceTransport\(\{\s*authenticatedAccountId: accountId,[\s\S]*?deviceId: accountRequest\.deviceId/);
   assert.match(edge, /rpc\("revoke_hey_device_transport", \{ p_account_id: userId, p_device_id: deviceId \}\)/);
+  assert.match(edge, /allowedOrigins = new Set\(\[allowedOrigin, "http:\/\/tauri\.localhost", "tauri:\/\/localhost"\]\)/);
+  assert.match(edge, /corsHeaders\(origin\)/);
 });
 
 test("device transport disables gateway JWT verification because it verifies JWTs or device secrets itself", async () => {

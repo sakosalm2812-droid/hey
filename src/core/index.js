@@ -180,6 +180,7 @@ import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion 
 
 import { getDeviceId, getDeviceName, renameDevice, startFabric, listPeers, requestHandoff, getHandoffBundle, clearHandoffBundle, acceptHandoff, producePairCode, registerPairCode, getPairCode } from "./deviceFabric.js";
 import { registerDeviceAdapter, unregisterDeviceAdapter, registerDevice, unregisterDevice, revokeDevice, listDevices, getDevice, getDeviceCapabilities, listDeviceAdapters, executeOnDevice } from "./deviceGateway.js";
+import { createDeviceCommandWorker, createEdgeDeviceCommandTransport, rotateTauriDeviceCommandCredential, startTauriDeviceCommandWorker, startTauriDeviceCommandWorkerForAccount } from "../lib/tauriDeviceCommandWorker.js";
 
 import {
   createArtifact,
@@ -589,6 +590,11 @@ import {
 
     devices: {
       SupabaseDeviceCommandQueueStore,
+      createCommandWorker: createDeviceCommandWorker,
+      createEdgeCommandTransport: createEdgeDeviceCommandTransport,
+      rotateCommandCredential: rotateTauriDeviceCommandCredential,
+      startTauriCommandWorker: startTauriDeviceCommandWorker,
+      startTauriCommandWorkerForAccount: startTauriDeviceCommandWorkerForAccount,
       registerAdapter: registerDeviceAdapter,
       unregisterAdapter: unregisterDeviceAdapter,
       register: registerDevice,

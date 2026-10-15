@@ -280,6 +280,23 @@ test("Tauri bridge stays inactive in a normal web runtime", () => {
   assert.equal(createTauriAdapter(), null);
 });
 
+test("Tauri bridge recognizes production desktop origins and the injected development runtime", () => {
+  const originalWindow = globalThis.window;
+  try {
+    globalThis.window = { location: { protocol: "http:", hostname: "tauri.localhost" } };
+    assert.equal(isTauriRuntime(), true);
+    globalThis.window = { location: { protocol: "tauri:", hostname: "localhost" } };
+    assert.equal(isTauriRuntime(), true);
+    globalThis.window = { location: { protocol: "http:", hostname: "localhost" }, __TAURI_INTERNALS__: {} };
+    assert.equal(isTauriRuntime(), true);
+    globalThis.window = { location: { protocol: "https:", hostname: "example.com" } };
+    assert.equal(isTauriRuntime(), false);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});
+
 test("device registry exposes capabilities without allowing fake remote execution", async () => {
   const deviceId = "remote-test-device";
   registerDevice({
