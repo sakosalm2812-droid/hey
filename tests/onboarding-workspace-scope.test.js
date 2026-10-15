@@ -126,6 +126,29 @@ test("starter space personalization rejects malformed input and cannot alter per
   } finally { setAccountScope(previousScope); }
 }));
 
+test("starter Space preferences notify current consumers only after scoped readback succeeds", () => withStorage((storage) => {
+  const previousScope = "onboarding-starter-events-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("onboarding-starter-events-owner");
+    const onboarding = new OnboardingEngine();
+    const updates = [];
+    onboarding.subscribe((event, payload) => updates.push({ event, payload }));
+    assert.deepEqual(onboarding.setStarterSpaceSelections(["work", "learning"]), ["work", "learning"]);
+    assert.deepEqual(updates, [{
+      event: "starter_spaces_updated",
+      payload: { accountScope: "account:onboarding-starter-events-owner", selections: ["work", "learning"] },
+    }]);
+
+    const key = getAccountStorageKey("hey_onboarding_progress");
+    storage.blockedWrites.add(key);
+    const failed = onboarding.setStarterSpaceSelections(["personal"]);
+    assert.deepEqual(failed, { error: "Could not safely save starter Spaces", status: "readback_failed" });
+    assert.deepEqual(onboarding.getProgress().starterSpaceSelections, ["work", "learning"]);
+    assert.equal(updates.length, 1, "failed persistence never emits an update");
+  } finally { setAccountScope(previousScope); }
+}));
+
 test("onboarding restores malformed persisted state to safe defaults", () => withStorage((storage) => {
   const previousScope = "spaces-test-previous";
   setAccountScope(previousScope);

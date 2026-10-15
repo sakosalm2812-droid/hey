@@ -388,8 +388,17 @@ export class OnboardingEngine {
     if (normalized.length > MAX_STARTER_SPACE_SELECTIONS || normalized.length !== spaceIds.length) {
       return { error: `Choose up to ${MAX_STARTER_SPACE_SELECTIONS} valid starter spaces` };
     }
+    const previous = [...this.progress.starterSpaceSelections];
+    const scope = this.accountScope;
     this.progress.starterSpaceSelections = normalized;
-    this.save();
+    const saved = this.save();
+    if (!saved.success) {
+      if (scope === this.accountScope && scope === getAccountScope()) this.progress.starterSpaceSelections = previous;
+      return { error: "Could not safely save starter Spaces", status: saved.status };
+    }
+    const payload = { accountScope: scope, selections: [...normalized] };
+    this.notify("starter_spaces_updated", payload);
+    publish("onboarding.starter_spaces_updated", payload);
     return [...normalized];
   }
 
