@@ -6,8 +6,10 @@ import { WorkspaceEngine } from "../src/core/workspaceEngine.js";
 
 class MemoryStorage {
   values = new Map();
-  getItem(key) { return this.values.get(key) ?? null; }
-  setItem(key, value) { this.values.set(key, String(value)); }
+  blockedReads = new Set();
+  blockedWrites = new Set();
+  getItem(key) { return this.blockedReads.has(key) ? null : this.values.get(key) ?? null; }
+  setItem(key, value) { if (!this.blockedWrites.has(key)) this.values.set(key, String(value)); }
   removeItem(key) { this.values.delete(key); }
   clear() { this.values.clear(); }
 }
@@ -79,9 +81,10 @@ test("onboarding synchronizes same-account storage updates and ignores foreign o
     const activeKey = getAccountStorageKey("hey_onboarding_progress");
     const storageEvent = (key, newValue, storageArea = storage) => windowTarget.dispatchEvent({ type: "storage", key, newValue, storageArea });
 
-    storageEvent(activeKey, JSON.stringify({ locale: "fr", accessibility: { largeTargets: true }, starterSpaceSelections: ["personal", "learning"], permissionGranted: true }));
+    storageEvent(activeKey, JSON.stringify({ locale: "fr", accessibility: { largeTargets: true }, starterSpaceSelections: ["personal", "learning"], motivationSelections: ["learn", "create"], permissionGranted: true }));
     assert.equal(onboarding.getProgress().locale, "fr");
     assert.deepEqual(onboarding.getProgress().starterSpaceSelections, ["personal", "learning"]);
+    assert.deepEqual(onboarding.getMotivations(), ["learn", "create"]);
     assert.equal(onboarding.getProgress().permissionGranted, undefined);
     assert.equal(updates.at(-1).event, "storage_synced");
 
@@ -127,7 +130,7 @@ test("onboarding restores malformed persisted state to safe defaults", () => wit
   const previousScope = "spaces-test-previous";
   setAccountScope(previousScope);
   try {
-    storage.setItem(getAccountStorageKey("hey_onboarding_progress"), JSON.stringify({ currentStage: "root", completedStages: { forged: true }, skippedStages: ["unknown"], practiceTaskId: "invoke-admin", locale: "../../", accessibility: ["malformed"], starterSpaceSelections: ["../x", {}, "valid_space"] }));
+    storage.setItem(getAccountStorageKey("hey_onboarding_progress"), JSON.stringify({ currentStage: "root", completedStages: { forged: true }, skippedStages: ["unknown"], practiceTaskId: "invoke-admin", locale: "../../", accessibility: ["malformed"], starterSpaceSelections: ["../x", {}, "valid_space"], motivationSelections: ["organize_work", "../../private"] }));
     const onboarding = new OnboardingEngine();
     const progress = onboarding.getProgress();
     assert.equal(progress.currentStage, "welcome");
@@ -137,6 +140,67 @@ test("onboarding restores malformed persisted state to safe defaults", () => wit
     assert.equal(progress.locale, "en");
     assert.deepEqual(progress.accessibility, {});
     assert.deepEqual(progress.starterSpaceSelections, ["valid_space"]);
+    assert.deepEqual(progress.motivationSelections, []);
+    storage.setItem(getAccountStorageKey("hey_onboarding_progress"), "x".repeat(100_001));
+    assert.deepEqual(new OnboardingEngine().getMotivations(), []);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("onboarding motivations are account-scoped, validated, read back, and only rank starter suggestions", () => withStorage((storage) => {
+  const previousScope = "spaces-test-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("motivation-owner-a");
+    const onboardingA = new OnboardingEngine();
+    const initialStage = onboardingA.getCurrentStage();
+    const selected = ["organize_work", "learn", "privacy"];
+    assert.deepEqual(onboardingA.setMotivations(selected), selected);
+    selected[0] = "forged";
+    assert.deepEqual(onboardingA.getMotivations(), ["organize_work", "learn", "privacy"]);
+    assert.deepEqual(onboardingA.getProgress().motivationSelections, ["organize_work", "learn", "privacy"]);
+    assert.equal(onboardingA.getCurrentStage(), initialStage);
+    assert.equal(onboardingA.getProgress().permissionGranted, undefined);
+
+    for (const invalid of [
+      "learn",
+      ["unknown"],
+      ["learn", "learn"],
+      ["learn", "privacy", "create", "save_time", "coordinate", "manage_personal", "organize_work", "accessibility", "unknown"],
+      Object.assign(["learn"], { extra: true }),
+      Object.assign(["learn"], { 9: "privacy" }),
+      (() => { const value = ["learn"]; Object.defineProperty(value, "0", { get() { throw new Error("hostile getter"); } }); return value; })(),
+      new Proxy(["learn"], { ownKeys() { throw new Error("hostile proxy"); } }),
+      (() => { const { proxy, revoke } = Proxy.revocable([], {}); revoke(); return proxy; })(),
+    ]) assert.ok(onboardingA.setMotivations(invalid).error);
+    assert.deepEqual(onboardingA.getMotivations(), ["organize_work", "learn", "privacy"]);
+
+    const ranked = onboardingA.rankStarterSuggestions();
+    assert.deepEqual(ranked.map(({ id }) => id), ["work", "learning", "personal"]);
+    assert.deepEqual(onboardingA.rankStarterSuggestions([]).map(({ id, score }) => [id, score]), [["personal", 0], ["work", 0], ["learning", 0]]);
+    assert.equal(ranked.length, 3);
+
+    const keyA = getAccountStorageKey("hey_onboarding_progress");
+    assert.deepEqual(JSON.parse(storage.getItem(keyA)).motivationSelections, ["organize_work", "learn", "privacy"]);
+    setAccountScope("motivation-owner-b");
+    const onboardingB = new OnboardingEngine();
+    assert.deepEqual(onboardingB.getMotivations(), []);
+    assert.deepEqual(onboardingB.rankStarterSuggestions().map(({ id }) => id), ["personal", "work", "learning"]);
+    assert.deepEqual(onboardingB.setMotivations(["manage_personal"]), ["manage_personal"]);
+    setAccountScope("motivation-owner-a");
+    const restored = new OnboardingEngine();
+    assert.deepEqual(restored.getMotivations(), ["organize_work", "learn", "privacy"]);
+
+    const activeKey = getAccountStorageKey("hey_onboarding_progress");
+    storage.blockedReads.add(activeKey);
+    assert.match(restored.setMotivations(["create"]).error, /safely save/);
+    assert.deepEqual(restored.getMotivations(), ["organize_work", "learn", "privacy"]);
+    storage.blockedReads.delete(activeKey);
+    setAccountScope("motivation-owner-c");
+    const onboardingC = new OnboardingEngine();
+    const keyC = getAccountStorageKey("hey_onboarding_progress");
+    storage.blockedWrites.add(keyC);
+    assert.match(onboardingC.setMotivations(["create"]).error, /safely save/);
+    assert.deepEqual(onboardingC.getMotivations(), []);
   } finally { setAccountScope(previousScope); }
 }));
 

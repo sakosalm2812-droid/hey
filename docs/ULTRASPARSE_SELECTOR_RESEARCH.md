@@ -44,19 +44,44 @@ The rechecks had visibly variable tails; treat them as local observations, not s
 
 ## Expert-count scaling experiment
 
-Reproduce with `node scripts/benchmark-ultrasparse-router.mjs`. The harness additionally builds deterministic synthetic catalogs with eight distinct terms per expert and queries that match exactly two experts. It compares a full linear catalog scan with a prebuilt inverted candidate index. Catalog construction and candidate-index preparation are timed and reported separately; both are excluded from per-selection latency. Call `prepareIndexed()` before latency-sensitive use; otherwise the first indexed selection pays that setup cost. The harness estimates the number of selections needed to amortize setup at the observed p50 saving. Each measured output is compared with linear output after stopping the timer. The fixture and queries have independent SHA-256 fingerprints, using UTF-8 bytes of `JSON.stringify(value)` as the versioned canonical form.
+Reproduce with `node scripts/benchmark-ultrasparse-router.mjs`. The harness builds deterministic synthetic catalogs with eight terms per expert, including shared duplicate terms and suffix-near terms. At every expert count it measures six query classes: sparse pair, skewed relevance, repeated/shared terms, near-duplicate terms, no-match, and hostile input crossing the 4,096-character boundary. Catalog construction and candidate-index preparation are timed and reported separately; both are excluded from selection latency. Call `prepareIndexed()` before latency-sensitive use; otherwise the first indexed selection pays setup cost. Query/catalog hashes use SHA-256 over UTF-8 `JSON.stringify(value)`. Every warm-up and timed result is compared with the linear result after timing.
 
-Observed on Windows 10.0.26200 x64, Node v24.21.0 / V8 13.6.233.17-node.53, Intel Core i7-1185G7, 8 logical CPUs, one full invocation:
+Observed on Windows 10.0.26200 x64, Node v24.21.0 / V8 13.6.233.17-node.53, Intel Core i7-1185G7, 8 logical CPUs, one full invocation. Each case/selector had 1,500 samples at 5–100 experts, 750 at 500 experts, and 300 at 2,000 experts; each had three trials. Values are linear p50/p95 μs / indexed-candidate p50/p95 μs:
 
-| Experts | Samples/selector | Linear p50/p95 μs | Indexed candidates p50/p95 μs | Catalog construction μs | Index preparation μs | Estimated break-even selections |
-|---:|---:|---:|---:|---:|---:|---:|
-| 5 | 15,000 | 5.8 / 12.6 | 2.9 / 6.6 | 1,039.9 | 217.1 | 434 |
-| 20 | 15,000 | 16.3 / 33.8 | 3.3 / 7.1 | 229.6 | 64.0 | 23 |
-| 100 | 15,000 | 75.1 / 160.8 | 3.3 / 8.0 | 2,144.3 | 346.2 | 35 |
-| 500 | 3,000 | 349.9 / 687.1 | 3.4 / 10.1 | 5,558.6 | 2,122.4 | 23 |
-| 2,000 | 750 | 1,324.3 / 2,380.3 | 4.7 / 15.2 | 13,165.1 | 4,293.2 | 14 |
+| Experts | Case | Linear p50/p95 μs | Indexed candidates p50/p95 μs |
+|---:|---|---:|---:|
+| 5 | Sparse pair | 35.4 / 56.1 | 16.5 / 35.1 |
+| 5 | Skewed relevance | 32.2 / 44.7 | 12.7 / 20.3 |
+| 5 | Duplicate terms | 36.7 / 56.8 | 14.3 / 26.1 |
+| 5 | Near-duplicate terms | 26.8 / 34.5 | 8.3 / 12.1 |
+| 5 | No match | 20.6 / 25.1 | 4.5 / 6.5 |
+| 5 | Hostile boundary | 229.0 / 468.3 | 209.4 / 430.6 |
+| 20 | Sparse pair | 88.9 / 124.3 | 16.1 / 34.6 |
+| 20 | Skewed relevance | 85.5 / 123.3 | 12.3 / 18.5 |
+| 20 | Duplicate terms | 120.2 / 194.3 | 27.9 / 43.5 |
+| 20 | Near-duplicate terms | 78.6 / 111.0 | 8.2 / 13.8 |
+| 20 | No match | 68.7 / 122.5 | 4.4 / 7.2 |
+| 20 | Hostile boundary | 282.8 / 580.5 | 209.3 / 348.3 |
+| 100 | Sparse pair | 383.7 / 852.5 | 16.5 / 39.0 |
+| 100 | Skewed relevance | 385.8 / 1,020.0 | 13.1 / 31.4 |
+| 100 | Duplicate terms | 600.1 / 1,167.3 | 116.4 / 201.8 |
+| 100 | Near-duplicate terms | 354.4 / 650.4 | 8.2 / 19.2 |
+| 100 | No match | 332.2 / 736.4 | 4.6 / 14.9 |
+| 100 | Hostile boundary | 560.8 / 1,191.0 | 212.0 / 355.3 |
+| 500 | Sparse pair | 1,917.9 / 5,599.1 | 18.9 / 57.4 |
+| 500 | Skewed relevance | 1,883.7 / 3,524.8 | 16.1 / 41.7 |
+| 500 | Duplicate terms | 3,092.9 / 8,060.7 | 623.4 / 1,683.9 |
+| 500 | Near-duplicate terms | 1,780.8 / 3,726.7 | 9.0 / 31.4 |
+| 500 | No match | 1,800.5 / 6,017.9 | 5.2 / 26.8 |
+| 500 | Hostile boundary | 1,961.7 / 5,241.2 | 214.9 / 405.5 |
+| 2,000 | Sparse pair | 8,088.7 / 17,875.3 | 30.1 / 80.6 |
+| 2,000 | Skewed relevance | 7,600.2 / 13,599.6 | 26.4 / 74.5 |
+| 2,000 | Duplicate terms | 12,983.5 / 45,361.6 | 2,568.2 / 7,103.1 |
+| 2,000 | Near-duplicate terms | 7,283.7 / 14,320.7 | 14.1 / 46.7 |
+| 2,000 | No match | 7,400.5 / 12,361.4 | 13.6 / 36.5 |
+| 2,000 | Hostile boundary | 7,239.8 / 11,560.4 | 223.1 / 441.1 |
 
-This measurement shows the full scan cost growing with catalog size while candidate accumulation touches only matching experts. It supports using the indexed candidate path at 20 or more experts when catalogs are expected to be reused enough to amortize setup; smaller catalogs retain the linear path. The 5-expert path estimates 434 selections to amortize index setup at this p50; the 20–2,000 expert paths estimate 14–35 selections. In this full run, the benchmark reported `subMillisecondTargetVerified: true`: every per-trial p95 for the fixed selectors and adaptive synthetic paths was below 1,000 μs (maximum adaptive per-trial p95: 15.8 μs). The linear reference scan alone exceeded 1 ms p95 at 2,000 experts; the verified status applies to the selected adaptive path, not that reference scan. This is only in-process lexical selection for this workload and machine. End-to-end verification remains false; model loading, network, prefill, decode, inference, and application work are excluded. The figures are one host invocation, with visible tail variation in the linear path.
+Catalog/index setup (μs) was 4,096.7 at 5 experts, 1,808.9 at 20, 7,775.7 at 100, 31,023.3 at 500, and 92,709.7 at 2,000. The indexed candidate path had lower p50 and p95 than linear across the six cases at 20+ experts, so the measured 20-expert crossover remains. Dense duplicate-term fanout raises candidate p95 to 1,683.9 μs at 500 and 7,103.1 μs at 2,000, though the corresponding linear p95 is much higher. The benchmark therefore reports `subMillisecondTargetVerified: false` for this mixed workload; end-to-end latency remains unverified. Results are one synthetic host invocation and do not establish routing quality or inference performance.
 
 ## Limits
 

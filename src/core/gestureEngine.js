@@ -202,6 +202,15 @@ function validateCustomGesture(value, expectedId) {
   return gesture;
 }
 
+function classifyCameraFailure(error) {
+  let name = "";
+  try { name = typeof error?.name === "string" ? error.name : ""; } catch { /* Host errors can be accessor-backed. */ }
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return { status: "permission_denied", code: "camera_permission_denied" };
+  }
+  return { status: "unavailable", code: "camera_unavailable" };
+}
+
 function generateProfileId() {
   return `gesture_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -231,6 +240,7 @@ export class GestureEngine {
     this.recognitionGeneration = 0;
     this.cameraPermissionStatus = null;
     this.cameraPermissionHandler = null;
+    this.cameraCapabilityStatus = "unknown";
     this.activeProfileId = null;
     this.frameCanvas = null;
     this.lastFrameAt = 0;
@@ -369,6 +379,58 @@ export class GestureEngine {
     if (this.recognitionState !== GESTURE_STATES.INACTIVE) {
       throw new Error("Stop gesture recognition before changing profile preferences or mappings.");
     }
+  }
+
+  setCameraCapabilityStatus(status, reason = null) {
+    if (!["supported", "unavailable", "permission_denied", "revoked"].includes(status)) return;
+    if (this.cameraCapabilityStatus === status) return;
+    this.cameraCapabilityStatus = status;
+    const event = { status, reason, sessionState: this.recognitionState };
+    this.notify("camera_capability_changed", { ...event });
+    publish("gesture.camera_capability_changed", { ...event });
+  }
+
+  async getRecognitionCapability() {
+    this.refreshAccountScope();
+    let cameraSupported;
+    let permission = "unknown";
+    let navigatorObject;
+    try {
+      navigatorObject = globalThis.navigator;
+      cameraSupported = typeof navigatorObject?.mediaDevices?.getUserMedia === "function"
+        && typeof globalThis.document?.createElement === "function"
+        && typeof globalThis.requestAnimationFrame === "function";
+    } catch { cameraSupported = false; }
+
+    if (cameraSupported) {
+      try {
+        const permissions = navigatorObject?.permissions;
+        if (typeof permissions?.query === "function") {
+          const permissionStatus = await Reflect.apply(permissions.query, permissions, [{ name: "camera" }]);
+          const state = permissionStatus?.state;
+          if (["granted", "denied", "prompt"].includes(state)) permission = state;
+        }
+      } catch { permission = "unknown"; }
+    }
+
+    let status;
+    if (!cameraSupported) status = "unavailable";
+    else if (permission === "denied") status = this.cameraCapabilityStatus === "revoked" ? "revoked" : "permission_denied";
+    else if (this.cameraCapabilityStatus === "revoked" && permission !== "granted") status = "revoked";
+    else status = "supported";
+    this.setCameraCapabilityStatus(status);
+
+    const adapterInstalled = Boolean(this.recognitionAdapter && typeof this.recognitionAdapter.detect === "function");
+    return {
+      status,
+      cameraSupported,
+      permission,
+      adapterInstalled,
+      recognitionStatus: cameraSupported && adapterInstalled && status === "supported" ? "adapter_ready" : "unavailable",
+      consentRequired: true,
+      permissionPrompted: false,
+      sessionState: this.recognitionState,
+    };
   }
 
   createProfile(input = {}) {
@@ -609,6 +671,7 @@ export class GestureEngine {
 
   async startRecognition(profileId, { consent = false } = {}) {
     this.refreshAccountScope();
+    const startingAccountScope = getAccountScope();
     if (!getAccountScope().startsWith("account:") || !["default", "loaded", "saved"].includes(this.storageStatus)) {
       return { success: false, error: "Gesture recognition requires a valid account profile store.", code: "profile_store_unavailable" };
     }
@@ -621,8 +684,17 @@ export class GestureEngine {
     if (!this.recognitionAdapter) {
       return { success: false, error: "No gesture recognition adapter is available on this platform.", code: "adapter_unavailable" };
     }
-    if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.document?.createElement !== "function" || typeof globalThis.requestAnimationFrame !== "function") {
+    const capability = await this.getRecognitionCapability();
+    if (getAccountScope() !== startingAccountScope || !this.profiles.has(profileId)) {
+      return { success: false, error: "Gesture session ended after the account changed.", code: "account_changed" };
+    }
+    if (!capability.cameraSupported) {
+      this.setCameraCapabilityStatus("unavailable", "camera_api_unavailable");
       return { success: false, error: "Camera capture is unsupported in this environment.", code: "camera_unsupported" };
+    }
+    if (capability.permission === "denied") {
+      this.setCameraCapabilityStatus("permission_denied", "permission_denied");
+      return { success: false, error: "Camera permission is denied in this browser.", code: "camera_permission_denied" };
     }
 
     const generation = ++this.recognitionGeneration;
@@ -678,11 +750,13 @@ export class GestureEngine {
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
       }
       if (!permissionAllowed) {
+        this.setCameraCapabilityStatus("revoked", "permission_revoked");
         this.stopRecognition("permission_revoked");
         return { success: false, error: "Camera permission is denied.", code: "permission_denied" };
       }
 
       this.recognitionState = GESTURE_STATES.ACTIVE;
+      this.setCameraCapabilityStatus("supported");
       this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "active", visible: true, processing: "local_adapter" });
       
       this.startDetectionLoop(profileId);
@@ -695,24 +769,35 @@ export class GestureEngine {
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
       }
+      const failure = classifyCameraFailure(error);
+      this.setCameraCapabilityStatus(failure.status, failure.code);
       this.stopRecognition("start_failed");
       this.recognitionState = GESTURE_STATES.ERROR;
-      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: error.message });
-      return { success: false, error: error.message, code: "camera_or_adapter_error" };
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: failure.code });
+      return { success: false, error: failure.code === "camera_permission_denied" ? "Camera permission was denied." : "Camera capture is unavailable.", code: failure.code };
     }
   }
 
   async watchCameraPermission(generation) {
-    const query = globalThis.navigator?.permissions?.query;
+    let permissions;
+    let query;
+    try {
+      permissions = globalThis.navigator?.permissions;
+      query = permissions?.query;
+    } catch { return true; }
     if (typeof query !== "function") return true;
 
     try {
-      const status = await globalThis.navigator.permissions.query({ name: "camera" });
+      const status = await Reflect.apply(query, permissions, [{ name: "camera" }]);
       if (!status || generation !== this.recognitionGeneration) return false;
-      if (status.state === "denied") return false;
+      if (status.state === "denied") {
+        this.setCameraCapabilityStatus("revoked", "permission_revoked");
+        return false;
+      }
 
       const onChange = () => {
         if (generation === this.recognitionGeneration && status.state === "denied") {
+          this.setCameraCapabilityStatus("revoked", "permission_revoked");
           this.stopRecognition("permission_revoked");
         }
       };
@@ -899,6 +984,7 @@ export class GestureEngine {
   }
 
   stopRecognition(reason = "user_stop") {
+    if (reason === "permission_revoked") this.setCameraCapabilityStatus("revoked", reason);
     this.recognitionGeneration += 1;
     this.detectionEpoch += 1;
     this.gestureCooldowns.clear();
@@ -1175,6 +1261,10 @@ export function getGesture(id) {
 
 export function getGestureRecognitionState() {
   return gestureEngine.getRecognitionState();
+}
+
+export function getGestureRecognitionCapability() {
+  return gestureEngine.getRecognitionCapability();
 }
 
 export function subscribeToGestures(listener) {
