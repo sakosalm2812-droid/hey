@@ -15,6 +15,8 @@ import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice, regi
 import { VOICE_STATES, createVoiceState } from "../src/core/voiceState.js";
 import { executeRequest } from "../src/core/executionController.js";
 import { subscribe, clearEventListeners } from "../src/core/eventBus.js";
+import { computerControlEngine, CONTROL_MODES, COMPUTER_CAPABILITIES } from "../src/core/computerControl.js";
+import { computerControlEngine as legacyComputerControlEngine, CONTROL_MODES as LEGACY_CONTROL_MODES } from "../src/core/computerControlEngine.js";
 import { createVoiceSession } from "../src/lib/voiceProviders.js";
 import { understandImage, validateImageInput } from "../src/core/visionEngine.js";
 import { setAccountScope } from "../src/core/accountScope.js";
@@ -471,6 +473,41 @@ test("natural commands reach permission gates instead of self-approving", async 
   assert.equal(result.handled, true);
   assert.equal(result.status, "permission_required");
   assert.equal(result.result.requiresConfirmation, true);
+});
+
+test("legacy Act and confirmed Assist modes cannot dispatch around Trust Kernel authority", async () => {
+  let calls = 0;
+  const adapterName = "voiceos-act-mode-attack";
+  computerControlEngine.registerAdapter(adapterName, {
+    capabilities: [COMPUTER_CAPABILITIES.OPEN_APP],
+    execute: async () => { calls += 1; return { success: true, verified: true }; },
+  });
+  try {
+    const guide = await computerControlEngine.executeCapability({
+      capability: COMPUTER_CAPABILITIES.OPEN_APP, target: "Calculator", mode: CONTROL_MODES.GUIDE,
+    });
+    const direct = await computerControlEngine.executeCapability({
+      capability: COMPUTER_CAPABILITIES.OPEN_APP, target: "Calculator", mode: CONTROL_MODES.ACT,
+    });
+    const assist = await computerControlEngine.executeCapability({
+      capability: COMPUTER_CAPABILITIES.OPEN_APP, target: "Calculator", mode: CONTROL_MODES.ASSIST,
+    });
+    const legacy = await legacyComputerControlEngine.execute(
+      "computer.app.open", { target: "Calculator" }, { mode: LEGACY_CONTROL_MODES.ACT },
+    );
+    const legacyAssist = await legacyComputerControlEngine.execute(
+      "computer.app.open", { target: "Calculator" }, { mode: LEGACY_CONTROL_MODES.ASSIST, confirmed: true },
+    );
+
+    assert.equal(guide.status, "guide_only");
+    assert.equal(direct.status, "action_authority_unavailable");
+    assert.equal(assist.status, "preview_required");
+    assert.equal(legacy.status, "action_authority_unavailable");
+    assert.equal(legacyAssist.status, "preview_required");
+    assert.equal(calls, 0);
+  } finally {
+    computerControlEngine.unregisterAdapter(adapterName);
+  }
 });
 
 test("Chrome and YouTube request becomes an executable workflow", () => {

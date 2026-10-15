@@ -197,12 +197,48 @@ class ComputerControlEngine {
     const actionId = generateActionId();
     const targetId = generateTargetId();
 
+    if (!Object.values(CONTROL_MODES).includes(mode)) {
+      return { success: false, actionId, status: "invalid_mode", reason: "A supported computer-control mode is required." };
+    }
+    if (mode === CONTROL_MODES.GUIDE) {
+      return {
+        success: false,
+        actionId,
+        status: "guide_only",
+        code: "NO_ACTION_IN_GUIDE_MODE",
+        reason: "Guide mode is informational; no computer action was performed.",
+      };
+    }
+    if (mode === CONTROL_MODES.ASSIST) {
+      return {
+        success: false,
+        actionId,
+        status: "preview_required",
+        requiresConfirmation: true,
+        reason: "Assist mode cannot dispatch outside the trusted action lifecycle.",
+        preview: {
+          capability: typeof capability === "string" ? capability.slice(0, 256) : null,
+          target: typeof target === "string" ? target.slice(0, 1024) : null,
+          riskLevel: this.getRiskLevel(capability),
+        },
+      };
+    }
+    if (mode === CONTROL_MODES.ACT) {
+      return {
+        success: false,
+        actionId,
+        status: "action_authority_unavailable",
+        code: "ACTION_AUTHORITY_UNAVAILABLE",
+        reason: "Act mode requires the trusted action lifecycle and an independent postcondition observer.",
+      };
+    }
+
     const authResult = authorizeExecution({
       user,
       capability,
       permission: capability,
       riskLevel: this.getRiskLevel(capability),
-      confirmed: mode === CONTROL_MODES.ACT,
+      confirmed: false,
     });
 
     if (!authResult.authorized) {
