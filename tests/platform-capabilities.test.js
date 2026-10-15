@@ -17,6 +17,17 @@ import { executeRequest } from "../src/core/executionController.js";
 import { subscribe, clearEventListeners } from "../src/core/eventBus.js";
 import { createVoiceSession } from "../src/lib/voiceProviders.js";
 import { understandImage, validateImageInput } from "../src/core/visionEngine.js";
+import { setAccountScope } from "../src/core/accountScope.js";
+
+const deviceTestStorage = new Map();
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  value: {
+    getItem(key) { return deviceTestStorage.get(key) ?? null; },
+    setItem(key, value) { deviceTestStorage.set(key, String(value)); },
+    removeItem(key) { deviceTestStorage.delete(key); },
+  },
+});
 
 test("registered capabilities expose honest platform availability", () => {
   const capabilityId = "test.camera";
@@ -168,6 +179,7 @@ test("device registry exposes capabilities without allowing fake remote executio
 });
 
 test("device execution requires an explicit device and matching adapter capability grant", async () => {
+  setAccountScope("edge-account");
   const action = "test.edge.read";
   const executions = [];
   const declaredCapabilities = [action];
@@ -216,6 +228,7 @@ test("device execution requires an explicit device and matching adapter capabili
 });
 
 test("device execution rejects platform mismatches and adapters without verified postconditions", async () => {
+  setAccountScope("edge-account");
   let executions = 0;
   registerDeviceAdapter("ios", {
     platform: "ios",
@@ -239,6 +252,7 @@ test("device execution rejects platform mismatches and adapters without verified
 });
 
 test("device gateway rejects accessor-backed input before evaluating getters", async () => {
+  setAccountScope("edge-account");
   let getterCalls = 0;
   registerDeviceAdapter("linux", {
     platform: "linux",
@@ -262,6 +276,7 @@ test("device gateway rejects accessor-backed input before evaluating getters", a
 });
 
 test("device execution and revocation are bound to the registering account", async () => {
+  setAccountScope("edge-owner");
   const action = "test.edge.account-bound";
   let executions = 0;
   const owner = { id: "edge-owner", plan: "pro", permissions: ["device.control"] };
