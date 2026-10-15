@@ -63,17 +63,70 @@ function requireHash(value, label) {
   return value.toLowerCase();
 }
 
+function snapshotData(value, label, active = new WeakSet(), depth = 0, budget = { properties: 0 }) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "object") throw new TypeError(`${label} must contain only JSON-compatible data.`);
+  if (depth > 32) throw new TypeError(`${label} exceeds the maximum nesting depth.`);
+  if (active.has(value)) throw new TypeError(`${label} cannot contain cycles.`);
+  active.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError(`${label} cannot contain array subclasses.`);
+      const keys = Reflect.ownKeys(value);
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      const length = lengthDescriptor?.value;
+      if (!Number.isSafeInteger(length) || length < 0 || keys.length !== length + 1) throw new TypeError(`${label} arrays must be dense and have no extra properties.`);
+      const copy = [];
+      for (let index = 0; index < length; index += 1) {
+        budget.properties += 1;
+        if (budget.properties > 10_000) throw new TypeError(`${label} exceeds the maximum property count.`);
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError(`${label} arrays cannot be sparse or contain accessors.`);
+        copy.push(snapshotData(descriptor.value, label, active, depth + 1, budget));
+      }
+      return Object.freeze(copy);
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${label} must use plain objects, not mutable class containers.`);
+    const keys = Reflect.ownKeys(value);
+    const copy = {};
+    for (const key of keys) {
+      if (typeof key !== "string") throw new TypeError(`${label} cannot contain symbol properties.`);
+      budget.properties += 1;
+      if (budget.properties > 10_000) throw new TypeError(`${label} exceeds the maximum property count.`);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) throw new TypeError(`${label} cannot contain accessors or hidden properties.`);
+      Object.defineProperty(copy, key, {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: snapshotData(descriptor.value, label, active, depth + 1, budget),
+      });
+    }
+    return Object.freeze(copy);
+  } finally {
+    active.delete(value);
+  }
+}
+
+function snapshotObject(value, label) {
+  const snapshot = snapshotData(value, label);
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new TypeError(`${label} must be a plain object.`);
+  return snapshot;
+}
+
 /** Validate and freeze reproducible model/version/evaluation metadata. */
 export function createModelRecord(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Model metadata must be an object.");
-  const id = requireText(input.id, "Model id");
+  const source = snapshotObject(input, "Model metadata");
+  const id = requireText(source.id, "Model id");
   if (!MODEL_ID_PATTERN.test(id)) throw new TypeError("Model id has an unsupported format.");
-  const revision = requireText(input.revision, "Immutable model revision");
+  const revision = requireText(source.revision, "Immutable model revision");
   if (/^(main|master|latest|stable)$/i.test(revision)) throw new TypeError("Model revision must be immutable, not a moving tag.");
-  const license = requireText(input.license, "Model license");
-  const sourceUrl = new URL(requireText(input.sourceUrl, "Model source URL"));
+  const license = requireText(source.license, "Model license");
+  const sourceUrl = new URL(requireText(source.sourceUrl, "Model source URL"));
   if (sourceUrl.protocol !== "https:") throw new TypeError("Model source URL must use HTTPS.");
-  const evaluation = input.evaluation;
+  const evaluation = source.evaluation;
   if (!evaluation || typeof evaluation !== "object") throw new TypeError("A reproducible evaluation record is required.");
   const qualityScore = evaluation.qualityScore;
   if (typeof qualityScore !== "number" || !Number.isFinite(qualityScore) || qualityScore < 0 || qualityScore > 1) {
@@ -85,9 +138,9 @@ export function createModelRecord(input) {
     revision,
     license,
     sourceUrl: sourceUrl.href,
-    weightSha256: requireHash(input.weightSha256, "Weight artifact hash"),
-    tokenizerRevision: requireText(input.tokenizerRevision, "Tokenizer revision"),
-    runtimeCompatibility: Object.freeze([...(input.runtimeCompatibility || [])].map((item) => requireText(item, "Runtime compatibility entry"))),
+    weightSha256: requireHash(source.weightSha256, "Weight artifact hash"),
+    tokenizerRevision: requireText(source.tokenizerRevision, "Tokenizer revision"),
+    runtimeCompatibility: Object.freeze([...(source.runtimeCompatibility || [])].map((item) => requireText(item, "Runtime compatibility entry"))),
     evaluation: Object.freeze({
       suite: requireText(evaluation.suite, "Evaluation suite"),
       suiteRevision: requireText(evaluation.suiteRevision, "Evaluation suite revision"),
@@ -112,36 +165,38 @@ export function createModelRecord(input) {
  * cross-runtime serving contract; it does not train, load, or claim an adapter.
  */
 export function createAdapterManifest(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("Adapter manifest must be an object.");
-  if (!new Set(["lora", "qlora"]).has(input.method)) throw new TypeError("Adapter method must be lora or qlora.");
+  const source = snapshotObject(input, "Adapter manifest");
+  if (!new Set(["lora", "qlora"]).has(source.method)) throw new TypeError("Adapter method must be lora or qlora.");
   const manifest = {
     schemaVersion: 1,
-    method: input.method,
-    baseModelId: requireText(input.baseModelId, "Base model id"),
-    baseModelRevision: requireText(input.baseModelRevision, "Immutable base model revision"),
-    adapterArtifactSha256: requireHash(input.adapterArtifactSha256, "Adapter artifact hash"),
-    adapterConfigSha256: requireHash(input.adapterConfigSha256, "Adapter config hash"),
-    trainingCodeRevision: requireText(input.trainingCodeRevision, "Training code revision"),
-    datasetManifestSha256: requireHash(input.datasetManifestSha256, "Dataset manifest hash"),
-    datasetLicenseReview: requireText(input.datasetLicenseReview, "Dataset license review id"),
-    framework: requireText(input.framework, "Training framework"),
-    frameworkVersion: requireText(input.frameworkVersion, "Training framework version"),
-    quantization: input.method === "qlora" ? requireText(input.quantization, "QLoRA quantization configuration") : null,
+    method: source.method,
+    baseModelId: requireText(source.baseModelId, "Base model id"),
+    baseModelRevision: requireText(source.baseModelRevision, "Immutable base model revision"),
+    adapterArtifactSha256: requireHash(source.adapterArtifactSha256, "Adapter artifact hash"),
+    adapterConfigSha256: requireHash(source.adapterConfigSha256, "Adapter config hash"),
+    trainingCodeRevision: requireText(source.trainingCodeRevision, "Training code revision"),
+    datasetManifestSha256: requireHash(source.datasetManifestSha256, "Dataset manifest hash"),
+    datasetLicenseReview: requireText(source.datasetLicenseReview, "Dataset license review id"),
+    framework: requireText(source.framework, "Training framework"),
+    frameworkVersion: requireText(source.frameworkVersion, "Training framework version"),
+    quantization: source.method === "qlora" ? requireText(source.quantization, "QLoRA quantization configuration") : null,
     serving: Object.freeze({
-      format: requireText(input.serving?.format, "Adapter serving format"),
-      protocol: requireText(input.serving?.protocol, "Inference protocol"),
-      runtimes: Object.freeze([...(input.serving?.runtimes || [])].map((runtime) => requireText(runtime, "Supported inference runtime"))),
+      format: requireText(source.serving?.format, "Adapter serving format"),
+      protocol: requireText(source.serving?.protocol, "Inference protocol"),
+      runtimes: Object.freeze([...(source.serving?.runtimes || [])].map((runtime) => requireText(runtime, "Supported inference runtime"))),
     }),
-    evaluationRunId: requireText(input.evaluationRunId, "Adapter evaluation run id"),
+    evaluationRunId: requireText(source.evaluationRunId, "Adapter evaluation run id"),
   };
-  if (manifest.baseModelRevision === "main" || manifest.baseModelRevision === "latest") throw new TypeError("Base model revision must be immutable.");
+  if (/^(main|master|latest|stable)$/i.test(manifest.baseModelRevision)) throw new TypeError("Base model revision must be immutable.");
   if (!manifest.serving.runtimes.length) throw new TypeError("At least one compatible inference runtime is required.");
   return Object.freeze(manifest);
 }
 
 /** Build a constrained request for the existing OpenAI-compatible serving seam. */
-export function createInferenceRequest({ model, messages, profile = "balanced", privacyMode = "allow_cloud", budgetUsd } = {}) {
-  if (!model || typeof model.id !== "string") throw new TypeError("A selected model is required.");
+export function createInferenceRequest(options = {}) {
+  const source = snapshotObject(options, "Inference request options");
+  const { model, messages, profile = "balanced", privacyMode = "allow_cloud", budgetUsd } = source;
+  if (!model || typeof model.id !== "string" || !model.id.trim()) throw new TypeError("A selected model is required.");
   if (!Array.isArray(messages) || messages.length === 0) throw new TypeError("At least one inference message is required.");
   if (!new Set(["allow_cloud", "local_only", "no_cloud"]).has(privacyMode)) throw new TypeError("Unknown inference privacy mode.");
   if (privacyMode !== "allow_cloud" && model.local !== true) throw new Error("Local-only privacy policy forbids this remote model.");
@@ -154,6 +209,9 @@ export function createInferenceRequest({ model, messages, profile = "balanced", 
   if (!evidence || ![evidence.latencyP95Ms, evidence.qualityScore, evidence.inputUsdPerMillion, evidence.outputUsdPerMillion].every(Number.isFinite)) {
     throw new Error("Model lacks measured latency, quality, or pricing evidence for this profile.");
   }
+  if (evidence.latencyP95Ms <= 0 || evidence.qualityScore < 0 || evidence.qualityScore > 1 || evidence.inputUsdPerMillion < 0 || evidence.outputUsdPerMillion < 0) {
+    throw new Error("Model has invalid latency, quality, or pricing evidence.");
+  }
   if (evidence.latencyP95Ms > profilePolicy.maxLatencyP95Ms || evidence.qualityScore < profilePolicy.minQualityScore) {
     throw new Error("Model does not meet the selected profile constraints.");
   }
@@ -161,7 +219,7 @@ export function createInferenceRequest({ model, messages, profile = "balanced", 
   if (estimatedCostUsd > Math.min(profilePolicy.maxRequestCostUsd, budgetUsd ?? Infinity)) throw new Error("Model exceeds the selected inference budget.");
   return Object.freeze({
     model: model.id,
-    messages: structuredClone(messages),
+    messages,
     metadata: Object.freeze({
       heyProfile: profile,
       maxLatencyP95Ms: profilePolicy.maxLatencyP95Ms,

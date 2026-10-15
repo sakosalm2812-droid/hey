@@ -114,3 +114,62 @@ test("inference request seam binds privacy/profile/budget and does not leak a re
   assert.throws(() => createInferenceRequest({ model: selected, messages: [{ role: "user", content: "hello" }], profile: "fast", budgetUsd: 0.0001 }), /budget/i);
   assert.throws(() => createInferenceRequest({ model: { id: "unmeasured" }, messages: [{ role: "user", content: "hello" }] }), /evidence/i);
 });
+
+test("model-platform inputs reject accessors without executing them", () => {
+  let getterCalls = 0;
+  const withGetter = (base, key, getter) => Object.defineProperty({ ...base }, key, { enumerable: true, get: getter });
+  const accessorModel = withGetter(VALID_MODEL, "id", () => { getterCalls += 1; return "forged/model"; });
+  assert.throws(() => createModelRecord(accessorModel), /accessor/i);
+
+  const manifest = {
+    method: "lora", baseModelId: "base", baseModelRevision: "r1", adapterArtifactSha256: HASH,
+    adapterConfigSha256: HASH, trainingCodeRevision: "r2", datasetManifestSha256: HASH,
+    datasetLicenseReview: "review", framework: "peft", frameworkVersion: "1",
+    serving: withGetter({ format: "PEFT", runtimes: ["vLLM"] }, "protocol", () => { getterCalls += 1; return "OpenAI"; }),
+    evaluationRunId: "eval-1",
+  };
+  assert.throws(() => createAdapterManifest(manifest), /accessor/i);
+
+  const options = withGetter({ messages: [{ role: "user", content: "x" }] }, "model", () => { getterCalls += 1; return { id: "forged", routingEvidence: fastEvidence }; });
+  assert.throws(() => createInferenceRequest(options), /accessor/i);
+  assert.equal(getterCalls, 0);
+});
+
+test("model-platform inputs reject cycles, sparse arrays, and mutable class containers", () => {
+  const cyclicModel = { ...VALID_MODEL };
+  cyclicModel.extra = cyclicModel;
+  assert.throws(() => createModelRecord(cyclicModel), /cycles/i);
+
+  assert.throws(() => createModelRecord({ ...VALID_MODEL, runtimeCompatibility: Array(1) }), /dense|sparse/i);
+  class RuntimeArray extends Array {}
+  assert.throws(() => createModelRecord({ ...VALID_MODEL, runtimeCompatibility: new RuntimeArray("vLLM") }), /subclasses/i);
+  assert.throws(() => createModelRecord({ ...VALID_MODEL, extra: new Date() }), /plain objects/i);
+  class InputRecord { constructor() { Object.assign(this, VALID_MODEL); } }
+  assert.throws(() => createModelRecord(new InputRecord()), /plain objects/i);
+
+  const cyclicMessages = [];
+  cyclicMessages.push(cyclicMessages);
+  assert.throws(() => createInferenceRequest({ model: model("m", fastEvidence), profile: "fast", messages: cyclicMessages }), /cycles/i);
+  assert.throws(() => createInferenceRequest({ model: model("m", fastEvidence), profile: "fast", messages: Array(1) }), /dense|sparse/i);
+});
+
+test("inference requests are deep immutable snapshots detached from caller-owned inputs", () => {
+  const sourceModel = model("fixture/remote", { ...fastEvidence });
+  const sourceMessages = [{ role: "user", content: "private prompt", annotations: { tags: ["private"] } }];
+  const request = createInferenceRequest({ model: sourceModel, messages: sourceMessages, profile: "fast", privacyMode: "allow_cloud", budgetUsd: 0.002 });
+
+  sourceModel.id = "fixture/other";
+  sourceModel.routingEvidence.qualityScore = 0;
+  sourceMessages[0].content = "changed";
+  sourceMessages[0].annotations.tags.push("changed");
+
+  assert.equal(request.model, "fixture/remote");
+  assert.equal(request.messages[0].content, "private prompt");
+  assert.deepEqual(request.messages[0].annotations.tags, ["private"]);
+  assert.ok(Object.isFrozen(request));
+  assert.ok(Object.isFrozen(request.metadata));
+  assert.ok(Object.isFrozen(request.messages));
+  assert.ok(Object.isFrozen(request.messages[0]));
+  assert.ok(Object.isFrozen(request.messages[0].annotations.tags));
+  assert.throws(() => { request.messages[0].annotations.tags[0] = "tampered"; }, TypeError);
+});
