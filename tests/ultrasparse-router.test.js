@@ -73,14 +73,40 @@ test("plan uses the canonical provider router and declares that no inference occ
   clearProviders();
 });
 
-test("benchmark smoke mode emits bounded latency percentiles and timer overhead", () => {
+test("benchmark smoke mode emits deterministic workload and environment metadata with scoped claims", () => {
   const scriptPath = fileURLToPath(new URL("../scripts/benchmark-ultrasparse-router.mjs", import.meta.url));
   const output = execFileSync(process.execPath, [scriptPath, "--smoke"], { encoding: "utf8" });
   const report = JSON.parse(output);
+  const repeatedOutput = execFileSync(process.execPath, [scriptPath, "--smoke"], { encoding: "utf8" });
+  const repeatedReport = JSON.parse(repeatedOutput);
   assert.equal(report.mode, "smoke");
+  assert.equal(report.workloadSha256, "80a5cb5f9ce90c0b547220e0a3450abc8014ba2f7f8e0936b9fc509a1cdf024e");
+  assert.deepEqual(report.workloadFingerprint, {
+    version: 1,
+    algorithm: "sha256",
+    canonicalization: "UTF-8 bytes of JSON.stringify(queryArray)",
+    queryCount: 6,
+    queryUtf8Bytes: 303,
+    digest: report.workloadSha256,
+  });
+  assert.deepEqual(repeatedReport.workloadFingerprint, report.workloadFingerprint);
+  assert.deepEqual(repeatedReport.executionEnvironment, report.executionEnvironment);
+  assert.equal(report.executionEnvironment.runtime.name, "node");
+  assert.equal(report.executionEnvironment.runtime.version, process.version);
+  assert.equal(report.executionEnvironment.runtime.v8Version, process.versions.v8);
+  assert.equal(report.executionEnvironment.operatingSystem.platform, process.platform);
+  assert.equal(report.executionEnvironment.operatingSystem.architecture, process.arch);
+  assert.ok(report.executionEnvironment.operatingSystem.release.length > 0);
+  assert.ok(report.executionEnvironment.cpu.model.length > 0);
+  assert.ok(report.executionEnvironment.cpu.logicalCpuCount > 0);
+  assert.ok(report.executionEnvironment.cpu.totalMemoryBytes > 0);
   assert.equal(report.selectionOnly, true);
   assert.equal(report.modelLoadingIncluded, false);
+  assert.equal(report.networkIncluded, false);
+  assert.equal(report.prefillIncluded, false);
+  assert.equal(report.decodeIncluded, false);
   assert.equal(report.inferenceIncluded, false);
+  assert.equal(report.performanceClaims.subMillisecondTargetVerified, false);
   assert.equal(report.algorithms.linear.perOperationSelectionLatency.samples, 50);
   assert.equal(report.algorithms.indexed.perOperationSelectionLatency.samples, 50);
   assert.equal(report.algorithms.masked.perOperationSelectionLatency.samples, 50);
