@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import { ArrowUp, Mic } from "lucide-react";
 import { confirmSound } from "../../lib/heyFeedback";
 import { useLocale } from "../../i18n/LocaleContext.jsx";
+import { useAuth } from "../../AuthContext.jsx";
 import DictationControl from "./DictationControl.jsx";
 
 export default function ChatInput({
@@ -13,6 +14,7 @@ export default function ChatInput({
   onDictationInsert,
 }) {
   const { t } = useLocale();
+  const { user } = useAuth();
   const inputRef = useRef(null);
   const focusAfterDictationRef = useRef(false);
   useLayoutEffect(() => {
@@ -45,7 +47,7 @@ export default function ChatInput({
 
   return (
     <div className="hey-chat-composer">
-      <DictationControl onInsert={insertDictation} disabled={disabled} />
+      <DictationControl key={user?.id || "signed-out"} onInsert={insertDictation} disabled={disabled} />
       <div className="hey-chat-input-shell">
         <textarea
           ref={inputRef}

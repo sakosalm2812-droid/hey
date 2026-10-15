@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, X } from "lucide-react";
 import { createBrowserSpeechProvider, createDictationSession } from "../../lib/voiceProviders.js";
 import { useAuth } from "../../AuthContext.jsx";
 import { VOICE_STATES } from "../../core/voiceState.js";
+import { useLocale } from "../../i18n/LocaleContext.jsx";
 
 const isRecognitionAvailable = (environment) => Boolean(
   environment?.SpeechRecognition || environment?.webkitSpeechRecognition
@@ -10,6 +11,9 @@ const isRecognitionAvailable = (environment) => Boolean(
 
 export default function DictationControl({ onInsert, disabled = false }) {
   const { user } = useAuth();
+  const { t } = useLocale();
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const sessionRef = useRef(null);
   const triggerRef = useRef(null);
   const consentButtonRef = useRef(null);
@@ -27,6 +31,12 @@ export default function DictationControl({ onInsert, disabled = false }) {
   const [requesting, setRequesting] = useState(false);
   const [requestCancelled, setRequestCancelled] = useState(false);
   const isActive = state === VOICE_STATES.listening;
+
+  const getErrorMessage = useCallback((errorState) => {
+    if (errorState === VOICE_STATES.permissionRequired) return translateRef.current("chat.dictation.permissionDenied");
+    if (errorState === VOICE_STATES.offline) return translateRef.current("chat.dictation.offline");
+    return translateRef.current("chat.dictation.startFailed");
+  }, []);
 
   useEffect(() => {
     const environment = window;
@@ -47,14 +57,14 @@ export default function DictationControl({ onInsert, disabled = false }) {
       }),
       onStateChange: ({ state: nextState, error }) => {
         setState(nextState);
-        setStatus(error || "");
+        setStatus(error ? getErrorMessage(nextState) : "");
       },
     });
     return () => {
       sessionRef.current?.destroy();
       sessionRef.current = null;
     };
-  }, [user?.id]);
+  }, [user?.id, getErrorMessage]);
 
   useEffect(() => {
     if (disclosureOpen) {
@@ -89,21 +99,21 @@ export default function DictationControl({ onInsert, disabled = false }) {
         cancelRequest();
       } else if (isActive) {
         sessionRef.current?.stop();
-        setStatus("Dictation stopped.");
+        setStatus(translateRef.current("chat.dictation.stopped"));
       }
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [disclosureOpen, isActive, requestCancelled, requesting]);
   async function startWithConsent() {
-    setStatus("Requesting microphone access…");
+    setStatus(translateRef.current("chat.dictation.requesting"));
     setDisclosureOpen(false);
     setRequestCancelled(false);
     setRequesting(true);
     try {
       const result = await sessionRef.current?.start({ consentGiven: true });
-      if (result?.error) setStatus(result.error);
-      if (result?.status === "cancelled") setStatus("Dictation start cancelled. If the browser permission prompt remains open, dismiss it there.");
+      if (result?.error) setStatus(getErrorMessage(result.status));
+      if (result?.status === "cancelled") setStatus(translateRef.current("chat.dictation.cancelledPrompt"));
     } finally {
       setRequesting(false);
     }
@@ -112,7 +122,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
   function cancelRequest() {
     sessionRef.current?.stop();
     setRequestCancelled(true);
-    setStatus("Dictation start cancelled. If the browser permission prompt remains open, dismiss it there.");
+    setStatus(translateRef.current("chat.dictation.cancelledPrompt"));
     requestStatusRef.current?.focus();
   }
 
@@ -121,7 +131,7 @@ export default function DictationControl({ onInsert, disabled = false }) {
     sessionRef.current?.stop();
     setTranscript("");
     setDisclosureOpen(false);
-    setStatus("Dictation cancelled. Transcript discarded.");
+    setStatus(translateRef.current("chat.dictation.discarded"));
   }
 
   function insertTranscript() {
@@ -133,14 +143,14 @@ export default function DictationControl({ onInsert, disabled = false }) {
     onInsert(text);
     setTranscript("");
     setDisclosureOpen(false);
-    setStatus("Transcript inserted into the message field. Review it before sending.");
+    setStatus(translateRef.current("chat.dictation.inserted"));
   }
 
   if (!supported) {
     return (
       <div className="hey-dictation">
         <p className="hey-dictation__unsupported" role="status">
-          Dictation is unavailable in this browser. Type your message or use the separate voice conversation mode.
+          {t("chat.dictation.unavailable")}
         </p>
       </div>
     );
@@ -156,10 +166,10 @@ export default function DictationControl({ onInsert, disabled = false }) {
             className="hey-dictation__trigger"
             onClick={() => { setStatus(""); setDisclosureOpen(true); }}
             disabled={disabled}
-            aria-label="Review dictation privacy disclosure"
+            aria-label={t("chat.dictation.triggerAria")}
           >
             <Mic size={16} aria-hidden="true" />
-            <span>Dictate</span>
+            <span>{t("chat.dictation.trigger")}</span>
           </button>
         )}
         {isActive && (
@@ -167,28 +177,28 @@ export default function DictationControl({ onInsert, disabled = false }) {
             ref={stopButtonRef}
             type="button"
             className="hey-dictation__stop"
-            onClick={() => { sessionRef.current?.stop(); setStatus("Dictation stopped."); }}
-            aria-label="Stop dictation"
+            onClick={() => { sessionRef.current?.stop(); setStatus(t("chat.dictation.stopped")); }}
+            aria-label={t("chat.dictation.stopAria")}
             aria-pressed={isActive}
           >
             <MicOff size={16} aria-hidden="true" />
-            <span><i aria-hidden="true" /> Microphone active · Stop</span>
+            <span><i aria-hidden="true" /> {t("chat.dictation.stop")}</span>
           </button>
         )}
       </div>
 
       {disclosureOpen && (
         <section className="hey-dictation__disclosure" aria-labelledby="hey-dictation-heading">
-          <h3 id="hey-dictation-heading">Before you dictate</h3>
+          <h3 id="hey-dictation-heading">{t("chat.dictation.heading")}</h3>
           <p>
-            Your browser provides speech recognition. It may send audio to the browser vendor for processing, and that vendor’s data handling can vary. The transcript stays in this browser until you choose to insert and send it to HEY. Dictation never sends your message automatically.
+            {t("chat.dictation.disclosure")}
           </p>
           <div className="hey-dictation__actions">
             <button ref={consentButtonRef} type="button" onClick={startWithConsent} disabled={disabled}>
-              I agree, start dictation
+              {t("chat.dictation.consent")}
             </button>
             <button type="button" className="hey-dictation__quiet" onClick={() => setDisclosureOpen(false)}>
-              Cancel
+              {t("chat.dictation.cancel")}
             </button>
           </div>
         </section>
@@ -196,8 +206,8 @@ export default function DictationControl({ onInsert, disabled = false }) {
 
       {requesting && (
         <div ref={requestStatusRef} className="hey-dictation__status" role="status" aria-live="polite" tabIndex={-1}>
-          <span>{requestCancelled ? "Dictation start cancelled. Dismiss the browser permission prompt to continue." : "Waiting for microphone permission…"}</span>
-          {!requestCancelled && <button ref={cancelRequestRef} type="button" className="hey-dictation__quiet" onClick={cancelRequest}>Cancel request</button>}
+          <span>{requestCancelled ? t("chat.dictation.cancelledPrompt") : t("chat.dictation.requesting")}</span>
+          {!requestCancelled && <button ref={cancelRequestRef} type="button" className="hey-dictation__quiet" onClick={cancelRequest}>{t("chat.dictation.cancelRequest")}</button>}
         </div>
       )}
       {!requesting && status && <p className="hey-dictation__status" role="status" aria-live="polite">{status}</p>}
@@ -205,20 +215,20 @@ export default function DictationControl({ onInsert, disabled = false }) {
       {transcript && (
         <section className="hey-dictation__result" aria-labelledby="hey-dictation-result-heading">
           <div className="hey-dictation__result-heading">
-            <h3 id="hey-dictation-result-heading">Dictation transcript</h3>
-            {isActive && <span className="hey-dictation__active-label"><i aria-hidden="true" /> Listening</span>}
+            <h3 id="hey-dictation-result-heading">{t("chat.dictation.transcriptHeading")}</h3>
+            {isActive && <span className="hey-dictation__active-label"><i aria-hidden="true" /> {t("chat.dictation.listening")}</span>}
           </div>
           <p className="hey-dictation__transcript" aria-live="polite">{transcript}</p>
           <div className="hey-dictation__actions">
             {isActive && (
-              <button type="button" className="hey-dictation__quiet" onClick={stopAndDiscard}>
-                <X size={14} aria-hidden="true" /> Cancel and discard
+                <button type="button" className="hey-dictation__quiet" onClick={stopAndDiscard}>
+                <X size={14} aria-hidden="true" /> {t("chat.dictation.discardActive")}
               </button>
             )}
             {!isActive && (
               <>
-                <button ref={insertButtonRef} type="button" onClick={insertTranscript} disabled={disabled}>Insert into message</button>
-                <button type="button" className="hey-dictation__quiet" onClick={stopAndDiscard}>Discard</button>
+                <button ref={insertButtonRef} type="button" onClick={insertTranscript} disabled={disabled}>{t("chat.dictation.insert")}</button>
+                <button type="button" className="hey-dictation__quiet" onClick={stopAndDiscard}>{t("chat.dictation.discard")}</button>
               </>
             )}
           </div>
