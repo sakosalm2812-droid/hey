@@ -30,6 +30,9 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
   const answer = "The checked response.";
   const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(answer)));
   const answerSha256 = Array.from(digestBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const requestText = "What is the checked result?";
+  const requestDigestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(requestText)));
+  const requestSha256 = Array.from(requestDigestBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   const verified = {
     status: "verified",
     independentlyChecked: true,
@@ -38,24 +41,27 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
     provenance: {
       status: "verified",
       requestId,
+      requestSha256,
       answerSha256,
       primary: { role: "primary", providerId: "openai", modelId: "gpt-fixture", answerClaimId: "answer" },
       checker: { role: "checker", providerId: "gemini", modelId: "gemini-fixture", answerClaimId: "answer", verificationClaimId: "verification", confirmed: true },
     },
   };
-  const parsed = await parseFusionVerificationMetadata(verified, { answer, requestId });
+  const parsed = await parseFusionVerificationMetadata(verified, { answer, requestId, requestText });
   assert.equal(parsed.status, "verified");
   assert.equal(parsed.requestId, requestId);
+  assert.equal(parsed.requestSha256, requestSha256);
   assert.equal(parsed.primary.providerId, "openai");
   assert.equal(parsed.checker.providerId, "gemini");
   assert.equal(Object.isFrozen(parsed), true);
-  assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, confirmed: false } } }, { answer, requestId }), null);
-  assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, providerId: "openai" } } }, { answer, requestId }), null);
-  assert.equal(await parseFusionVerificationMetadata(verified, { answer: "A replayed answer.", requestId }), null);
-  assert.equal(await parseFusionVerificationMetadata(verified, { answer, requestId: "123e4567-e89b-42d3-a456-426614174001" }), null);
+  assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, confirmed: false } } }, { answer, requestId, requestText }), null);
+  assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, providerId: "openai" } } }, { answer, requestId, requestText }), null);
+  assert.equal(await parseFusionVerificationMetadata(verified, { answer: "A replayed answer.", requestId, requestText }), null);
+  assert.equal(await parseFusionVerificationMetadata(verified, { answer, requestId: "123e4567-e89b-42d3-a456-426614174001", requestText }), null);
+  assert.equal(await parseFusionVerificationMetadata(verified, { answer, requestId, requestText: "A different prompt using the same request ID." }), null);
   const hostile = {};
   Object.defineProperty(hostile, "status", { enumerable: true, get: () => "verified" });
-  assert.equal(await parseFusionVerificationMetadata(hostile, { answer, requestId }), null);
+  assert.equal(await parseFusionVerificationMetadata(hostile, { answer, requestId, requestText }), null);
 });
 
 test("chat UI exposes Fusion as a per-request checkbox and fences requests on unmount", async () => {
