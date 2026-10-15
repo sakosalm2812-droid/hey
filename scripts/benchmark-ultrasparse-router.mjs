@@ -1,5 +1,9 @@
 import os from "node:os";
-import { selectUltraSparseExperts } from "../src/core/ultrasparseRouter.js";
+import { createHash } from "node:crypto";
+import {
+  selectUltraSparseExperts,
+  selectUltraSparseExpertsIndexed,
+} from "../src/core/ultrasparseRouter.js";
 
 const workload = [
   "Debug the JavaScript function and explain the API bug.",
@@ -14,6 +18,10 @@ const warmup = smokeMode ? 20 : 2_000;
 const samplesPerTrial = smokeMode ? 50 : 10_000;
 const trials = smokeMode ? 1 : 5;
 const timerOverheadSamples = smokeMode ? 50 : 10_000;
+const algorithms = [
+  ["linear", selectUltraSparseExperts],
+  ["indexed", selectUltraSparseExpertsIndexed],
+];
 
 function summarize(samplesNs) {
   const sorted = [...samplesNs].sort((left, right) => left - right);
@@ -26,13 +34,20 @@ function summarize(samplesNs) {
   };
 }
 
-const selectionSamplesNs = [];
+const selectionSamplesNs = Object.fromEntries(algorithms.map(([name]) => [name, []]));
 for (let trial = 0; trial < trials; trial += 1) {
-  for (let index = 0; index < warmup; index += 1) selectUltraSparseExperts(workload[index % workload.length]);
+  for (let index = 0; index < warmup; index += 1) {
+    const query = workload[index % workload.length];
+    for (const [, select] of algorithms) select(query);
+  }
   for (let index = 0; index < samplesPerTrial; index += 1) {
-    const started = process.hrtime.bigint();
-    selectUltraSparseExperts(workload[(trial * samplesPerTrial + index) % workload.length]);
-    selectionSamplesNs.push(Number(process.hrtime.bigint() - started));
+    const query = workload[(trial * samplesPerTrial + index) % workload.length];
+    const order = (trial + index) % 2 ? [...algorithms].reverse() : algorithms;
+    for (const [name, select] of order) {
+      const started = process.hrtime.bigint();
+      select(query);
+      selectionSamplesNs[name].push(Number(process.hrtime.bigint() - started));
+    }
   }
 }
 
@@ -43,7 +58,7 @@ for (let index = 0; index < timerOverheadSamples; index += 1) {
 }
 
 const report = {
-  benchmark: "HEY lexical ultrasparse routing prototype",
+  benchmark: "HEY lexical ultrasparse selector comparison",
   mode: smokeMode ? "smoke" : "benchmark",
   samplesPerTrial,
   warmupPerTrial: warmup,
@@ -51,12 +66,24 @@ const report = {
   timerOverheadSamples,
   workloadCount: workload.length,
   workloadBytes: workload.reduce((sum, item) => sum + Buffer.byteLength(item), 0),
+  workloadSha256: createHash("sha256").update(JSON.stringify(workload)).digest("hex"),
+  algorithms: {
+    linear: {
+      isDefault: true,
+      description: "Scan each expert's declared terms against the token set.",
+      perOperationSelectionLatency: summarize(selectionSamplesNs.linear),
+    },
+    indexed: {
+      isDefault: false,
+      description: "Use a prebuilt token-to-expert inverted index.",
+      perOperationSelectionLatency: summarize(selectionSamplesNs.indexed),
+    },
+  },
   selectionOnly: true,
   modelLoadingIncluded: false,
   inferenceIncluded: false,
-  perOperationSelectionLatency: summarize(selectionSamplesNs),
   emptyTimerPairLatency: summarize(emptyPairSamplesNs),
-  timingMethod: "Each operation is bracketed by process.hrtime.bigint(); empty timer-pair samples estimate instrumentation overhead and are reported without subtraction.",
+  timingMethod: "Each operation is bracketed by process.hrtime.bigint(); each algorithm receives the same deterministic query sequence, calls alternate order to balance ordering effects, and empty timer-pair samples estimate timer overhead without subtraction.",
   node: process.version,
   platform: `${process.platform}-${process.arch}`,
   cpu: os.cpus()[0]?.model || "unknown",

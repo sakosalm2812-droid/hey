@@ -12,9 +12,40 @@ const EXPERTS = Object.freeze([
 
 const MAX_QUERY_LENGTH = 4096;
 const MAX_EXPERTS = 3;
+const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
+const TOKEN_EXPERT_INDEX = new Map();
+
+for (const expert of EXPERTS) {
+  for (const term of expert.terms) {
+    if (!TOKEN_EXPERT_INDEX.has(term)) TOKEN_EXPERT_INDEX.set(term, []);
+    TOKEN_EXPERT_INDEX.get(term).push(expert.id);
+  }
+}
 
 function tokenize(text) {
   return text.toLowerCase().match(/[a-z0-9]+/g) || [];
+}
+
+function selectionInput(input, limit) {
+  if (typeof input !== "string") return null;
+  const query = input.slice(0, MAX_QUERY_LENGTH);
+  return {
+    tokenSet: new Set(tokenize(query)),
+    requestedLimit: Number.isInteger(limit) ? Math.max(1, Math.min(MAX_EXPERTS, limit)) : 2,
+    truncated: input.length > MAX_QUERY_LENGTH,
+  };
+}
+
+function formatSelection(ranked, requestedLimit, truncated) {
+  const chosen = ranked.filter((expert) => expert.score > 0)
+    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
+    .slice(0, requestedLimit);
+  return {
+    experts: chosen.map(({ id, score }) => ({ id, score })),
+    matchedTerms: chosen.flatMap(({ id, matchedTerms }) => matchedTerms.map((term) => ({ expert: id, term }))),
+    status: chosen.length ? "selected" : "no_match",
+    truncated,
+  };
 }
 
 /**
@@ -22,25 +53,37 @@ function tokenize(text) {
  * This is an interpretable CPU-only research baseline, not a trained router.
  */
 export function selectUltraSparseExperts(input, { limit = 2 } = {}) {
-  if (typeof input !== "string") return { experts: [], matchedTerms: [], status: "invalid_input" };
-
-  const query = input.slice(0, MAX_QUERY_LENGTH);
-  const tokens = tokenize(query);
-  const tokenSet = new Set(tokens);
-  const requestedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(MAX_EXPERTS, limit)) : 2;
+  const normalized = selectionInput(input, limit);
+  if (!normalized) return { experts: [], matchedTerms: [], status: "invalid_input" };
   const ranked = EXPERTS.map((expert) => {
-    const matchedTerms = expert.terms.filter((term) => tokenSet.has(term));
+    const matchedTerms = expert.terms.filter((term) => normalized.tokenSet.has(term));
     return { id: expert.id, score: matchedTerms.length, matchedTerms };
-  }).filter((expert) => expert.score > 0)
-    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+  });
 
-  const chosen = ranked.slice(0, requestedLimit);
-  return {
-    experts: chosen.map(({ id, score }) => ({ id, score })),
-    matchedTerms: chosen.flatMap(({ id, matchedTerms }) => matchedTerms.map((term) => ({ expert: id, term }))),
-    status: chosen.length ? "selected" : "no_match",
-    truncated: input.length > MAX_QUERY_LENGTH,
-  };
+  return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
+}
+
+/** Experimental inverted-index implementation; the linear selector remains the default. */
+export function selectUltraSparseExpertsIndexed(input, { limit = 2 } = {}) {
+  const normalized = selectionInput(input, limit);
+  if (!normalized) return { experts: [], matchedTerms: [], status: "invalid_input" };
+
+  const matchedByExpert = new Map();
+  for (const token of normalized.tokenSet) {
+    for (const expertId of TOKEN_EXPERT_INDEX.get(token) || []) {
+      if (!matchedByExpert.has(expertId)) matchedByExpert.set(expertId, new Set());
+      matchedByExpert.get(expertId).add(token);
+    }
+  }
+
+  const ranked = Array.from(matchedByExpert, ([expertId, matched]) => {
+    const expert = EXPERT_BY_ID.get(expertId);
+    // Filtering the expert's fixed vocabulary preserves the linear baseline's
+    // deterministic term order while touching only matched experts.
+    const matchedTerms = expert.terms.filter((term) => matched.has(term));
+    return { id: expert.id, score: matchedTerms.length, matchedTerms };
+  });
+  return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
 }
 
 /**
@@ -57,4 +100,4 @@ export function createUltraSparsePlan(input, { intent = "conversation", limit = 
   };
 }
 
-export default { selectUltraSparseExperts, createUltraSparsePlan };
+export default { selectUltraSparseExperts, selectUltraSparseExpertsIndexed, createUltraSparsePlan };
