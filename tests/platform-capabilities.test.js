@@ -481,3 +481,20 @@ test("tool registry descriptors cannot expose or rewrite live execution policy",
     unregisterTool(name);
   }
 });
+
+test("tool registry rejects cyclic, accessor, and mutable-container policy metadata", async () => {
+  const { registerTool, unregisterTool } = await import("../src/core/toolRegistry.js");
+  const cyclic = {};
+  cyclic.self = cyclic;
+  const accessor = Object.defineProperty({}, "permission", {
+    enumerable: true,
+    get() { throw new Error("metadata getter executed"); },
+  });
+
+  assert.throws(() => registerTool("test.registry.cyclic", async () => ({}), cyclic), /cycles/);
+  assert.throws(() => registerTool("test.registry.accessor", async () => ({}), accessor), /accessors/);
+  assert.throws(() => registerTool("test.registry.map", async () => ({}), { policy: new Map() }), /plain objects and arrays/);
+  assert.equal(unregisterTool("test.registry.cyclic"), false);
+  assert.equal(unregisterTool("test.registry.accessor"), false);
+  assert.equal(unregisterTool("test.registry.map"), false);
+});

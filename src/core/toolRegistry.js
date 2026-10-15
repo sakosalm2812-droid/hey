@@ -4,12 +4,59 @@ import { executeWithPermission, authorizeExecution } from "./permissionManager.j
 const tools = new Map();
 
 function cloneMetadata(metadata) {
-  return structuredClone(metadata);
+  return cloneMetadataValue(metadata, new WeakSet());
 }
 
-function freezeRecursively(value) {
+function cloneMetadataValue(value, ancestors) {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
+  if (typeof value !== "object") throw new TypeError("Tool metadata must contain only plain data values.");
+  if (ancestors.has(value)) throw new TypeError("Tool metadata cannot contain cycles.");
+
+  const prototype = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) throw new TypeError("Tool metadata arrays must be plain arrays.");
+    ancestors.add(value);
+    const result = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor)) throw new TypeError("Tool metadata arrays cannot be sparse or use accessors.");
+      result.push(cloneMetadataValue(descriptor.value, ancestors));
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      if (key !== "length" && !(typeof key === "string" && /^(0|[1-9]\d*)$/.test(key) && Number(key) < value.length)) {
+        throw new TypeError("Tool metadata arrays cannot contain custom properties.");
+      }
+    }
+    ancestors.delete(value);
+    return result;
+  }
+
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Tool metadata must contain only plain objects and arrays.");
+  }
+
+  ancestors.add(value);
+  const result = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new TypeError("Tool metadata cannot contain symbol keys.");
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor)) throw new TypeError("Tool metadata cannot contain accessors.");
+    Object.defineProperty(result, key, {
+      value: cloneMetadataValue(descriptor.value, ancestors),
+      enumerable: descriptor.enumerable,
+      writable: true,
+      configurable: true,
+    });
+  }
+  ancestors.delete(value);
+  return result;
+}
+
+function freezeRecursively(value, seen = new WeakSet()) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  Object.values(value).forEach(freezeRecursively);
+  if (seen.has(value)) return value;
+  seen.add(value);
+  Object.values(value).forEach((nested) => freezeRecursively(nested, seen));
   return Object.freeze(value);
 }
 
