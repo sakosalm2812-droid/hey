@@ -64,7 +64,6 @@ function ChatWorkspace() {
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [copiedMessage, setCopiedMessage] = useState("");
   const [executionStatus, setExecutionStatus] = useState("");
-  const [pendingExecution, setPendingExecution] = useState(null);
   const skipNextDraftPersistenceRef = useRef(false);
   const activeRequestControllerRef = useRef(null);
 
@@ -199,7 +198,7 @@ function ChatWorkspace() {
     setMessage((current) => current.trim() ? `${current.trim()} ${transcript}` : transcript);
   }
 
-  async function sendUserMessage(userMessage, { confirmed = false, displayUserMessage = true } = {}) {
+  async function sendUserMessage(userMessage, { displayUserMessage = true } = {}) {
     const trimmedMessage = userMessage.trim();
     if (!trimmedMessage || isSending) return;
     const requestedFusion = fusionEnabled;
@@ -217,13 +216,8 @@ function ChatWorkspace() {
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
-        confirmed,
         fusion: requestedFusion,
         signal: controller.signal,
-        onExecutionResult: (execution, originalMessage) => {
-          if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
-          else setPendingExecution(null);
-        },
       });
       if (controller.signal.aborted) return;
 
@@ -242,13 +236,6 @@ function ChatWorkspace() {
         }
       }
     }
-  }
-
-  async function confirmPendingExecution() {
-    if (!pendingExecution) return;
-    const request = pendingExecution;
-    setPendingExecution(null);
-    await sendUserMessage(request.message, { confirmed: true, displayUserMessage: false });
   }
 
   async function pinMessage(text) {
@@ -491,11 +478,6 @@ function ChatWorkspace() {
                 ))}
               </div>
               {executionStatus && <p className="hey-chat-execution-status" aria-live="polite">{executionStatus}</p>}
-              {pendingExecution && (
-                <button type="button" className="hey-btn-primary" onClick={confirmPendingExecution} disabled={isSending}>
-                  Confirm desktop action
-                </button>
-              )}
               <ChatInput
                 value={message}
                 setValue={setMessage}

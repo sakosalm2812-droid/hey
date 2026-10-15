@@ -77,20 +77,20 @@ test("full journey: explicit remember writes through even when gating is on", ()
   assert.equal(context.memory.importantFacts.length >= 1, true);
 });
 
-test("full journey: permission request does not claim completion and leaves a decision receipt", async () => {
+test("full journey: computer control fails closed until a trusted action runtime is configured", async () => {
   clearAuditEntries();
   const { executeRequest } = await import("../src/core/executionController.js");
 
   const result = await executeRequest({ input: "Open Chrome." });
   assert.equal(result.handled, true);
-  assert.equal(result.status, "permission_required");
+  assert.equal(result.status, "action_authority_unavailable");
   assert.equal(result.verified, false);
 
   const audit = listAuditEntries(50);
-  assert.equal(audit.some((entry) => entry.action === "authorization.decision"), true);
+  assert.equal(audit.some((entry) => entry.action === "execution.request" && entry.status === "failed"), true);
 });
 
-test("full journey: verified workflow execution stores a pattern memory and one execution receipt", async () => {
+test("full journey: injected tool success cannot create a completed workflow receipt", async () => {
   const events = [];
   const stop = HEY.events.subscribe("execution.request.completed", (event) => events.push(event));
 
@@ -98,10 +98,10 @@ test("full journey: verified workflow execution stores a pattern memory and one 
     { input: "open https://example.com" },
     { executeTool: async () => ({ success: true, result: { verified: true, url: "https://example.com" } }) },
   );
-  assert.equal(result.success, true);
-  assert.equal(result.verified, true);
-  assert.equal(result.memory.type, "pattern");
-  assert.equal(events.length, 1);
+  assert.equal(result.success, false);
+  assert.equal(result.status, "action_authority_unavailable");
+  assert.equal(result.verified, false);
+  assert.equal(events.length, 0);
 
   const audit = listAuditEntries(20);
   assert.equal(audit.some((entry) => entry.action === "execution.request"), true);

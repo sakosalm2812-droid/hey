@@ -126,7 +126,7 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false, fusion = false, signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, fusion = false, signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
@@ -134,14 +134,13 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
     const executionIdentity = fusion ? null : await getExecutionIdentity(session);
     const execution = fusion ? null : await executeRequest(
       { input: message, command: brainResult.command, tools: brainResult.tools, primaryTools: brainResult.primaryTools },
-      { confirmed, user: executionIdentity },
+      { user: executionIdentity },
     );
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const currentBeforeSend = await getHEYSession();
     if (!isSameHEYAccount(session, currentBeforeSend)) {
       throw new DOMException("The signed-in account changed while this request was running.", "AbortError");
     }
-    onExecutionResult?.(execution, message);
     if (execution.handled) {
       const answer = execution.result?.message || "HEY could not complete that action.";
       addConversationMessage({ role: "assistant", content: answer });

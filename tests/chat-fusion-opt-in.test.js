@@ -36,6 +36,7 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
   assert.match(input, /fusionEnabled = false/);
   assert.match(page, /useEffect\(\(\) => \(\) => activeRequestControllerRef\.current\?\.abort\(\), \[\]\)/);
   assert.match(page, /fusion: requestedFusion/);
+  assert.doesNotMatch(page, /pendingExecution|confirmPendingExecution|setPendingExecution/);
   assert.match(client, /const execution = fusion \? null : await executeRequest/);
   assert.match(client, /withFusionRequestOptIn\([\s\S]*?\}, fusion\)\)/);
 });

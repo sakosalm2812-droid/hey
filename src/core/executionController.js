@@ -78,6 +78,15 @@ async function executeStep(step, options) {
     return failure(`Tool ${resolved.toolName} is not available for this agent.`, { status: "unauthorized", code: "TOOL_NOT_AUTHORIZED", tool: resolved.toolName, capability: resolved.capability });
   }
 
+  if (resolved.toolName.startsWith("computer.")) {
+    return failure("This computer action is blocked because this session has no trusted mandate and independent verification adapter.", {
+      status: "action_authority_unavailable",
+      code: "ACTION_AUTHORITY_UNAVAILABLE",
+      capability: resolved.capability,
+      tool: resolved.toolName,
+    });
+  }
+
   publish("execution.step.started", { requestId: options.requestId, tool: resolved.toolName, capability: resolved.capability });
 
   const result = await (options.executeTool || executeTool)(resolved.toolName, resolved.input, {

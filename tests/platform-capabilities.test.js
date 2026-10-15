@@ -14,7 +14,6 @@ import { createTauriAdapter, isTauriRuntime } from "../src/lib/tauriAdapter.js";
 import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice, registerDeviceAdapter, unregisterDeviceAdapter, unregisterDevice, revokeDevice } from "../src/core/deviceGateway.js";
 import { VOICE_STATES, createVoiceState } from "../src/core/voiceState.js";
 import { executeRequest } from "../src/core/executionController.js";
-import { subscribe, clearEventListeners } from "../src/core/eventBus.js";
 import { createVoiceSession } from "../src/lib/voiceProviders.js";
 import { understandImage, validateImageInput } from "../src/core/visionEngine.js";
 import { setAccountScope } from "../src/core/accountScope.js";
@@ -444,33 +443,36 @@ test("voice state rejects impossible transitions and preserves real states", () 
   assert.equal(voice.transition(VOICE_STATES.interrupted).state, VOICE_STATES.interrupted);
 });
 
-test("execution controller accepts only verified tool results", async () => {
-  const events = [];
-  const unsubscribe = subscribe("execution.request.completed", (event) => events.push(event));
-  const success = await executeRequest(
+test("execution controller never lets a tool self-report authorize computer actions", async () => {
+  let calls = 0;
+  const result = await executeRequest(
     { input: "open https://example.com" },
-    { executeTool: async () => ({ success: true, result: { verified: true, url: "https://example.com" } }) },
+    { executeTool: async () => { calls += 1; return { success: true, result: { verified: true, url: "https://example.com" } }; } },
   );
-  assert.equal(success.success, true);
-  assert.equal(success.verified, true);
-  assert.equal(success.memory.type, "pattern");
-  assert.equal(events.length, 1);
-  unsubscribe();
-
-  const unverified = await executeRequest(
-    { input: "open https://example.com" },
-    { executeTool: async () => ({ success: true, result: { verified: false } }) },
-  );
-  assert.equal(unverified.status, "verification_failed");
-  assert.equal(unverified.verified, false);
-  clearEventListeners("execution.request.completed");
+  assert.equal(result.status, "action_authority_unavailable");
+  assert.equal(result.verified, false);
+  assert.equal(calls, 0);
 });
 
-test("natural commands reach permission gates instead of self-approving", async () => {
+test("natural computer commands stop before dispatch when the trusted action lifecycle is unavailable", async () => {
   const result = await executeRequest({ input: "Open Chrome." });
   assert.equal(result.handled, true);
-  assert.equal(result.status, "permission_required");
-  assert.equal(result.result.requiresConfirmation, true);
+  assert.equal(result.status, "action_authority_unavailable");
+  assert.equal(result.result.requiresConfirmation, false);
+});
+
+test("chat computer execution fails closed without the trusted action lifecycle even after replayed confirmation", async () => {
+  let calls = 0;
+  const result = await executeRequest(
+    { input: "open https://example.com" },
+    { confirmed: true, executeTool: async () => { calls += 1; return { success: true, result: { verified: true } }; } },
+  );
+
+  assert.equal(result.handled, true);
+  assert.equal(result.status, "action_authority_unavailable");
+  assert.equal(result.result.code, "ACTION_AUTHORITY_UNAVAILABLE");
+  assert.match(result.result.message, /trusted mandate and independent verification adapter/i);
+  assert.equal(calls, 0);
 });
 
 test("Chrome and YouTube request becomes an executable workflow", () => {
@@ -482,7 +484,7 @@ test("Chrome and YouTube request becomes an executable workflow", () => {
   ]);
 });
 
-test("Chrome navigation maps YouTube to a validated URL", async () => {
+test("Chrome navigation cannot dispatch through direct tool injection", async () => {
   const calls = [];
   const result = await executeRequest(
     { input: "Open Chrome and go to YouTube." },
@@ -494,11 +496,11 @@ test("Chrome navigation maps YouTube to a validated URL", async () => {
       },
     },
   );
-  assert.equal(result.success, true);
-  assert.deepEqual(calls[1], ["computer.navigate_browser", { target: "YouTube", url: "https://www.youtube.com" }]);
+  assert.equal(result.status, "action_authority_unavailable");
+  assert.equal(calls.length, 0);
 });
 
-test("workflow execution stops after the first failed step", async () => {
+test("workflow execution stops before its first computer step without the trusted lifecycle", async () => {
   let calls = 0;
   const result = await executeRequest(
     { input: "open https://example.com, open https://example.org" },
@@ -509,9 +511,9 @@ test("workflow execution stops after the first failed step", async () => {
       },
     },
   );
-  assert.equal(result.success, false);
+  assert.equal(result.status, "action_authority_unavailable");
   assert.equal(result.results.length, 1);
-  assert.equal(calls, 1);
+  assert.equal(calls, 0);
 });
 
 test("voice session reports unavailable and permission states honestly", async () => {

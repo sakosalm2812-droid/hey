@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { webcrypto } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-import { createAction, executeAction, undoAction, clearActions, invalidateActionPreviews } from "../src/core/actionEngine.js";
+import { createAction, executeAction, undoAction, clearActions, invalidateActionPreviews, revokeActionAuthority } from "../src/core/actionEngine.js";
 import { listAuditEntries } from "../src/core/auditLog.js";
 import { getAccountScope, setAccountScope } from "../src/core/accountScope.js";
 import supabaseClient from "../src/lib/supabase.js";
@@ -118,6 +118,13 @@ test("strict computer action denies executor self-report without an independent 
   assert.equal(action.status, "queued");
 });
 
+test("durable authority revocation refuses an account that is not authenticated", async () => {
+  const result = await revokeActionAuthority("voiceos-other-account", "user requested revocation");
+
+  assert.equal(result.success, false);
+  assert.match(result.error, /signed-in account/i);
+});
+
 test("computer action binds immutable target input and trusts only separate postcondition evidence", async (t) => {
   installMandateResponse(t);
   clearActions();
@@ -185,6 +192,7 @@ test("self-reported success cannot override forged, stale, wrong-resource, wrong
     assert.equal(result.success, false, label);
     assert.equal(action.status, "failed", label);
     assert.equal(Object.hasOwn(action, "verification"), false, label);
+    assert.equal(Object.hasOwn(action, "receipt"), false, label);
     assert.match(result.error, /observation/i, label);
   }
 });

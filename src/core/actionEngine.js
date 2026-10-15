@@ -157,6 +157,7 @@ export function invalidateActionPreviews(currentContext = {}) {
   for (const action of actions.values()) {
     if (!isSensitiveComputerAction(action) || !action.lifecycle) continue;
     const lifecycle = action.lifecycle;
+    if (currentContext.onlyAccount === true && lifecycle.accountId !== currentContext.accountId) continue;
     const matches = lifecycle.expiresAt > now
       && currentContext.accountId === lifecycle.accountId
       && currentContext.deviceId === lifecycle.deviceId
@@ -168,6 +169,32 @@ export function invalidateActionPreviews(currentContext = {}) {
     }
   }
   return invalidated;
+}
+
+export async function revokeActionAuthority(accountId, reason = "User revoked action authority.") {
+  const normalizedAccountId = typeof accountId === "string" ? accountId.trim() : "";
+  const normalizedReason = typeof reason === "string" ? reason.trim() : "";
+  if (!normalizedAccountId || normalizedAccountId.length > 256 || !normalizedReason || normalizedReason.length > 500) {
+    return { success: false, error: "A valid account and revocation reason are required." };
+  }
+  try {
+    const getUser = supabaseClient?.auth?.getUser;
+    if (typeof getUser !== "function" || authenticatedAccountId((await getUser.call(supabaseClient.auth))?.data?.user) !== normalizedAccountId) {
+      return { success: false, error: "Only the signed-in account can revoke its action authority." };
+    }
+    const rpc = supabaseClient?.rpc;
+    if (typeof rpc !== "function") return { success: false, error: "Durable action authority revocation is unavailable." };
+    const { data, error } = await rpc.call(supabaseClient, "advance_hey_action_mandate_epoch", { p_account_id: normalizedAccountId });
+    if (error || !Number.isSafeInteger(Number(data)) || Number(data) < 1) {
+      return { success: false, error: "Durable action authority revocation could not be confirmed." };
+    }
+    const epoch = Number(data);
+    const invalidated = invalidateActionPreviews({ accountId: normalizedAccountId, onlyAccount: true });
+    recordAudit({ action: "action.authority.revoked", status: "completed", metadata: { accountId: normalizedAccountId, authorizationEpoch: epoch, invalidatedPreviewCount: invalidated, reason: normalizedReason } });
+    return { success: true, accountId: normalizedAccountId, authorizationEpoch: epoch, invalidatedPreviewCount: invalidated };
+  } catch {
+    return { success: false, error: "Durable action authority revocation could not be confirmed." };
+  }
 }
 
 subscribeAccountScope((_previousScope, nextScope) => {
@@ -395,6 +422,10 @@ export async function executeAction(actionId, handler, options = {}) {
   const mandate = await authorizeActionMandate(strictAction, strictOptions);
   if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   if (!mandate.authorized) return { success: false, error: mandate.reason, action, mandate };
+  if (requiresIndependentVerification && (typeof mandate.mandateId !== "string" || !mandate.mandateId.trim()
+    || mandate.mandateId.length > 512 || !Number.isSafeInteger(mandate.remainingUses) || mandate.remainingUses < 0)) {
+    return { success: false, error: "Trusted mandate result is incomplete or exceeds the action receipt limits.", action };
+  }
   // Mandate verification is asynchronous; reserve the action only after it
   // completes, then re-check admission to prevent concurrent double dispatch.
   if (action.status !== "queued" && action.status !== "approved") {
@@ -459,14 +490,63 @@ export async function executeAction(actionId, handler, options = {}) {
         observedAt: verificationSnapshot.observedAt,
         evidence: verificationSnapshot.evidence ?? null,
       });
+      const [resourceDigest, evidenceDigest, deviceIdDigest] = await Promise.all([
+        digestReceiptValue(strictResource, "Action receipt resource"),
+        digestReceiptValue(verificationSnapshot.evidence ?? null, "Action receipt evidence"),
+        action.lifecycle?.deviceId
+          ? digestReceiptValue(action.lifecycle.deviceId, "Action receipt device id")
+          : Promise.resolve(null),
+      ]);
+      if (actions.get(actionId) !== action || action.status !== "running" || !lifecycleIsCurrent()) {
+        return { success: false, error: action.error || "Action or account is no longer available for execution.", action };
+      }
+      if (typeof mandate.mandateId !== "string" || !mandate.mandateId.trim()) {
+        throw new Error("A verified mandate id is required to issue an action activity receipt.");
+      }
+      const receipt = freezePlainJson({
+        version: 1,
+        id: crypto.randomUUID(),
+        actionId: strictAction.id,
+        accountId,
+        deviceIdDigest,
+        authorizationEpoch: action.lifecycle?.authorizationEpoch ?? null,
+        expiresAt: action.lifecycle?.expiresAt ?? null,
+        operationId,
+        capability: executionContext.tool || executionContext.permission,
+        permission: executionContext.permission,
+        riskLevel: executionContext.riskLevel,
+        resourceDigest,
+        inputDigest: executionInputDigest,
+        policyDecision: mandate.policyDecision?.decision || "allow",
+        policyVersion: typeof mandate.policyDecision?.policyVersion === "string" ? mandate.policyDecision.policyVersion.slice(0, 256) : null,
+        mandate: { authorized: true, mandateId: mandate.mandateId, remainingUses: mandate.remainingUses },
+        postcondition: {
+          verified: true,
+          observerId: verificationSnapshot.observerId,
+          observationId: verificationSnapshot.observationId,
+          observedAt: verificationSnapshot.observedAt,
+          evidenceDigest,
+        },
+        issuedAt: new Date().toISOString(),
+      });
+      if (JSON.stringify(receipt).length > 16 * 1024) throw new Error("Action activity receipt exceeds the size limit.");
       Object.defineProperty(action, "verification", { value: verificationRecord, enumerable: true, writable: false, configurable: false });
+      Object.defineProperty(action, "receipt", { value: receipt, enumerable: true, writable: false, configurable: false });
     } else if (!action.result || action.result.success !== true || action.result.verified !== true) {
       throw new Error(action.result?.error || "The action could not be verified.");
     }
     action.status = "completed";
     action.updatedAt = new Date();
     publish("action.updated", action);
-    recordAudit({ action: "action.executed", tool: action.tool, riskLevel: action.riskLevel, status: "completed", metadata: { actionId } });
+    recordAudit({ action: "action.executed", tool: action.tool, riskLevel: action.riskLevel, status: "completed", metadata: {
+      actionId,
+      receiptId: action.receipt?.id || null,
+      operationId: action.receipt?.operationId || null,
+      accountId: action.receipt?.accountId || authenticatedAccountId(options.user),
+      mandateId: action.receipt?.mandate?.mandateId || null,
+      resourceDigest: action.receipt?.resourceDigest || null,
+      receipt: action.receipt || null,
+    } });
     return { success: true, action };
   } catch (error) {
     if (requiresLifecycleFence && !actionLifecycleMatches(action, options)) {
@@ -535,16 +615,24 @@ export async function undoAction(actionId, handler, options = {}) {
       return { success: false, error: "Strict undo requires an immutable original action verification snapshot.", action };
     }
     try { originalVerificationSnapshot = freezePlainJson(copyPlainJson(verificationDescriptor.value)); }
-    catch { return { success: false, error: "Strict undo original verification must be bounded plain JSON data.", action };
+    catch { return { success: false, error: "Strict undo original verification must be bounded plain JSON data.", action }; }
+    const receiptDescriptor = Object.getOwnPropertyDescriptor(action, "receipt");
+    if (!receiptDescriptor || !Object.hasOwn(receiptDescriptor, "value")
+      || receiptDescriptor.writable !== false || receiptDescriptor.configurable !== false
+      || receiptDescriptor.value?.actionId !== action.id
+      || receiptDescriptor.value?.operationId !== originalVerificationSnapshot.operationId
+      || receiptDescriptor.value?.accountId !== accountId
+      || receiptDescriptor.value?.postcondition?.verified !== true) {
+      return { success: false, error: "Strict undo requires an immutable activity receipt for the independently verified original action.", action };
     }
     if (originalVerificationSnapshot?.verified !== true
       || originalVerificationSnapshot.capability !== originalCapability
       || originalVerificationSnapshot.permission !== originalPermission
       || originalVerificationSnapshot.riskLevel !== originalRiskLevel
       || originalVerificationSnapshot.accountId !== accountId
-      || originalVerificationSnapshot.deviceId !== action.lifecycle.deviceId
-      || originalVerificationSnapshot.authorizationEpoch !== action.lifecycle.authorizationEpoch
-      || originalVerificationSnapshot.lifecycleExpiresAt !== action.lifecycle.expiresAt
+      || originalVerificationSnapshot.deviceId !== action.lifecycle?.deviceId
+      || originalVerificationSnapshot.authorizationEpoch !== action.lifecycle?.authorizationEpoch
+      || originalVerificationSnapshot.lifecycleExpiresAt !== action.lifecycle?.expiresAt
       || originalVerificationSnapshot.operation !== "execute"
       || typeof originalVerificationSnapshot.operationId !== "string"
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(originalVerificationSnapshot.operationId)
@@ -682,7 +770,8 @@ export async function undoAction(actionId, handler, options = {}) {
     return { ...releaseReservation(mandate.reason), mandate };
   }
   if (actions.get(actionId) !== action || undoReservations.get(actionId) !== reservationToken || action.status !== "undo_authorizing" || (requiresIndependentVerification && authenticatedAccountId(options.user) !== accountId) || !lifecycleIsCurrent()) return staleReservation();
-  if (requiresIndependentVerification && (typeof mandate.mandateId !== "string" || mandate.mandateId.length > 512)) {
+  if (requiresIndependentVerification && (typeof mandate.mandateId !== "string" || !mandate.mandateId.trim()
+    || mandate.mandateId.length > 512 || !Number.isSafeInteger(mandate.remainingUses) || mandate.remainingUses < 0)) {
     return releaseReservation("Strict undo mandate result exceeds the receipt size limit.");
   }
   action.status = "undoing";
@@ -787,6 +876,7 @@ export async function undoAction(actionId, handler, options = {}) {
         mandateId: action.undoReceipt?.mandate?.mandateId || null,
         originalInputDigest: action.undoReceipt?.originalInputDigest || null,
         originalVerificationEvidenceDigest: action.undoReceipt?.originalVerificationEvidenceDigest || null,
+        receipt: action.undoReceipt || null,
         postconditionEvidenceDigest: action.undoReceipt?.postcondition?.evidenceDigest || null,
         policyVersion: action.undoReceipt?.policyVersion || null,
       },
@@ -804,4 +894,4 @@ export async function undoAction(actionId, handler, options = {}) {
   }
 }
 
-export default { createAction, listActions, getAction, approveAction, executeAction, undoAction, invalidateActionPreviews, clearActions };
+export default { createAction, listActions, getAction, approveAction, executeAction, undoAction, invalidateActionPreviews, revokeActionAuthority, clearActions };
