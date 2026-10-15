@@ -2,7 +2,7 @@
 
 Updated: 2026-10-15
 Repository branch: `codex/resume-emergency-2026-10-14`  
-Latest verified implementation checkpoint: `933d76c` (source); full Node suite 333/333, focused device-queue tests 5/5, scoped ESLint for the queue adapter/tests, `git diff --check`, and production build passed. Device retry SQL was statically inspected but not run against PostgreSQL/Supabase. See `HEY_EXECUTION_HANDOFF.md` for the verification boundary.
+Latest verified implementation checkpoint: `17bb523` (source); full Node suite 342/342, release-gate focused tests 17/17, device-queue focused tests 5/5, changed-file ESLint, `git diff --check`, and production build passed. Device and release-evidence SQL was statically inspected but not run against PostgreSQL/Supabase. See `HEY_EXECUTION_HANDOFF.md` for the verification boundary.
 
 ## Status rules
 
@@ -66,9 +66,11 @@ The supplied file is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM
 
 Step 46 follow-up is active in `/root/step46_repo_inventory` on `codex/step46-repository-inventory`, synchronized to coordinator `933d76c`; it adds bounded manifest/contract/migration classification to the existing metadata-only inventory. It must remain read-only and identify unknowns rather than infer or execute changes.
 
+Step 47 delta: the attestation and detached-snapshot fix are now integrated (`e939794`, `17bb523`). The previous Step 47 row's sentence describing the mutation issue as still under review is superseded: its regression now passes. Step 47 remains in progress because the evaluator does not provide the complete authoritative HEY gate catalog, governed key/challenge lifecycle, production device/restore drills or release certification.
+
 ## Latest verified integrated checkpoint as of 2026-10-15
 
-At `933d76c`, the full Node suite passed **333/333**, focused device queue tests **5/5**, scoped ESLint for the changed queue adapter/tests and `git diff --check` passed; the production build passed. A full repository ESLint attempt at an earlier checkpoint was interrupted after about four minutes without output while follow-up workers were running; full lint passed at `5953c03`. Provider calls were mocked; no Deno deployment/typecheck, live Supabase/PostgreSQL check, native adapter, authenticated browser, or real inference ran. Sitemap generation skipped because `SITE_URL` is unset; the existing Vite mixed static/dynamic import warning remains.
+At `17bb523`, the full Node suite passed **342/342**, release-gate focused tests **17/17**, device-queue focused tests **5/5**, changed-file ESLint, `git diff --check`, and production build passed. A full repository ESLint attempt at an earlier checkpoint was interrupted after about four minutes without output while follow-up workers were running; full lint passed at `5953c03`. Provider calls were mocked; no Deno deployment/typecheck, live Supabase/PostgreSQL check, native adapter, authenticated browser, or real inference ran. Sitemap generation skipped because `SITE_URL` is unset; the existing Vite mixed static/dynamic import warning remains.
 ## Earlier verified checkpoint
 
 At current integrated checkpoint `f4fcda2`, the full suite passed **169/169**, mission runtime hardening passed **15/15**, the migration planner suite passed **11/11**, scoped ESLint (`src tests scripts supabase/functions/hey-mandate`), production build, `git diff --check`, and runtime harness syntax validation passed. Sitemap generation skipped because `SITE_URL` is unset and the existing `contextManager.js` mixed static/dynamic import warning remains. No Supabase CLI or PostgreSQL client is installed, so SQL migrations and deployed Edge Function have not been applied or integration-tested; these gates are local code evidence only. The planner’s local tests prove only its dry-run behavior on supplied inventories; full Step 46 integration remains unverified. Earlier checkpoints and worker-level verification follow in `HEY_EXECUTION_HANDOFF.md`.
