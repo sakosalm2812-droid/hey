@@ -66,6 +66,7 @@ import {
 import { EventOutboxStoreContract, InMemoryEventOutboxStore } from "./eventOutbox.js";
 import { SupabaseEventOutboxStore } from "./supabaseEventOutboxStore.js";
 import { SupabaseMissionCheckpointStore } from "./supabaseMissionCheckpointStore.js";
+import { SupabaseDeviceCommandQueueStore } from "./supabaseDeviceCommandQueueStore.js";
 
 import {
   recordAudit,
@@ -564,6 +565,7 @@ import {
     },
 
     devices: {
+      SupabaseDeviceCommandQueueStore,
       registerAdapter: registerDeviceAdapter,
       unregisterAdapter: unregisterDeviceAdapter,
       register: registerDevice,
