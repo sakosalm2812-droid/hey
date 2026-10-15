@@ -47,6 +47,16 @@ The follow-up assignments below began from their recorded historical checkpoints
 | 10 | `/root/additional_10_ultrasparse` | `codex/additional-10-ultrasparse-research` | `work/hey-specialists/additional-10-ultrasparse-research` | `6b52d49` | Complete: masked selector experiment with exact baseline parity; worker `18fab02`, integrated `f1525eb`; two reproducible CPU runs documented; linear remains default; no inference/GPU claims |
 | 11 | `/root/additional_11_fusion` | `codex/additional-11-fusion-models` | `work/hey-specialists/additional-11-fusion-models` | `6b52d49` | Complete: revalidate grants after inference and deny delivery on revocation; worker `6300f2e`, integrated `f243b7b`; 18 mock-provider tests passed; provider usage incurred before revocation check cannot be undone |
 
+## Wave 2 implementation tasks
+
+These isolated tasks continue implementation from coordinator checkpoint `b745752` after the first 11 specialist slices were reviewed and integrated. Model GPT-6 Luna / High was requested for each. Worktree paths are local and commits remain local until coordinator review.
+
+| Worker task | Branch | Worktree | Starting SHA | Scope |
+|---|---|---|---|---|
+| `/root/wave2_01_tool_ui` | `codex/wave2-01-tool-library-ui` | `work/hey-specialists/wave2-01-tool-library-ui` | `b745752` | Frontend Tools catalog view using canonical `HEY.tools.catalog`; no unsupported actions |
+| `/root/wave2_02_space_persistence` | `codex/wave2-02-space-persistence` | `work/hey-specialists/wave2-02-space-persistence` | `b745752` | Wire account-bound Space preview/confirmation into existing persistence contracts |
+| `/root/wave2_03_tool_lifecycle` | `codex/wave2-03-tool-lifecycle` | `work/hey-specialists/wave2-03-tool-lifecycle` | `b745752` | Canonical Tool Library lifecycle/search contract with permission and failure tests |
+
 ## Ready-to-paste startup prompts
 
 ### CHAT 01 — HEY FRONTEND DIRECTOR
