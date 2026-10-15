@@ -2,12 +2,76 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { MissionCenter, MISSION_STATES } from "../src/core/missionCenter.js";
 import { executeTask } from "../src/core/executionEngine.js";
+import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
 
 class MemoryStore {
-  constructor() { this.value = null; }
-  getItem(key) { return key === "hey_missions" ? this.value : null; }
-  setItem(key, value) { if (key === "hey_missions") this.value = value; }
+  constructor() { this.values = new Map(); }
+  getItem(key) { return this.values.get(key) ?? null; }
+  setItem(key, value) { this.values.set(key, value); }
 }
+
+test("mission history is isolated in memory and storage across account switches", () => {
+  const storage = new MemoryStore();
+  const center = new MissionCenter({ storage });
+  try {
+    setAccountScope("mission-owner-a");
+    const first = center.createMission("Account A private mission");
+    assert.equal(storage.getItem(getAccountStorageKey("hey_missions")) !== null, true);
+
+    setAccountScope("mission-owner-b");
+    assert.equal(center.getMission(first.id), null);
+    assert.deepEqual(center.getAllMissions(), []);
+    const second = center.createMission("Account B private mission");
+    assert.notEqual(second.id, first.id);
+    const storedB = JSON.parse(storage.getItem(getAccountStorageKey("hey_missions")));
+    assert.deepEqual(Object.keys(storedB), [second.id]);
+    assert.equal(JSON.stringify(storedB).includes("Account A private mission"), false);
+
+    setAccountScope("mission-owner-a");
+    assert.equal(center.getMission(first.id).goal, "Account A private mission");
+    assert.deepEqual(center.getAllMissions().map(({ id }) => id), [first.id]);
+    const reloaded = new MissionCenter({ storage });
+    assert.equal(reloaded.getMission(first.id).goal, "Account A private mission");
+  } finally {
+    setAccountScope(null);
+  }
+});
+
+test("account changes isolate mission runs and cancel work started in the previous scope", async () => {
+  const center = new MissionCenter({ storage: new MemoryStore() });
+  let finish;
+  let executionCalls = 0;
+  try {
+    setAccountScope("mission-run-owner-a");
+    const first = center.createMission("Account A execution");
+    center.setMissionState(first.id, MISSION_STATES.PLANNING);
+    center.setMissionState(first.id, MISSION_STATES.READY);
+    const running = center.startMission(first.id, (context) => {
+      executionCalls += 1;
+      if (context.signal.aborted) return { success: true, verified: false };
+      if (executionCalls === 1) return new Promise((resolve) => {
+        finish = resolve;
+        context.signal.addEventListener("abort", () => resolve({ success: true, verified: false }), { once: true });
+      });
+      return { success: true, verified: true, artifactId: "account-a-result" };
+    }, { verifier: async () => true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    setAccountScope("mission-run-owner-b");
+    const second = center.createMission("Account B execution");
+    assert.equal(center.getMission(first.id), null);
+    finish?.({ success: true, verified: true, artifactId: "account-a-result" });
+    await running;
+
+    setAccountScope("mission-run-owner-a");
+    assert.equal(center.getMission(first.id).goal, "Account A execution");
+    assert.equal(center.getMission(first.id).state, MISSION_STATES.CANCELLED);
+    setAccountScope("mission-run-owner-b");
+    assert.equal(center.getMission(second.id).state, MISSION_STATES.DRAFT);
+  } finally {
+    setAccountScope(null);
+  }
+});
 
 test("mission only reaches completed after a verified execution result", async () => {
   const center = new MissionCenter({ storage: new MemoryStore() });

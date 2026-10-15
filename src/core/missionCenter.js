@@ -2,6 +2,7 @@ import { publish } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { executeTask, getExecutionHistory } from "./executionEngine.js";
 import { createPlan } from "./planner.js";
+import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 import { safeStorage } from "../lib/safeStorage.js";
 
 export const MISSION_STATES = Object.freeze({
@@ -123,6 +124,10 @@ function missionCheckpointRevisionKey(accountId, missionId) {
   return `${accountId}\u0000${missionId}`;
 }
 
+function scopedMissionKey(scope, missionId) {
+  return `${scope}\u0000${missionId}`;
+}
+
 export class MissionCenter {
   constructor({ storage = safeStorage, evidenceService = null, checkpointStore = null } = {}) {
     this.missions = new Map();
@@ -132,27 +137,37 @@ export class MissionCenter {
     this.evidenceService = evidenceService;
     this.checkpointStore = checkpointStore;
     this.checkpointRevisions = new Map();
-    this.load();
+    this.loadedScopes = new Set();
+    this.unsubscribeScopeChanges = null;
+    this.load(getAccountScope());
   }
 
-  load() {
+  load(scope = getAccountScope()) {
+    if (this.loadedScopes.has(scope)) return;
     try {
-      const stored = this.storage.getItem("hey_missions");
+      const stored = this.storage.getItem(getAccountStorageKey("hey_missions", scope));
       if (stored) {
         const parsed = JSON.parse(stored);
         Object.entries(parsed).forEach(([id, mission]) => {
-          this.missions.set(id, mission);
+          if (mission && typeof mission === "object" && mission.id === id) {
+            this.missions.set(scopedMissionKey(scope, id), { ...mission, accountScope: scope });
+          }
         });
       }
     } catch (err) {
       console.warn("Failed to load missions:", err);
+    } finally {
+      this.loadedScopes.add(scope);
     }
   }
 
-  save() {
+  save(scope = getAccountScope()) {
     try {
-      const data = Object.fromEntries(this.missions);
-      this.storage.setItem("hey_missions", JSON.stringify(data));
+      this.load(scope);
+      const data = Object.fromEntries(Array.from(this.missions.values())
+        .filter((mission) => mission.accountScope === scope)
+        .map((mission) => [mission.id, mission]));
+      this.storage.setItem(getAccountStorageKey("hey_missions", scope), JSON.stringify(data));
     } catch (err) {
       console.warn("Failed to save missions:", err);
     }
@@ -167,11 +182,14 @@ export class MissionCenter {
   }
 
   createMission(goal, options = {}) {
+    const scope = getAccountScope();
+    this.load(scope);
     const id = generateMissionId();
     const plan = createPlan(goal);
 
     const mission = {
       id,
+      accountScope: scope,
       goal,
       description: options.description || "",
       state: MISSION_STATES.DRAFT,
@@ -210,8 +228,8 @@ export class MissionCenter {
       recoveryAttempts: 0,
     };
 
-    this.missions.set(id, mission);
-    this.save();
+    this.missions.set(scopedMissionKey(scope, id), mission);
+    this.save(scope);
     this.notifyListeners("created", mission);
     
     publish("mission.created", mission);
@@ -224,12 +242,14 @@ export class MissionCenter {
     return mission;
   }
 
-  getMission(id) {
-    return this.missions.get(id) || null;
+  getMission(id, scope = getAccountScope()) {
+    this.load(scope);
+    return this.missions.get(scopedMissionKey(scope, id)) || null;
   }
 
-  getAllMissions() {
-    return Array.from(this.missions.values());
+  getAllMissions(scope = getAccountScope()) {
+    this.load(scope);
+    return Array.from(this.missions.values()).filter((mission) => mission.accountScope === scope);
   }
 
   getActiveMissions() {
@@ -246,8 +266,8 @@ export class MissionCenter {
     return this.getAllMissions().filter(m => m.projectId === projectId);
   }
 
-  updateMission(id, updates, stateToken = null) {
-    const mission = this.missions.get(id);
+  updateMission(id, updates, stateToken = null, scope = getAccountScope()) {
+    const mission = this.getMission(id, scope);
     if (!mission) return null;
 
     if (updates?.state === MISSION_STATES.COMPLETED && stateToken !== STATE_UPDATE_TOKEN) {
@@ -258,20 +278,22 @@ export class MissionCenter {
     const updated = {
       ...mission,
       ...updates,
+      accountScope: scope,
       state: stateToken === STATE_UPDATE_TOKEN && updates.state !== undefined ? updates.state : mission.state,
       updatedAt: new Date().toISOString(),
     };
 
-    this.missions.set(id, updated);
-    this.save();
-    this.notifyListeners("updated", updated);
-    
-    publish("mission.updated", updated);
+    this.missions.set(scopedMissionKey(scope, id), updated);
+    this.save(scope);
+    if (scope === getAccountScope()) {
+      this.notifyListeners("updated", updated);
+      publish("mission.updated", updated);
+    }
     return updated;
   }
 
-  setMissionState(id, state, reason = null) {
-    const mission = this.missions.get(id);
+  setMissionState(id, state, reason = null, scope = getAccountScope()) {
+    const mission = this.getMission(id, scope);
     if (!mission) return null;
 
     const validTransitions = this.getValidTransitions(mission.state);
@@ -301,7 +323,7 @@ export class MissionCenter {
       updates.cancellationReason = reason;
     }
 
-    return this.updateMission(id, updates, STATE_UPDATE_TOKEN);
+    return this.updateMission(id, updates, STATE_UPDATE_TOKEN, scope);
   }
 
   getValidTransitions(currentState) {
@@ -327,9 +349,11 @@ export class MissionCenter {
   }
 
   async startMission(id, executor, options = {}) {
-    const mission = this.missions.get(id);
+    const scope = getAccountScope();
+    const runKey = scopedMissionKey(scope, id);
+    const mission = this.getMission(id, scope);
     if (!mission) throw new Error("Mission not found");
-    if (this.activeRuns.has(id)) throw new Error("Mission already has an active execution run.");
+    if (this.activeRuns.has(runKey)) throw new Error("Mission already has an active execution run.");
     if (mission.state !== MISSION_STATES.QUEUED && mission.state !== MISSION_STATES.READY) {
       throw new Error(`Mission must be queued or ready to start, current: ${mission.state}`);
     }
@@ -339,10 +363,15 @@ export class MissionCenter {
     const abortFromExternal = () => controller.abort(externalSignal?.reason);
     if (externalSignal?.aborted) abortFromExternal();
     else externalSignal?.addEventListener?.("abort", abortFromExternal, { once: true });
-    this.activeRuns.set(id, controller);
-    this.updateMission(id, { runStartedAt: new Date().toISOString(), outcome: "running" });
-    if (this.missions.get(id)?.state === MISSION_STATES.READY) this.setMissionState(id, MISSION_STATES.QUEUED);
-    this.setMissionState(id, MISSION_STATES.RUNNING);
+    this.activeRuns.set(runKey, controller);
+    if (!this.unsubscribeScopeChanges) {
+      this.unsubscribeScopeChanges = subscribeAccountScope(() => {
+        for (const activeController of this.activeRuns.values()) activeController.abort("Account scope changed.");
+      });
+    }
+    this.updateMission(id, { runStartedAt: new Date().toISOString(), outcome: "running" }, null, scope);
+    if (this.getMission(id, scope)?.state === MISSION_STATES.READY) this.setMissionState(id, MISSION_STATES.QUEUED, null, scope);
+    this.setMissionState(id, MISSION_STATES.RUNNING, null, scope);
 
     try {
       const result = await executeTask(mission.goal, executor, {
@@ -351,68 +380,73 @@ export class MissionCenter {
         maxSteps: mission.steps.length,
       });
 
-      if (controller.signal.aborted || this.missions.get(id)?.state === MISSION_STATES.CANCELLING) {
-        const currentState = this.missions.get(id)?.state;
+      if (controller.signal.aborted || this.getMission(id, scope)?.state === MISSION_STATES.CANCELLING) {
+        const currentState = this.getMission(id, scope)?.state;
         if (currentState !== MISSION_STATES.CANCELLING && this.getValidTransitions(currentState).includes(MISSION_STATES.CANCELLING)) {
-          this.setMissionState(id, MISSION_STATES.CANCELLING, "Caller cancelled execution.");
+          this.setMissionState(id, MISSION_STATES.CANCELLING, "Caller cancelled execution.", scope);
         }
-        if (this.missions.get(id)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancellation raced with task completion; outcome retained as unverified.");
-        this.updateMission(id, { outcome: "unknown_after_cancellation", verification: { status: "unverified", at: new Date().toISOString() } });
+        if (this.getMission(id, scope)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancellation raced with task completion; outcome retained as unverified.", scope);
+        this.updateMission(id, { outcome: "unknown_after_cancellation", verification: { status: "unverified", at: new Date().toISOString() } }, null, scope);
         return { ...result, status: "cancelled", verified: false, cancellationOutcome: "unknown" };
       }
-      if (result.status === "completed") this.setMissionState(id, MISSION_STATES.VERIFYING);
+      if (result.status === "completed") this.setMissionState(id, MISSION_STATES.VERIFYING, null, scope);
       if (result.status === "completed" && result.verified === true) {
-        this.updateMission(id, { outcome: "verified", verification: { status: "verified", at: new Date().toISOString(), completedSteps: result.metadata?.executionHistory?.filter((event) => event.type === "step_completed" && event.verified === true).length || 0 } }, STATE_UPDATE_TOKEN);
-        this.setMissionState(id, MISSION_STATES.COMPLETED);
+        this.updateMission(id, { outcome: "verified", verification: { status: "verified", at: new Date().toISOString(), completedSteps: result.metadata?.executionHistory?.filter((event) => event.type === "step_completed" && event.verified === true).length || 0 } }, STATE_UPDATE_TOKEN, scope);
+        this.setMissionState(id, MISSION_STATES.COMPLETED, null, scope);
       } else if (result.status === "cancelled") {
-        this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancelled during execution");
-        this.updateMission(id, { outcome: "cancelled", verification: { status: "unknown_after_cancellation", at: new Date().toISOString() } });
+        this.setMissionState(id, MISSION_STATES.CANCELLED, "Cancelled during execution", scope);
+        this.updateMission(id, { outcome: "cancelled", verification: { status: "unknown_after_cancellation", at: new Date().toISOString() } }, null, scope);
       } else if (result.status === "blocked") {
-        this.setMissionState(id, MISSION_STATES.BLOCKED_DEPENDENCY, result.blockReason);
+        this.setMissionState(id, MISSION_STATES.BLOCKED_DEPENDENCY, result.blockReason, scope);
       } else {
-        this.setMissionState(id, result.status === "completed" ? MISSION_STATES.PARTIAL : MISSION_STATES.FAILED, result.error || (result.status === "completed" ? "Execution produced no independently verified completed step." : null));
-        this.updateMission(id, { outcome: result.status === "completed" ? "unverified" : "failed", verification: { status: "unverified", at: new Date().toISOString() } });
+        this.setMissionState(id, result.status === "completed" ? MISSION_STATES.PARTIAL : MISSION_STATES.FAILED, result.error || (result.status === "completed" ? "Execution produced no independently verified completed step." : null), scope);
+        this.updateMission(id, { outcome: result.status === "completed" ? "unverified" : "failed", verification: { status: "unverified", at: new Date().toISOString() } }, null, scope);
       }
 
       return result;
     } catch (error) {
-      const current = this.missions.get(id);
-      if (controller.signal.aborted && current?.state === MISSION_STATES.RUNNING) this.setMissionState(id, MISSION_STATES.CANCELLING, "Caller cancelled execution.");
-      if (this.missions.get(id)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, current?.cancellationReason || "Cancelled during execution");
-      else this.setMissionState(id, MISSION_STATES.FAILED, error.message);
+      const current = this.getMission(id, scope);
+      if (controller.signal.aborted && current?.state === MISSION_STATES.RUNNING) this.setMissionState(id, MISSION_STATES.CANCELLING, "Caller cancelled execution.", scope);
+      if (this.getMission(id, scope)?.state === MISSION_STATES.CANCELLING) this.setMissionState(id, MISSION_STATES.CANCELLED, current?.cancellationReason || "Cancelled during execution", scope);
+      else this.setMissionState(id, MISSION_STATES.FAILED, error.message, scope);
       throw error;
     } finally {
       externalSignal?.removeEventListener?.("abort", abortFromExternal);
-      this.activeRuns.delete(id);
-      const current = this.missions.get(id);
-      if (current) this.updateMission(id, { runFinishedAt: new Date().toISOString() });
+      this.activeRuns.delete(runKey);
+      const current = this.getMission(id, scope);
+      if (current) this.updateMission(id, { runFinishedAt: new Date().toISOString() }, null, scope);
+      if (this.activeRuns.size === 0) {
+        this.unsubscribeScopeChanges?.();
+        this.unsubscribeScopeChanges = null;
+      }
     }
   }
 
-  pauseMission(id) {
-    if (this.activeRuns.has(id)) throw new Error("The current executor cannot durably pause in-flight work; cancellation or an explicit wait state is required.");
-    return this.setMissionState(id, MISSION_STATES.PAUSED);
+  pauseMission(id, scope = getAccountScope()) {
+    if (this.activeRuns.has(scopedMissionKey(scope, id))) throw new Error("The current executor cannot durably pause in-flight work; cancellation or an explicit wait state is required.");
+    return this.setMissionState(id, MISSION_STATES.PAUSED, null, scope);
   }
 
-  resumeMission(id) {
-    const mission = this.missions.get(id);
+  resumeMission(id, scope = getAccountScope()) {
+    const mission = this.getMission(id, scope);
     if (!mission || mission.state !== MISSION_STATES.PAUSED) return null;
-    return this.setMissionState(id, MISSION_STATES.RUNNING);
+    return this.setMissionState(id, MISSION_STATES.RUNNING, null, scope);
   }
 
-  cancelMission(id, reason = "User cancelled") {
-    const mission = this.missions.get(id);
+  cancelMission(id, reason = "User cancelled", scope = getAccountScope()) {
+    const mission = this.getMission(id, scope);
     if (!mission) return null;
     if ([MISSION_STATES.COMPLETED, MISSION_STATES.CANCELLED, MISSION_STATES.FAILED].includes(mission.state)) return false;
     
-    const active = this.activeRuns.has(id);
-    if (active) this.setMissionState(id, MISSION_STATES.CANCELLING, reason);
-    else if (this.getValidTransitions(mission.state).includes(MISSION_STATES.CANCELLED)) this.setMissionState(id, MISSION_STATES.CANCELLED, reason);
+    const runKey = scopedMissionKey(scope, id);
+    const active = this.activeRuns.has(runKey);
+    if (active) this.setMissionState(id, MISSION_STATES.CANCELLING, reason, scope);
+    else if (this.getValidTransitions(mission.state).includes(MISSION_STATES.CANCELLED)) this.setMissionState(id, MISSION_STATES.CANCELLED, reason, scope);
     else if (this.getValidTransitions(mission.state).includes(MISSION_STATES.CANCELLING)) {
-      this.setMissionState(id, MISSION_STATES.CANCELLING, reason);
-      this.setMissionState(id, MISSION_STATES.CANCELLED, reason);
+      this.setMissionState(id, MISSION_STATES.CANCELLING, reason, scope);
+      this.setMissionState(id, MISSION_STATES.CANCELLED, reason, scope);
     } else return false;
-    const controller = this.activeRuns.get(id) || mission.abortController;
+    const controller = this.activeRuns.get(runKey) || mission.abortController;
     controller?.abort?.();
 
     publish(active ? "mission.cancellation_requested" : "mission.cancelled", { missionId: id, reason });
@@ -426,7 +460,8 @@ export class MissionCenter {
   }
 
   retryMission(id, executor, options = {}) {
-    const mission = this.missions.get(id);
+    const scope = getAccountScope();
+    const mission = this.getMission(id, scope);
     if (!mission) throw new Error("Mission not found");
     if (![MISSION_STATES.FAILED, MISSION_STATES.PARTIAL, MISSION_STATES.CANCELLED].includes(mission.state)) {
       throw new Error("Can only retry failed, partial, or cancelled missions");
@@ -450,13 +485,14 @@ export class MissionCenter {
       cancellationReason: null,
       verification: null,
       outcome: "retry_queued",
-    }, STATE_UPDATE_TOKEN);
+    }, STATE_UPDATE_TOKEN, scope);
 
     return this.startMission(id, executor, options);
   }
 
   updateStep(id, stepIndex, updates) {
-    const mission = this.missions.get(id);
+    const scope = getAccountScope();
+    const mission = this.getMission(id, scope);
     if (!mission || stepIndex >= mission.steps.length) return null;
 
     const steps = [...mission.steps];
@@ -480,11 +516,12 @@ export class MissionCenter {
       currentStepIndex: steps.findIndex(s => s.state !== STEP_STATES.COMPLETED),
       completedSteps,
       progress,
-    });
+    }, null, scope);
   }
 
   async createCheckpoint(id, { accountId, privateKey, keyId, revocationEpoch = 0, expiresAt, checkpointStore = this.checkpointStore } = {}) {
-    const mission = this.missions.get(id);
+    const scope = getAccountScope();
+    const mission = this.getMission(id, scope);
     if (!mission) return null;
     const createEnvelope = this.evidenceService?.createEnvelope || this.evidenceService?.createEvidenceEnvelope;
     if (typeof createEnvelope !== "function" || typeof accountId !== "string" || !privateKey || !keyId) {
@@ -512,14 +549,16 @@ export class MissionCenter {
       if (saved?.saved !== true || !Number.isSafeInteger(saved.revision) || saved.revision < 1) throw new Error("Mission checkpoint persistence did not confirm a durable revision.");
       this.checkpointRevisions.set(revisionKey, saved.revision);
     }
-    this.updateMission(id, { checkpoint });
+    if (!this.getMission(id, scope)) throw new Error("Mission was removed before its checkpoint could be applied.");
+    this.updateMission(id, { checkpoint }, null, scope);
     return checkpoint;
   }
 
   async restoreCheckpoint(id, { accountId, currentRevocationEpoch, trustedKeys, store, now = Date.now(), online = true, maxAgeMs = Infinity, checkpointStore = this.checkpointStore } = {}) {
-    const mission = this.missions.get(id);
+    const scope = getAccountScope();
+    const mission = this.getMission(id, scope);
     if (!mission) return { restored: false, reason: "checkpoint_missing" };
-    if (this.activeRuns.has(id)) return { restored: false, reason: "mission_execution_active" };
+    if (this.activeRuns.has(scopedMissionKey(scope, id))) return { restored: false, reason: "mission_execution_active" };
 
     let checkpoint = mission.checkpoint;
     let storedRevision = null;
@@ -551,6 +590,7 @@ export class MissionCenter {
     }, { accountId, currentRevocationEpoch }, { trustedKeys, store, now, online, maxAgeMs });
     if (evidence?.valid !== true) return { restored: false, reason: evidence?.reason || "checkpoint_evidence_invalid" };
     if (checkpoint.state === MISSION_STATES.COMPLETED && checkpoint.verification?.status !== "verified") return { restored: false, reason: "completed_checkpoint_unverified" };
+    if (!this.getMission(id, scope)) return { restored: false, reason: "mission_removed_during_restore" };
     if (storedRevision !== null) this.checkpointRevisions.set(missionCheckpointRevisionKey(accountId, id), storedRevision);
     const restoredState = [MISSION_STATES.RUNNING, MISSION_STATES.VERIFYING, MISSION_STATES.CANCELLING].includes(checkpoint.state)
       ? MISSION_STATES.RECOVERING
@@ -563,13 +603,13 @@ export class MissionCenter {
       progress: checkpoint.progress,
       outcome: checkpoint.outcome,
       verification: checkpoint.verification,
-    }, STATE_UPDATE_TOKEN);
+    }, STATE_UPDATE_TOKEN, scope);
 
     return { restored: true, state: restoredState, evidence };
   }
 
   getMissionProgress(id) {
-    const mission = this.missions.get(id);
+    const mission = this.getMission(id);
     if (!mission) return null;
 
     return {
@@ -586,7 +626,7 @@ export class MissionCenter {
   }
 
   getMissionReplay(id) {
-    const mission = this.missions.get(id);
+    const mission = this.getMission(id);
     if (!mission) return null;
 
     return {
@@ -613,13 +653,14 @@ export class MissionCenter {
   }
 
   deleteMission(id) {
-    const mission = this.missions.get(id);
+    const scope = getAccountScope();
+    const mission = this.getMission(id, scope);
     if (!mission) return false;
 
-    if (this.activeRuns.has(id) || [MISSION_STATES.RUNNING, MISSION_STATES.QUEUED, MISSION_STATES.CANCELLING].includes(mission.state)) return false;
+    if (this.activeRuns.has(scopedMissionKey(scope, id)) || [MISSION_STATES.RUNNING, MISSION_STATES.QUEUED, MISSION_STATES.CANCELLING].includes(mission.state)) return false;
 
-    this.missions.delete(id);
-    this.save();
+    this.missions.delete(scopedMissionKey(scope, id));
+    this.save(scope);
     this.notifyListeners("deleted", { id });
     return true;
   }
