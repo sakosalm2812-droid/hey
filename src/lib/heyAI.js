@@ -70,17 +70,19 @@ async function sha256Hex(value) {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId } = {}) {
+async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId, requestText } = {}) {
   if (!isPlainDataRecord(value) || value.status !== "verified" || value.independentlyChecked !== true ||
     !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1 ||
-    typeof answer !== "string" || !answer.trim() || typeof requestId !== "string" ||
+    typeof answer !== "string" || !answer.trim() || typeof requestText !== "string" || !requestText.trim() || typeof requestId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) ||
     typeof value.responseSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(value.responseSha256) ||
     !isPlainDataRecord(value.provenance) || value.provenance.status !== "verified" ||
-    value.provenance.requestId !== requestId || typeof value.provenance.answerSha256 !== "string" ||
+    value.provenance.requestId !== requestId || typeof value.provenance.requestSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(value.provenance.requestSha256) || typeof value.provenance.answerSha256 !== "string" ||
     !/^[0-9a-f]{64}$/i.test(value.provenance.answerSha256)) return null;
   try {
-    if (await sha256Hex(answer) !== value.responseSha256.toLowerCase()) return null;
+    if (await sha256Hex(answer) !== value.responseSha256.toLowerCase() ||
+      await sha256Hex(requestText.trim()) !== value.provenance.requestSha256.toLowerCase()) return null;
   } catch {
     return null;
   }
@@ -94,6 +96,7 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId 
   return Object.freeze({
     status: "verified",
     requestId,
+    requestSha256: value.provenance.requestSha256.toLowerCase(),
     responseSha256: value.responseSha256.toLowerCase(),
     confidence: value.confidence,
     primary: Object.freeze({ role: "primary", providerId: primary.providerId, modelId: primary.modelId }),
@@ -275,7 +278,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
     }
 
     const fusionVerification = fusion
-      ? await parseFusionVerificationMetadata(data.fusion, { answer: data.response, requestId })
+      ? await parseFusionVerificationMetadata(data.fusion, { answer: data.response, requestId, requestText: message })
       : null;
     if (fusion) {
       if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");

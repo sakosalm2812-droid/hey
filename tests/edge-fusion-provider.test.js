@@ -136,13 +136,17 @@ test("fusion fails closed when trusted per-model pricing or the second independe
 
 test("Fusion dispatches two mocked provider HTTP requests and returns only a checked matching answer", async () => {
   const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
-  const result = await runFusionChatRequest({ requested: true, accountId: "auth-user-123", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  const requestText = "What is the fixture answer?";
+  const result = await runFusionChatRequest({ requested: true, requestText, accountId: "auth-user-123", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
   assert.equal(result.status, "complete");
   assert.equal(result.independentlyChecked, true);
   assert.equal(result.answer, "The answer is 42.");
   assert.equal(result.evidence.length, 3);
   assert.equal(result.provenance.status, "verified");
   assert.match(result.provenance.requestId, /^[0-9a-f-]{36}$/i);
+  assert.match(result.provenance.requestSha256, /^[0-9a-f]{64}$/i);
+  const expectedRequestDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(requestText)));
+  assert.equal(result.provenance.requestSha256, Array.from(expectedRequestDigest, (byte) => byte.toString(16).padStart(2, "0")).join(""));
   assert.match(result.provenance.answerSha256, /^[0-9a-f]{64}$/i);
   assert.equal(result.provenance.primary.role, "primary");
   assert.equal(result.provenance.primary.providerId, calls[0].providerId);
@@ -326,6 +330,7 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /fusion\.status === "provider_contract_invalid"[\s\S]*?no answer was delivered/i);
   assert.match(route, /latestProfileQuery\.abortSignal\(signal\)/);
   assert.match(route, /requestId: payload\.requestId/);
+  assert.match(route, /requestText: message/);
   assert.match(route, /fusion\.provenance\?\.status !== "verified"[\s\S]*?No answer was delivered/i);
   assert.match(route, /provenance: fusion\.provenance/);
 });

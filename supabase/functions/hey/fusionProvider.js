@@ -90,12 +90,12 @@ function calculateCost(usage, pricing) {
   return (usage.inputTokens * pricing.inputUsdPerMillion + usage.outputTokens * pricing.outputUsdPerMillion) / 1_000_000;
 }
 
-async function digestAnswer(answer) {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(answer)));
+async function sha256Hex(value) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function buildFusionProvenance(result, requestId) {
+async function buildFusionProvenance(result, requestId, requestText) {
   if (result?.status !== "complete" || result.independentlyChecked !== true ||
     !Array.isArray(result.providers) || result.providers.length !== 2 || !Array.isArray(result.evidence)) return null;
   const [primary, checker] = result.providers;
@@ -109,14 +109,17 @@ async function buildFusionProvenance(result, requestId) {
   const verificationEvidence = result.evidence.filter((item) => item.claimId?.toLowerCase() === "verification");
   if (verificationEvidence.length !== 1 || verificationEvidence[0].providerId !== checker.providerId || verificationEvidence[0].value !== true) return null;
   let answerSha256;
+  let requestSha256;
   try {
-    answerSha256 = await digestAnswer(result.answer);
+    answerSha256 = await sha256Hex(result.answer);
+    requestSha256 = await sha256Hex(requestText);
   } catch {
     return null;
   }
   return Object.freeze({
     status: "verified",
     requestId,
+    requestSha256,
     answerSha256,
     primary: Object.freeze({ role: "primary", providerId: primary.providerId, modelId: primary.modelId, answerClaimId: "answer" }),
     checker: Object.freeze({
@@ -231,6 +234,7 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
 export async function runFusionChatRequest({
   requested,
   requestId,
+  requestText,
   accountId,
   entitlements,
   attempts,
@@ -247,6 +251,12 @@ export async function runFusionChatRequest({
     return { status: "invalid_request", reason: "fusion_request_id_invalid" };
   }
   const fusionRequestId = requestId || crypto.randomUUID();
+  const requestMessage = typeof requestText === "string"
+    ? requestText.trim()
+    : Array.isArray(messages) && messages.at(-1)?.role === "user" && typeof messages.at(-1)?.content === "string"
+      ? messages.at(-1).content.trim()
+      : "";
+  if (!requestMessage) return { status: "invalid_request", reason: "fusion_request_context_missing" };
   if (typeof accountId !== "string" || !accountId.trim()) return { status: "denied", reason: "account_identity_missing" };
   if (!Array.isArray(entitlements) || !entitlements.every((value) => typeof value === "string")) {
     return { status: "denied", reason: "account_permissions_invalid" };
@@ -419,7 +429,7 @@ export async function runFusionChatRequest({
     result.providers.some((provider) => !boundAnswerProviders.has(provider.providerId))) {
     return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" };
   }
-  const provenance = await buildFusionProvenance(result, fusionRequestId);
+  const provenance = await buildFusionProvenance(result, fusionRequestId, requestMessage);
   if (!provenance) return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" };
   return { ...result, provenance };
 }

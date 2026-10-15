@@ -612,6 +612,7 @@ Deno.serve(async (request) => {
     const fusion = await runFusionChatRequest({
       requested: true,
       requestId: payload.requestId,
+      requestText: message,
       accountId: user.id,
       entitlements: profile.entitlements,
       attempts: getProviderAttempts(),
