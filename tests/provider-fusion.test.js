@@ -264,7 +264,7 @@ test("a non-cooperative checker is aborted at the provider timeout and no partia
     ...base,
     mode: FUSION_MODES.FUSION,
     providerTimeoutMs: 10,
-    maxDurationMs: 40,
+    maxDurationMs: 5_000,
     invoke: async ({ providerId, signal }) => {
       calls.push(providerId);
       if (providerId !== "fusion-checker") return { text: "42", confidence: 0.95, evidence: evidence(), costUsd: 0.01 };
