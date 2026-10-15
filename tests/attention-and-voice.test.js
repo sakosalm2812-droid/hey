@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { evaluateAttentionCandidate, isWithinQuietHours } from "../src/core/attentionPolicy.js";
 import { presentNotification } from "../src/core/notificationCenter.js";
-import { createDictationSession, createVoiceSession } from "../src/lib/voiceProviders.js";
+import { applyDictationCorrections, createDictationSession, createVoiceSession } from "../src/lib/voiceProviders.js";
 import { VOICE_STATES } from "../src/core/voiceState.js";
 import { ProactiveEngine } from "../src/core/proactiveEngine.js";
 import { setAccountScope } from "../src/core/accountScope.js";
@@ -155,6 +155,58 @@ test("dictation account switch ends the session and suppresses late transcript c
     session.destroy();
     setAccountScope(null);
   }
+});
+
+test("dictation corrections match whole Unicode phrases once and preserve unrelated words", () => {
+  const transcript = "  HEY day, heyday is not hey; café first.  ";
+  const corrected = applyDictationCorrections(transcript, [
+    { from: "hey day", to: "HEY" },
+    { from: "hey", to: "hey day" },
+    { from: "café", to: "Café" },
+  ]);
+  assert.equal(corrected, "  HEY, heyday is not hey day; Café first.  ");
+});
+
+test("dictation corrections are bounded, unambiguous, and snapshotted for one session", async () => {
+  assert.throws(() => applyDictationCorrections("text", new Array(65).fill({ from: "a", to: "b" })), /at most 64/);
+  assert.throws(() => applyDictationCorrections("text", [{ from: "same", to: "one" }, { from: " SAME ", to: "two" }]), /unique/);
+  assert.throws(() => applyDictationCorrections("text", [{ from: "bad\nphrase", to: "safe" }]), /plain text/);
+  assert.throws(() => createDictationSession({ corrections: [{ from: "x", to: "y" }, null] }), /source and replacement/);
+
+  let callbacks;
+  const transcripts = [];
+  const corrections = [{ from: "acme", to: "ACME" }];
+  const session = createDictationSession({
+    speechProvider: { start(value) { callbacks = value; return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } } },
+    corrections,
+    onTranscript: (text) => transcripts.push(text),
+  });
+  corrections[0].to = "other account text";
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks.onTranscript("Send this to Acme.");
+  assert.deepEqual(transcripts, ["Send this to ACME."]);
+  session.destroy();
+});
+
+test("dictation provider outage disables capture and drops late private transcript data", async () => {
+  let callbacks;
+  const transcripts = [];
+  const stateEvents = [];
+  const session = createDictationSession({
+    speechProvider: { start(value) { callbacks = value; return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } } },
+    onTranscript: (text) => transcripts.push(text),
+    onStateChange: (event) => stateEvents.push(event),
+  });
+  assert.equal((await session.start({ consentGiven: "true" })).status, "consent_required");
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks.onError("network");
+  callbacks.onTranscript("private transcript after provider outage");
+  assert.equal(session.snapshot().state, VOICE_STATES.error);
+  assert.deepEqual(transcripts, []);
+  assert.equal(JSON.stringify(stateEvents).includes("private transcript"), false);
+  session.destroy();
 });
 
 test("proactive event retries deduplicate, persistence recovers, and unsupported channels never claim delivery", () => {

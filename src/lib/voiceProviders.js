@@ -55,6 +55,52 @@ export function stripWakeWord(text) {
   return stripWakePhrase(text);
 }
 
+function hasControlCharacters(value) {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+}
+
+/**
+ * Apply an in-memory, user-supplied dictation vocabulary to one transcript.
+ * Sources are matched as whole Unicode words/phrases, case-insensitively, in
+ * one pass so a replacement can never trigger another replacement. This
+ * helper deliberately does not persist either the vocabulary or transcript.
+ */
+export function applyDictationCorrections(transcript, corrections = []) {
+  if (typeof transcript !== "string") return "";
+  if (!Array.isArray(corrections) || corrections.length > 64) {
+    throw new TypeError("Dictation corrections must be an array of at most 64 entries.");
+  }
+  if (corrections.length === 0) return transcript;
+
+  const bySource = new Map();
+  for (const correction of corrections) {
+    if (!correction || typeof correction !== "object" || Array.isArray(correction)) {
+      throw new TypeError("Each dictation correction must have a source and replacement.");
+    }
+    const { from, to } = correction;
+    if (typeof from !== "string" || typeof to !== "string"
+      || !from.trim() || from.length > 80 || to.length > 160
+      || hasControlCharacters(from) || hasControlCharacters(to)) {
+      throw new TypeError("Dictation correction entries must contain short, plain text.");
+    }
+    const key = from.trim().toLowerCase();
+    if (bySource.has(key)) throw new TypeError("Dictation correction sources must be unique.");
+    bySource.set(key, { from: from.trim(), to });
+  }
+
+  const alternatives = [...bySource.values()]
+    .sort((left, right) => right.from.length - left.from.length)
+    .map(({ from }) => from.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+  const matcher = new RegExp(`(^|[^\\p{L}\\p{N}_])(${alternatives.join("|")})(?=$|[^\\p{L}\\p{N}_])`, "giu");
+  return transcript.replace(matcher, (match, prefix, source) => {
+    const replacement = bySource.get(source.trim().toLowerCase())?.to;
+    return `${prefix}${replacement ?? source}`;
+  });
+}
+
 export function createVoiceSession({ speechProvider, synthesisProvider, ask, environment = globalThis, onStateChange } = {}) {
   const state = createVoiceState();
   let recognition = null;
@@ -162,7 +208,11 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
  * Browser speech recognition may send audio to the browser vendor; callers
  * should disclose that before asking the user to consent.
  */
-export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange } = {}) {
+export function createDictationSession({ speechProvider, environment = globalThis, onTranscript, onStateChange, corrections = [] } = {}) {
+  // Validate once when the session is created. The immutable snapshot keeps
+  // later caller mutation from changing what an active microphone session emits.
+  applyDictationCorrections("", corrections);
+  const correctionSnapshot = corrections.map(({ from, to }) => ({ from: from.trim(), to }));
   const state = createVoiceState();
   const startingScope = getAccountScope();
   let recognition = null;
@@ -238,7 +288,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
         onTranscript: (transcript) => {
           const text = typeof transcript === "string" ? transcript.trim() : "";
           if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope || !text) return;
-          onTranscript?.(text);
+          onTranscript?.(applyDictationCorrections(text, correctionSnapshot));
         },
         onError: (error) => {
           if (currentGeneration === generation && !destroyed) {
@@ -271,4 +321,4 @@ export function createDictationSession({ speechProvider, environment = globalThi
   return { start, stop, destroy, snapshot: () => state.snapshot() };
 }
 
-export default { createBrowserSpeechProvider, createBrowserSpeechSynthesisProvider, requestMicrophonePermission, stripWakeWord, createVoiceSession, createDictationSession };
+export default { createBrowserSpeechProvider, createBrowserSpeechSynthesisProvider, requestMicrophonePermission, stripWakeWord, applyDictationCorrections, createVoiceSession, createDictationSession };
