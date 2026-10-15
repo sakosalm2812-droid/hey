@@ -53,6 +53,7 @@ import {
   startToolLibraryEntry,
   stopToolLibraryEntry,
   getToolLifecycleContract,
+  toolLibraryPreferenceStore,
   executeTool,
 } from "./toolRegistry.js";
 
@@ -529,6 +530,7 @@ import {
       stop: stopToolLibraryEntry,
       lifecycle: getToolLifecycleContract,
       execute: executeTool,
+      preferences: toolLibraryPreferenceStore,
     },
 
     tasks: {
