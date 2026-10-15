@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { webcrypto } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 import { createAction, executeAction, undoAction, clearActions, invalidateActionPreviews } from "../src/core/actionEngine.js";
 import { listAuditEntries } from "../src/core/auditLog.js";
 import { getAccountScope, setAccountScope } from "../src/core/accountScope.js";
 import supabaseClient from "../src/lib/supabase.js";
+import { InMemoryMandateStore, issueActionMandate } from "../src/core/actionMandate.js";
+
+globalThis.crypto ??= webcrypto;
 
 const user = { id: "voiceos-test-user", plan: "elite", permissions: ["app.open", "device.control"] };
 const testLifecycle = Object.freeze({ accountId: user.id, deviceId: "voiceos-test-device", resource: "app://calculator", authorizationEpoch: 1 });
@@ -482,6 +490,138 @@ test("strict computer undo uses a frozen target and independent postcondition ve
   assert.ok(audit, "audit log links to the immutable receipt");
   assert.equal(audit.metadata.originalInputDigest, undo.receipt.originalInputDigest);
   assert.equal(JSON.stringify(audit.metadata).includes("patient-record.pdf"), false);
+});
+
+test("Trust Kernel executes and independently verifies a real reversible temp-file action", async (t) => {
+  clearActions();
+  const directory = await mkdtemp(join(tmpdir(), "hey-voiceos-action-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const filePath = resolve(join(directory, "voiceos-proof.txt"));
+  const resource = pathToFileURL(filePath).href;
+  const contents = "HEY VoiceOS reversible action proof\n";
+  const accountId = "voiceos-local-action-test";
+  const deviceId = `node-test-${process.pid}`;
+  const userForLocalAction = { id: accountId, plan: "elite", permissions: ["filesystem.write", "filesystem.delete"] };
+  const policy = {
+    mode: "bounded_full_execution",
+    enabled: true,
+    version: "local-action-policy-v1",
+    allowedActions: ["computer.local_file.create", "computer.local_file.remove"],
+    resources: [resource],
+    maxUses: 2,
+    expiresAt: Date.now() + 60_000,
+  };
+  const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const mandateStore = new InMemoryMandateStore();
+  mandateStore.setCurrentRevocationEpoch(accountId, 0);
+  const trustedKeys = new Map([["local-test-key", keyPair.publicKey]]);
+  const issueMandate = (action) => issueActionMandate({
+    accountId,
+    actions: [action],
+    resources: [resource],
+    maxUses: 1,
+    revocationEpoch: 0,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }, { privateKey: keyPair.privateKey, keyId: "local-test-key" });
+  const trustKernel = {
+    policy,
+    mandateContext: { currentRevocationEpoch: 0 },
+    mandateOptions: { trustedKeys, store: mandateStore, allowTestOnlyStore: true },
+  };
+  const lifecycle = { accountId, deviceId, resource, authorizationEpoch: 0, expiresAt: Date.now() + 60_000 };
+  const action = createAction({
+    title: "Create a temporary VoiceOS verification file",
+    tool: "computer.local_file.create",
+    permission: "filesystem.write",
+    riskLevel: "low",
+    input: { path: filePath, contents },
+    undo: { path: filePath },
+    lifecycle,
+  });
+
+  const bindingObserver = async (request) => {
+    const actualParent = await realpath(dirname(request.input.path));
+    return independentObservation(request, {
+      verified: resolve(request.input.path) === filePath && actualParent === directory && request.resource === resource,
+      evidence: { exactPath: resolve(request.input.path) === filePath, parentDirectory: actualParent },
+    });
+  };
+  const postconditionObserver = async (request) => {
+    if (request.operation === "execute") {
+      const [actual, metadata] = await Promise.all([readFile(filePath, "utf8"), stat(filePath)]);
+      const verified = metadata.isFile() && actual === contents;
+      return independentObservation(request, {
+        verified,
+        evidence: { exists: true, isFile: metadata.isFile(), bytes: metadata.size, exactContents: verified },
+      });
+    }
+    try {
+      const metadata = await stat(filePath);
+      return independentObservation(request, { verified: false, evidence: { exists: true, isFile: metadata.isFile() } });
+    } catch (error) {
+      const absent = error?.code === "ENOENT";
+      return independentObservation(request, { verified: absent, evidence: { exists: !absent, absenceObserved: absent } });
+    }
+  };
+  const executionOptions = {
+    user: userForLocalAction,
+    confirmed: true,
+    requireMandate: true,
+    requireIndependentVerification: true,
+    mandate: await issueMandate("computer.local_file.create"),
+    idempotencyKey: "local-file-forward-once",
+    trustKernel,
+    deviceId,
+    authorizationEpoch: 0,
+    resource,
+    verifyTargetBinding: bindingObserver,
+    verifyPostcondition: postconditionObserver,
+  };
+  const execution = await executeAction(action.id, async ({ path: target, contents: body }) => {
+    await writeFile(target, body, { encoding: "utf8", flag: "wx" });
+    return { created: true };
+  }, executionOptions);
+  assert.equal(execution.success, true, execution.error);
+  assert.equal(await readFile(filePath, "utf8"), contents, "the real file-system state confirms creation");
+  assert.equal(action.verification.evidence.exactContents, true);
+  assert.equal(action.verification.evidence.bytes, 36);
+
+  const replayAction = createAction({
+    title: "Replay the temporary file creation mandate",
+    tool: "computer.local_file.create",
+    permission: "filesystem.write",
+    riskLevel: "low",
+    input: { path: filePath, contents },
+    lifecycle,
+  });
+  let replayDispatched = false;
+  const replay = await executeAction(replayAction.id, async () => {
+    replayDispatched = true;
+    return writeFile(filePath, contents, { encoding: "utf8", flag: "wx" });
+  }, executionOptions);
+  assert.equal(replay.success, false);
+  assert.match(replay.error, /replay/i);
+  assert.equal(replayDispatched, false, "the already consumed mandate cannot reach the file writer");
+
+  const undoOptions = {
+    ...executionOptions,
+    policy,
+    mandate: await issueMandate("computer.local_file.remove"),
+    authorizationAction: "computer.local_file.remove",
+    idempotencyKey: `${action.id}:undo`,
+    undoCapability: "computer.local_file.remove",
+    undoPermission: "filesystem.delete",
+  };
+  const undo = await undoAction(action.id, async ({ path: target }) => {
+    await unlink(target);
+    return { removed: true };
+  }, undoOptions);
+  assert.equal(undo.success, true, undo.error);
+  await assert.rejects(stat(filePath), { code: "ENOENT" });
+  assert.equal(undo.receipt.postcondition.verified, true);
+  assert.equal(undo.receipt.mandate.authorized, true);
+  assert.equal(mandateStore.usage.size, 2, "both signed one-use mandates were consumed");
+  assert.equal(mandateStore.idempotency.size, 2, "the forward and undo requests each reserved a replay key");
 });
 
 test("undo receipt authority is invalidated when the authorization epoch advances", async (t) => {
