@@ -142,6 +142,16 @@ test("adapter output is validated against known gestures and profile confidence"
 
   engine.setRecognitionAdapter({ async detect() { adapterCalls += 1; return { id: "G01", confidence: 0.2 }; } });
   assert.equal(await engine.detectGesture({}, profile, controller.signal), null);
+  let getterRan = false;
+  const accessorResult = Object.defineProperties({}, {
+    id: { enumerable: true, get() { getterRan = true; return "G01"; } },
+    confidence: { enumerable: true, value: 1 },
+  });
+  engine.setRecognitionAdapter({ async detect() { return accessorResult; } });
+  assert.equal(await engine.detectGesture({}, profile, controller.signal), null);
+  assert.equal(getterRan, false);
+  engine.setRecognitionAdapter({ async detect() { return { id: "G01", confidence: 1.01 }; } });
+  assert.equal(await engine.detectGesture({}, profile, controller.signal), null);
   controller.abort();
   assert.equal(await engine.detectGesture({}, profile, controller.signal), null);
   assert.equal(adapterCalls, 2);

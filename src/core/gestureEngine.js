@@ -371,8 +371,16 @@ export class GestureEngine {
     context.drawImage(video, 0, 0, 640, 480);
     const frame = context.getImageData(0, 0, 640, 480);
     const result = await this.recognitionAdapter.detect(frame, profile, { signal, maxFrameSize: { width: 640, height: 480 } });
-    if (signal?.aborted || !result || !GESTURES[result.id] || !Number.isFinite(result.confidence) || result.confidence < profile.confidence) return null;
-    return { id: result.id, confidence: result.confidence, timestamp: new Date().toISOString() };
+    if (signal?.aborted || !result || typeof result !== "object" || Array.isArray(result)) return null;
+    const prototype = Object.getPrototypeOf(result);
+    const id = Object.getOwnPropertyDescriptor(result, "id");
+    const confidence = Object.getOwnPropertyDescriptor(result, "confidence");
+    if ((prototype !== Object.prototype && prototype !== null)
+      || !id || !Object.hasOwn(id, "value")
+      || !confidence || !Object.hasOwn(confidence, "value")
+      || typeof id.value !== "string" || !GESTURES[id.value]
+      || !Number.isFinite(confidence.value) || confidence.value < profile.confidence || confidence.value > 1) return null;
+    return { id: id.value, confidence: confidence.value, timestamp: new Date().toISOString() };
   }
 
   handleGestureDetection(gesture, profile) {
