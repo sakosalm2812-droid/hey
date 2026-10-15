@@ -246,6 +246,52 @@ try {
   assert.equal(acknowledged.error, null);
   assert.equal(acknowledged.data, true);
 
+  const missionId = `integration-${randomUUID()}`;
+  const missionCheckpointRead = await first.client.rpc("load_hey_mission_checkpoint", {
+    p_account_id: first.userId,
+    p_mission_id: missionId,
+  });
+  assert.equal(missionCheckpointRead.error, null);
+  assert.equal(missionCheckpointRead.data, null);
+  const crossAccountMissionCheckpoint = await second.client.rpc("load_hey_mission_checkpoint", {
+    p_account_id: first.userId,
+    p_mission_id: missionId,
+  });
+  assert.ok(crossAccountMissionCheckpoint.error, "mission checkpoints cannot be loaded by another account");
+  const directMissionCheckpointRead = await first.client.from("hey_mission_checkpoints").select("mission_id");
+  assert.ok(directMissionCheckpointRead.error, "mission checkpoint persistence is available only through account-bound RPCs");
+
+  const initialMissionCheckpoint = await first.client.rpc("save_hey_mission_checkpoint", {
+    p_account_id: first.userId,
+    p_mission_id: missionId,
+    p_checkpoint: { schemaVersion: 1, missionId, state: "draft", signedProbe: "initial" },
+    p_expected_revision: null,
+  });
+  assert.equal(initialMissionCheckpoint.error, null);
+  assert.deepEqual(initialMissionCheckpoint.data, { saved: true, revision: 1 });
+  const duplicateInitialMissionCheckpoint = await first.client.rpc("save_hey_mission_checkpoint", {
+    p_account_id: first.userId,
+    p_mission_id: missionId,
+    p_checkpoint: { schemaVersion: 1, missionId, state: "draft", signedProbe: "duplicate" },
+    p_expected_revision: null,
+  });
+  assert.equal(duplicateInitialMissionCheckpoint.error, null);
+  assert.deepEqual(duplicateInitialMissionCheckpoint.data, { saved: false }, "initial writes cannot overwrite an existing revision");
+  const racingMissionCheckpointUpdates = await Promise.all(Array.from({ length: 16 }, (_, index) => first.client.rpc("save_hey_mission_checkpoint", {
+    p_account_id: first.userId,
+    p_mission_id: missionId,
+    p_checkpoint: { schemaVersion: 1, missionId, state: "draft", signedProbe: `update-${index}` },
+    p_expected_revision: 1,
+  })));
+  for (const result of racingMissionCheckpointUpdates) assert.equal(result.error, null);
+  assert.equal(racingMissionCheckpointUpdates.filter(({ data }) => data?.saved === true).length, 1, "compare-and-swap permits only one writer per checkpoint revision");
+  const durableMissionCheckpoint = await first.client.rpc("load_hey_mission_checkpoint", {
+    p_account_id: first.userId,
+    p_mission_id: missionId,
+  });
+  assert.equal(durableMissionCheckpoint.error, null);
+  assert.equal(durableMissionCheckpoint.data.revision, 2);
+
   const directClientConsume = await first.client.rpc("consume_hey_action_mandate_chain", {
     p_account_id: first.userId,
     p_revocation_epoch: 0,
@@ -343,7 +389,7 @@ try {
   assert.equal(revokedUse.error, null);
   assert.deepEqual(revokedUse.data, { consumed: false, reason: "revoked" });
 
-  console.log("Local Supabase RLS, account isolation, trusted transcript writes, rate limits, and mandate authority tests passed.");
+  console.log("Local Supabase RLS, account isolation, trusted transcript writes, rate limits, mandate authority, durable outbox, and mission checkpoint tests passed.");
 } finally {
   await Promise.all(outboxScopes.map((scope) => admin.from("hey_event_outbox").delete().eq("scope", scope)));
   await Promise.all(identities.map((id) => admin.auth.admin.deleteUser(id)));

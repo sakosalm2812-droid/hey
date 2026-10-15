@@ -34,40 +34,47 @@ export const STEP_STATES = Object.freeze({
 });
 const STATE_UPDATE_TOKEN = Symbol("mission-state-transition");
 
-function isPlainJsonValue(value, ancestors = new WeakSet()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (!value || typeof value !== "object" || ancestors.has(value)) return false;
+function clonePlainJsonValue(value, ancestors = new WeakSet()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (!value || typeof value !== "object" || ancestors.has(value)) throw new TypeError("Mission checkpoint must be plain JSON data.");
   ancestors.add(value);
   try {
     const isArray = Array.isArray(value);
     const prototype = Object.getPrototypeOf(value);
-    if (isArray ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    if (isArray ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) throw new TypeError("Mission checkpoint must be plain JSON data.");
     const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key !== "string")) return false;
+    if (keys.some((key) => typeof key !== "string")) throw new TypeError("Mission checkpoint cannot contain symbol properties.");
     const descriptors = Object.getOwnPropertyDescriptors(value);
     if (isArray) {
-      if (keys.length !== value.length + 1 || !Object.hasOwn(descriptors, "length")) return false;
+      if (keys.length !== value.length + 1 || !Object.hasOwn(descriptors, "length")) throw new TypeError("Mission checkpoint arrays cannot contain holes or custom properties.");
+      const result = [];
       for (let index = 0; index < value.length; index += 1) {
         const descriptor = descriptors[String(index)];
-        if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.enumerable !== true || !isPlainJsonValue(descriptor.value, ancestors)) return false;
+        if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.enumerable !== true) throw new TypeError("Mission checkpoint cannot contain accessors.");
+        result.push(clonePlainJsonValue(descriptor.value, ancestors));
       }
-      return true;
+      return result;
     }
+    const result = {};
     for (const key of keys) {
       const descriptor = descriptors[key];
-      if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.enumerable !== true || !isPlainJsonValue(descriptor.value, ancestors)) return false;
+      if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.enumerable !== true) throw new TypeError("Mission checkpoint cannot contain accessors.");
+      Object.defineProperty(result, key, { value: clonePlainJsonValue(descriptor.value, ancestors), enumerable: true, configurable: true, writable: true });
     }
-    return true;
-  } catch {
-    return false;
+    return result;
   } finally {
     ancestors.delete(value);
   }
 }
 
-function isValidMissionCheckpoint(checkpoint, missionId) {
-  if (!isPlainJsonValue(checkpoint)) return false;
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const key of Object.keys(value)) deepFreeze(value[key]);
+  return Object.freeze(value);
+}
+
+function validateMissionCheckpoint(checkpoint, missionId) {
   if (!checkpoint || checkpoint.schemaVersion !== 1 || checkpoint.missionId !== missionId) return false;
   if (!Object.values(MISSION_STATES).includes(checkpoint.state) || !Array.isArray(checkpoint.steps)) return false;
   const allowedCheckpointFields = new Set(["schemaVersion", "missionId", "state", "steps", "currentStepIndex", "completedSteps", "progress", "outcome", "verification", "timestamp", "evidenceEnvelope", "evidenceStatus"]);
@@ -89,8 +96,19 @@ function isValidMissionCheckpoint(checkpoint, missionId) {
     return Object.values(STEP_STATES).includes(step.state)
       && Number.isSafeInteger(step.attempts) && step.attempts >= 0
       && Number.isSafeInteger(step.maxRetries) && step.maxRetries >= 0
-      && Array.isArray(step.dependencies) && step.dependencies.every((dependency) => typeof dependency === "string");
+      && Array.isArray(step.dependencies) && step.dependencies.every((dependency) => (typeof dependency === "string" && dependency.length > 0) || (Number.isSafeInteger(dependency) && dependency >= 0));
   });
+}
+
+function snapshotMissionCheckpoint(checkpoint, missionId) {
+  try {
+    const snapshot = clonePlainJsonValue(checkpoint);
+    return validateMissionCheckpoint(snapshot, missionId) ? deepFreeze(snapshot) : null;
+  } catch {
+    // Proxy traps may run while inspecting arbitrary in-memory objects. Persisted
+    // checkpoints enter through JSON parsing; all inspection failures fail closed.
+    return null;
+  }
 }
 
 function generateMissionId() {
@@ -101,13 +119,19 @@ function generateStepId() {
   return `step_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function missionCheckpointRevisionKey(accountId, missionId) {
+  return `${accountId}\u0000${missionId}`;
+}
+
 export class MissionCenter {
-  constructor({ storage = safeStorage, evidenceService = null } = {}) {
+  constructor({ storage = safeStorage, evidenceService = null, checkpointStore = null } = {}) {
     this.missions = new Map();
     this.listeners = new Set();
     this.activeRuns = new Map();
     this.storage = storage;
     this.evidenceService = evidenceService;
+    this.checkpointStore = checkpointStore;
+    this.checkpointRevisions = new Map();
     this.load();
   }
 
@@ -459,7 +483,7 @@ export class MissionCenter {
     });
   }
 
-  async createCheckpoint(id, { accountId, privateKey, keyId, revocationEpoch = 0, expiresAt } = {}) {
+  async createCheckpoint(id, { accountId, privateKey, keyId, revocationEpoch = 0, expiresAt, checkpointStore = this.checkpointStore } = {}) {
     const mission = this.missions.get(id);
     if (!mission) return null;
     const createEnvelope = this.evidenceService?.createEnvelope || this.evidenceService?.createEvidenceEnvelope;
@@ -467,7 +491,7 @@ export class MissionCenter {
       throw new Error("A canonical signed evidence service, authenticated account, and signing key are required for checkpoints.");
     }
 
-    const body = {
+    const body = deepFreeze(clonePlainJsonValue({
       schemaVersion: 1,
       missionId: id,
       state: mission.state,
@@ -478,21 +502,36 @@ export class MissionCenter {
       outcome: mission.outcome || null,
       verification: mission.verification || null,
       timestamp: new Date().toISOString(),
-    };
+    }));
     const envelope = await createEnvelope({ accountId, source: { type: "mission_checkpoint", missionId: id }, body, revocationEpoch, offlineAllowed: false, expiresAt }, { privateKey, keyId });
-    const checkpoint = { ...body, evidenceEnvelope: envelope, evidenceStatus: "signed" };
+    const checkpoint = deepFreeze({ ...body, evidenceEnvelope: clonePlainJsonValue(envelope), evidenceStatus: "signed" });
 
+    if (checkpointStore) {
+      const revisionKey = missionCheckpointRevisionKey(accountId, id);
+      const saved = await checkpointStore.save(accountId, id, checkpoint, { expectedRevision: this.checkpointRevisions.get(revisionKey) ?? null });
+      if (saved?.saved !== true || !Number.isSafeInteger(saved.revision) || saved.revision < 1) throw new Error("Mission checkpoint persistence did not confirm a durable revision.");
+      this.checkpointRevisions.set(revisionKey, saved.revision);
+    }
     this.updateMission(id, { checkpoint });
     return checkpoint;
   }
 
-  async restoreCheckpoint(id, { accountId, currentRevocationEpoch, trustedKeys, store, now = Date.now(), online = true, maxAgeMs = Infinity } = {}) {
+  async restoreCheckpoint(id, { accountId, currentRevocationEpoch, trustedKeys, store, now = Date.now(), online = true, maxAgeMs = Infinity, checkpointStore = this.checkpointStore } = {}) {
     const mission = this.missions.get(id);
-    if (!mission || !mission.checkpoint) return { restored: false, reason: "checkpoint_missing" };
+    if (!mission) return { restored: false, reason: "checkpoint_missing" };
     if (this.activeRuns.has(id)) return { restored: false, reason: "mission_execution_active" };
 
-    const { checkpoint } = mission;
-    if (!isValidMissionCheckpoint(checkpoint, id)) return { restored: false, reason: "checkpoint_schema_invalid" };
+    let checkpoint = mission.checkpoint;
+    let storedRevision = null;
+    if (checkpointStore) {
+      const persisted = await checkpointStore.load(accountId, id);
+      if (!persisted) return { restored: false, reason: "checkpoint_missing" };
+      checkpoint = persisted.checkpoint;
+      storedRevision = persisted.revision;
+    }
+    if (!checkpoint) return { restored: false, reason: "checkpoint_missing" };
+    checkpoint = snapshotMissionCheckpoint(checkpoint, id);
+    if (!checkpoint) return { restored: false, reason: "checkpoint_schema_invalid" };
     const verifyEnvelope = this.evidenceService?.verifyEnvelope || this.evidenceService?.verifyEvidenceEnvelope;
     if (typeof verifyEnvelope !== "function" || !checkpoint.evidenceEnvelope) return { restored: false, reason: "signed_checkpoint_verifier_unavailable" };
     const evidence = await verifyEnvelope(checkpoint.evidenceEnvelope, {
@@ -509,6 +548,7 @@ export class MissionCenter {
     }, { accountId, currentRevocationEpoch }, { trustedKeys, store, now, online, maxAgeMs });
     if (evidence?.valid !== true) return { restored: false, reason: evidence?.reason || "checkpoint_evidence_invalid" };
     if (checkpoint.state === MISSION_STATES.COMPLETED && checkpoint.verification?.status !== "verified") return { restored: false, reason: "completed_checkpoint_unverified" };
+    if (storedRevision !== null) this.checkpointRevisions.set(missionCheckpointRevisionKey(accountId, id), storedRevision);
     const restoredState = [MISSION_STATES.RUNNING, MISSION_STATES.VERIFYING, MISSION_STATES.CANCELLING].includes(checkpoint.state)
       ? MISSION_STATES.RECOVERING
       : checkpoint.state;

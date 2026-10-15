@@ -59,6 +59,7 @@ import {
 } from "./eventBus.js";
 import { EventOutboxStoreContract, InMemoryEventOutboxStore } from "./eventOutbox.js";
 import { SupabaseEventOutboxStore } from "./supabaseEventOutboxStore.js";
+import { SupabaseMissionCheckpointStore } from "./supabaseMissionCheckpointStore.js";
 
 import {
   recordAudit,
@@ -416,6 +417,7 @@ import {
       updateStep: updateMissionStep,
       createCheckpoint: createMissionCheckpoint,
       restoreCheckpoint: restoreMissionCheckpoint,
+      SupabaseMissionCheckpointStore,
       getProgress: getMissionProgress,
       getReplay: getMissionReplay,
       delete: deleteMission,
