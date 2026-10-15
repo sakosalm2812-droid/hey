@@ -41,13 +41,25 @@ test("outbox retains failed deliveries, replays them, and fences concurrent clai
   assert.equal(calls, 1);
 
   const failed = await store.appendOnce("retry", "event", { value: 2 }, "account-a");
-  const failure = await publishEventOnce("retry", "event", { value: 2 }, { store, dispatch: async () => { throw new Error("temporary"); }, scope: "account-a" });
+  const failure = await publishEventOnce("retry", "event", { value: 2 }, { store, dispatch: async () => { throw new Error("private email user@example.test"); }, scope: "account-a" });
   assert.equal(failure.state, "pending");
-  assert.match((await store.listPending()).find((event) => event.id === failed.event.id).lastError, /temporary/);
+  assert.equal(failure.error, "delivery_failed");
+  assert.equal(JSON.stringify(failure).includes("user@example.test"), false);
+  assert.equal((await store.listPending()).find((event) => event.id === failed.event.id).lastError, "delivery_failed");
   const replay = await replayPendingEvents({ store, dispatch: async () => {} });
   assert.equal(replay.length, 1);
   assert.equal(replay[0].delivered, true);
   assert.deepEqual(await store.listPending(), []);
+});
+
+test("outbox replay forwards its validated page size to the store", async () => {
+  const store = new InMemoryEventOutboxStore();
+  const delivered = [];
+  for (let index = 0; index < 3; index += 1) await store.appendOnce(`key-${index}`, "event", { index }, "account-a");
+  const results = await replayPendingEvents({ store, limit: 1, dispatch: async (_name, payload) => delivered.push(payload.index) });
+  assert.equal(results.length, 1);
+  assert.deepEqual(delivered, [0]);
+  await assert.rejects(() => store.listPending(1001), /Replay limit/);
 });
 
 test("outbox rejects malformed JSON payloads and stale lease tokens", async () => {

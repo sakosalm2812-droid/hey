@@ -68,7 +68,10 @@ export class InMemoryEventOutboxStore extends EventOutboxStoreContract {
     return { event: eventSnapshot(event), leaseToken: token };
   }
 
-  async listPending() { return [...this.events.values()].filter((event) => event.state === "pending").sort((a, b) => a.createdAt - b.createdAt).map(eventSnapshot); }
+  async listPending(limit = 100) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError("Replay limit must be between 1 and 1000.");
+    return [...this.events.values()].filter((event) => event.state === "pending").sort((a, b) => a.createdAt - b.createdAt).slice(0, limit).map(eventSnapshot);
+  }
 
   async acknowledge(eventId, leaseToken) {
     if (this.leases.get(eventId)?.token !== leaseToken) return false;
@@ -80,11 +83,13 @@ export class InMemoryEventOutboxStore extends EventOutboxStoreContract {
     return true;
   }
 
-  async release(eventId, leaseToken, error) {
+  async release(eventId, leaseToken, _error) {
     if (this.leases.get(eventId)?.token !== leaseToken) return false;
     const event = this.events.get(eventId);
     if (!event) return false;
-    event.lastError = String(error?.message ?? error ?? "delivery failed").slice(0, 500);
+    // Exception messages can contain user data. Keep the local adapter aligned
+    // with the durable schema's non-sensitive failure code.
+    event.lastError = "delivery_failed";
     this.leases.delete(eventId);
     return true;
   }
@@ -101,9 +106,9 @@ export async function deliverOutboxEvent(eventId, { store, dispatch, leaseMs } =
     await dispatch(claim.event.eventName, claim.event.payload, { eventId: claim.event.id, idempotencyKey: claim.event.idempotencyKey, scope: claim.event.scope, attempt: claim.event.attempts });
     if (!await store.acknowledge(eventId, claim.leaseToken)) return { delivered: false, state: "lease_lost" };
     return { delivered: true, state: "delivered", eventId };
-  } catch (error) {
-    await store.release(eventId, claim.leaseToken, error);
-    return { delivered: false, state: "pending", eventId, error: String(error?.message ?? error) };
+  } catch {
+    await store.release(eventId, claim.leaseToken);
+    return { delivered: false, state: "pending", eventId, error: "delivery_failed" };
   }
 }
 
@@ -117,7 +122,7 @@ export async function publishEventOnce(idempotencyKey, eventName, payload, { sto
 export async function replayPendingEvents({ store, dispatch, limit = 100, leaseMs } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError("Replay limit must be between 1 and 1000.");
   if (!store || typeof store.listPending !== "function") throw new TypeError("A conforming event outbox store is required.");
-  const pending = (await store.listPending()).slice(0, limit);
+  const pending = await store.listPending(limit);
   const results = [];
   for (const event of pending) results.push(await deliverOutboxEvent(event.id, { store, dispatch, leaseMs }));
   return results;
