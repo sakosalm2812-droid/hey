@@ -1,0 +1,81 @@
+# HEY Specialist Agent Startup Pack
+
+Updated: 2026-10-15  
+Repository: `sakosalm2812-droid/hey`  
+Latest verified starting baseline: `3fe674d09fc14d449726699583946f5e68149ac6` on `codex/resume-emergency-2026-10-14`.
+
+## Session setup and current access
+
+The local Codex task launcher exposed no saved local Git project for this repository. `list_projects` returned only ChatGPT projects, and this session cannot bind a new repository task to one of them as a local Git worktree. No standalone local Codex chats are claimed as created. Eleven independent local Git worktrees and branches have been prepared from the verified baseline. Chats 01–06 are complete and integrated after coordinator review; Chats 07–09 are active GPT-6 Luna / High collaboration agents in isolated worktrees. They are subagents of the coordinator task, not separate Codex chats. Chats 10–11 remain ready worktrees and prompts; launch them as agent capacity frees.
+
+For a standalone Codex task, select **Local**, **GPT-6 Luna**, **High**, then open the exact worktree path below. If the local picker cannot open a worktree directly, add `sakosalm2812-droid/hey` as a local Codex project and select the listed branch. Paste the matching startup prompt. Verify the branch and commit in the opened checkout before editing. The coordinator owns central integration and review.
+
+Every specialist must inspect canonical HEY code and interfaces before editing; preserve stronger behavior; keep work isolated to its branch; add tests and adversarial checks; report honest evidence and limitations; commit locally; do not push or merge without coordinator review. No worker may claim production readiness from local tests alone. Chat 01 is the only owner of shared frontend files. Backend agents provide stable contracts for it.
+
+## Worktree assignments
+
+All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`. Their `node_modules` links resolve to the coordinator checkout's already installed dependencies; workers should not run dependency installers or edit those shared dependencies.
+
+| Chat | Branch | Local worktree | State |
+|---:|---|---|---|
+| 01 | `codex/specialist-01-frontend-director` | `work/hey-specialists/01-frontend-director` | Complete, commit `7ed14b6`, integrated at `3441472` |
+| 02 | `codex/specialist-02-spaces-onboarding` | `work/hey-specialists/02-spaces-onboarding` | Complete, commit `0f7cd74`, integrated at `79fffcd` |
+| 03 | `codex/specialist-03-tool-library` | `work/hey-specialists/03-tool-library` | Complete, commit `f7ef830`, integrated at `22b8c4c`; coordinator hardening `7834e96` |
+| 04 | `codex/specialist-04-edge-everywhere` | `work/hey-specialists/04-edge-everywhere` | Complete, commit `a5eed49`, integrated at `75470b4` |
+| 05 | `codex/specialist-05-gesture-control` | `work/hey-specialists/05-gesture-control` | Complete, commit `b42e625`, integrated at `a7e88f8` |
+| 06 | `codex/specialist-06-flow-dictation` | `work/hey-specialists/06-flow-dictation` | Complete, commit `5a8668e`, integrated at `cc60f76` |
+| 07 | `codex/specialist-07-voiceos-control` | `work/hey-specialists/07-voiceos-control` | Active Luna/High subagent `/root/specialist_voiceos_control` |
+| 08 | `codex/specialist-08-teacher-experience` | `work/hey-specialists/08-teacher-experience` | Active Luna/High subagent `/root/specialist_teacher_experience` |
+| 09 | `codex/specialist-09-hey-one-models` | `work/hey-specialists/09-hey-one-models` | Active Luna/High subagent `/root/specialist_hey_one_models` |
+| 10 | `codex/specialist-10-ultrasparse-research` | `work/hey-specialists/10-ultrasparse-research` | Prepared; waiting for an agent slot |
+| 11 | `codex/specialist-11-fusion-models` | `work/hey-specialists/11-fusion-models` | Prepared; waiting for an agent slot |
+
+## Ready-to-paste startup prompts
+
+### CHAT 01 — HEY FRONTEND DIRECTOR
+
+You are the single lead owner of HEY's shared frontend. Work on `codex/specialist-01-frontend-director` from the provided worktree. Inspect the existing application shell, navigation, design tokens, theme and accessibility tests first. Preserve established behavior and the near-black graphite/glass visual language while improving cohesive Home, Tools, Spaces, Activity and Settings navigation; responsive layouts; Simple/Advanced discoverability; keyboard support; reduced motion; localization and RTL readiness; and complete loading/empty/error/approval/success states. Choose one concrete end-to-end improvement first and implement it with focused regression and visual/accessibility checks. Do not add controls for backend capabilities that do not exist. You exclusively own shared frontend files; other specialists must provide contracts instead of changing those files. Do not invent API behavior: document missing backend contracts for the coordinator. Follow Inspect → Research → Architect → Implement → Integrate → Test → Attack → Fix → Optimize → Verify → Commit. Commit locally and report SHA, evidence and limitations; do not push or merge.
+
+### CHAT 02 — ONBOARDING, PERSONALIZATION & HEY SPACES
+
+You own onboarding, personalization and Space data/runtime behavior. Inspect existing onboarding, workspace/layout, account-scope, project, widget and tool-selection contracts first. Implement multi-select onboarding choices beginning with “Why do you want to use HEY?” and the choices AI Assistant, AI Models, Control & Automation, Create & Build, Teaching & Learning, Life & Work, Custom and Skip. These choices only seed preferences; they must never restrict feature access. Build the underlying custom Space contract for names, layouts, favorites, widgets, shortcuts, projects and tools; cross-category tool assignment; Personal/Developer/Teacher/Creator/Business/custom templates; saved account-scoped preferences; and natural-language preview/confirmation seams. Enforce personal/school/business context boundaries and never override manual choices with recommendations. Chat 01 owns shared frontend files: provide its exact API contract and tests instead of editing frontend. Use existing identity and permission systems; do not create duplicate engines. Add account isolation, persistence/reload, migration and malformed-input tests. Commit locally and report the frontend contract, SHA, evidence and limitations; do not push or merge.
+
+### CHAT 03 — UNIVERSAL TOOL LIBRARY & CAPABILITY SYSTEM
+
+You own backend contracts for HEY's internal tool library. Inspect `capabilityRegistry`, `toolRegistry`, Forge, extension/marketplace, permission and execution systems first. Extend the canonical capability and tool contracts; do not create another registry, marketplace, Forge or execution engine. Strengthen metadata for platform compatibility, permissions, versions, dependencies and runtime requirements; semantic/plain-language discovery; category/favorite/recent/pinned/search queries; lifecycle contracts for Start/Stop/Customize/Status/Permissions/Help/Activity; installation/enablement/removal; tool interoperability and approved third-party extensions. Choose one concrete missing integration slice and implement it with permission, platform, version and lifecycle tests plus adversarial bypass checks. Chat 01 owns shared frontend files: provide a stable discoverable API contract. Commit locally and report SHA, evidence and remaining limits; do not push or merge.
+
+### CHAT 04 — HEY EDGE & HEY EVERYWHERE
+
+You own lightweight device companion and cross-application backend/runtime seams. The full HEY model is not required on the device. Inspect current device fabric/gateway, computer-control, capability, identity, mandate and OS adapter contracts first. Implement a truthful capability-negotiated slice for authorized file/app or OS access, global shortcut/launcher, permission-gated screen capture, local action execution with independent postcondition verification, secure cloud-to-device command/revocation/emergency-stop handling, background lifecycle/resource bounds and audit receipts. Respect actual Windows/macOS/Linux/mobile platform restrictions; never infer native capability from a web UI. Reuse Trust Kernel, mandates, execution and device adapters. Add denial, cancellation, stale authority, cross-account, offline and platform-negative tests. Provide contracts to frontend Chat 01; commit locally, report exact SHA/evidence/platform limits, and do not push or merge.
+
+### CHAT 05 — ADVANCED GESTURE CONTROL
+
+You own gesture control as an independent capability. Inspect current vision, device, presentation, action authorization and adapter contracts first. Implement only hardware/permission-supported behavior, with a provider/adapter seam for camera-based hand tracking, presentation/slide or mouse/media control, custom profiles and app-specific mappings, calibration and accidental-trigger protections, visible camera state, pause/resume/emergency stop, and bounded local processing. Do not claim camera tracking works unless a real supported adapter is present; test adapter contracts separately from production availability. Use the canonical authorization and device execution paths, never direct OS side effects. Add consent, permission revocation, false trigger, cancellation, unsupported hardware/platform and postcondition tests. Provide a stable API for frontend Chat 01; commit locally, report SHA/evidence/limits, and do not push or merge.
+
+### CHAT 06 — HEY FLOW: UNIVERSAL AI DICTATION
+
+You own dictation as a distinct voice-writing capability that can reuse shared voice infrastructure. Inspect voice engine/provider, permission, app integration, computer-use and privacy contracts before coding. Build one supported end-to-end slice for speech recognition provider abstraction, punctuation/cleanup, self-correction, custom vocabulary/snippets, multilingual preferences and per-app writing rules. Dictation into another application, global shortcuts and floating UI must be capability-gated by a real platform adapter; do not claim unsupported input injection. Separate Dictate/Edit/Rewrite from general AI chat. Enforce microphone consent, visible active state, cancellation, redaction, local/cloud provider disclosures and latency/quality measurement. Reuse canonical auth and voice APIs; frontend Chat 01 owns shared UI. Add provider outage, permission denial, account privacy and stale-session tests. Commit locally and report SHA/evidence/unsupported platforms; do not push or merge.
+
+### CHAT 07 — VOICEOS & COMPUTER CONTROL
+
+You own voice/natural-language computer-control backend integration. Inspect existing computer-use, action engine, Trust Kernel, mandates, execution, device adapter and verification contracts first. Reuse them; do not add an authorization or executor duplicate. Implement a supported narrow action flow for open-app/file/interface tasks, with intent classification among Dictate/Edit/Command/Ask, preview before sensitive action, exact authority/target binding, user confirmation where policy requires, independent postcondition checking and reversible undo/recovery. Screen context must be explicitly permitted and scoped. Do not accept executor self-report as proof. Add revocation-between-plan-and-execute, target tampering, prompt injection, cancellation/timeout, denied permission, stale UI and failed undo attacks. Chat 01 owns UI; provide its contracts. Commit locally; report SHA and exactly which adapter/platform behavior was exercised; do not push or merge.
+
+### CHAT 08 — COMPLETE TEACHER EXPERIENCE
+
+You own Teacher Mode domain/runtime behavior and educational safety contracts. Inspect current Spaces, generation, Forge/artifact, memory/privacy, lesson/learning, presentation and account/workspace contracts first. Implement a teacher workflow slice such as curriculum-scoped lesson planning to an exportable verified artifact, with configurable subject/grade preferences, explanations/resources, worksheets/quizzes/assessments/classroom activities and student-data boundaries. Use shared HEY Brain, Cosmos, Forge and creation systems; do not create a separate assistant or store student personal data by default. School-managed identity/integrations are optional and must use canonical permissions and tenant boundaries. Teachers may add any available tool; Teacher onboarding must not restrict access. Chat 01 owns UI; define its API contract. Add content provenance, age/safety, account separation, export and failure tests. Commit locally and report SHA/evidence/limitations; do not push or merge.
+
+### CHAT 09 — HEY ONE: OWN MODEL & INFERENCE PLATFORM
+
+You own model adaptation/inference infrastructure research and implementable contracts. Inspect provider registry/router, runtime configuration, privacy/cost and evaluation systems first; do not build a competing router. Research licensed open-weight candidates from primary sources, recording license and hardware assumptions before selecting one. Implement reproducible model/version/evaluation metadata and a small adapter seam for LoRA/QLoRA artifact provenance and inference-server portability; do not claim a trained model, hosted service or fine-tuning result without actually running it. Make Fast/Balanced/Maximum Quality profiles express measurable cost/latency/quality constraints. The user's laptop must not be required to run large weights. Distinguish free development software from paid GPU requirements. Add deterministic tests for metadata, route constraints, fallback, privacy and budget. Commit locally and report sources, SHA, tests and unavailable compute; do not push or merge.
+
+### CHAT 10 — HEY ULTRASPARSE RESEARCH
+
+You own measured research prototypes for sparse expert selection. Inspect provider routing and available evaluation/benchmark utilities first. Implement a reproducible in-process prototype for expert selection, dynamic budgets or adapter routing and benchmark it against a simple established baseline on declared hardware. The target is under 1 ms p95 only for eligible in-process expert-selection; separately measure selection, expert loading, network, prefill, decoding and full task completion. Never imply unloaded/inactive weights consume zero memory. Report warm-up, sample size, p50/p95/p99, CPU/memory and machine identity; do not fabricate results or claim GPU optimization without a GPU. Consider MoE, warm residency, preloading, quantization, cache and speculative decoding only with evidence. Add repeatable correctness and adversarial selection/budget tests. Reuse existing routing where appropriate. Commit locally and report exact benchmark commands/results and hardware limitations; do not push or merge.
+
+### CHAT 11 — HEY FUSION: MULTI-MODEL INTELLIGENCE
+
+You own multi-model collaboration contracts and implementation. Inspect existing provider registry/router, task/agent execution, evidence, cost budgets and privacy controls first; do not create a second router or agent runtime. Implement an end-to-end justified fusion slice for automatic model selection, parallel/sequential specialist calls, synthesis, conflict detection, independent checking and evidence/confidence tracking. Expose Auto, Local Only, Hybrid, Fusion and Manual only where providers actually support them; unsupported modes must fail clearly. Escalate only when expected improvement justifies cost. Bind budgets, retries, provider permission and account privacy; cancellations must prevent stale output from being delivered. Add deterministic fake-provider contract tests, disagreement/adversarial tests, outage/fallback, budget exhaustion and privacy tests. Frontend Chat 01 owns shared UI; provide stable API/config contracts. Commit locally and report SHA, observed cost/latency, tests and limits; do not push or merge.
+
+## Coordinator integration rules
+
+The coordinator will review every branch against the `3fe674d` baseline and any newer canonical commits before integration. Workers must preserve their dirty/untracked work. Resolve conflicts by retaining the stronger existing behavior and rerun affected suites after merge. Worktree links to shared dependencies are local-only infrastructure and must not be committed. Do not claim separate Codex chats until the app actually creates and reports their task IDs. Record every task reference, branch, SHA, verification result, blocker and next action in `HEY_EXECUTION_HANDOFF.md`.
