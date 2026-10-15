@@ -3,6 +3,24 @@ import { executeWithPermission, authorizeExecution } from "./permissionManager.j
 
 const tools = new Map();
 
+function cloneMetadata(metadata) {
+  return structuredClone(metadata);
+}
+
+function freezeRecursively(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.values(value).forEach(freezeRecursively);
+  return Object.freeze(value);
+}
+
+function describeTool(tool) {
+  if (!tool) return null;
+  return Object.freeze({
+    name: tool.name,
+    metadata: freezeRecursively(cloneMetadata(tool.metadata)),
+  });
+}
+
 function validateInput(input, schema) {
   if (!schema) return null;
   if (schema.type === "object" && (!input || typeof input !== "object" || Array.isArray(input))) {
@@ -29,20 +47,21 @@ export function registerTool(name, handler, metadata = {}) {
     throw new TypeError("A tool name and function are required.");
   }
 
-  tools.set(name, {
+  const registered = Object.freeze({
     name,
     handler,
-    metadata: {
+    metadata: freezeRecursively({
       capabilities: [],
       permissions: [],
       riskLevel: "low",
       requiresConfirmation: false,
       supportedPlatforms: ["web", "desktop", "mobile"],
       maxRetries: 0,
-      ...metadata,
-    },
+      ...cloneMetadata(metadata),
+    }),
   });
-  return tools.get(name);
+  tools.set(name, registered);
+  return describeTool(registered);
 }
 
 export function unregisterTool(name) {
@@ -50,19 +69,15 @@ export function unregisterTool(name) {
 }
 
 export function getTool(name) {
-  return tools.get(name) || null;
+  return describeTool(tools.get(name));
 }
 
 export function listTools() {
-  return Array.from(tools.values()).map((tool) =>
-    Object.fromEntries(
-      Object.entries(tool).filter(([key]) => key !== "handler")
-    )
-  );
+  return Array.from(tools.values(), describeTool);
 }
 
 export async function executeTool(name, input, context = {}) {
-  const tool = getTool(name);
+  const tool = tools.get(name) || null;
   const requestId = context.requestId || crypto.randomUUID();
   if (!tool) {
     return { success: false, result: null, error: `Tool not found: ${name}`, metadata: { requestId } };

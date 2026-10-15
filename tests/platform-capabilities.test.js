@@ -313,6 +313,7 @@ import { normalizePlan, getPlanFromEntitlements } from "../src/lib/accountRecord
 import { getPermissionPolicy, isPermissionAllowed } from "../src/lib/permissionPolicy.js";
 import { authorizeExecution } from "../src/core/permissionManager.js";
 import { listAuditEntries, clearAuditEntries } from "../src/core/auditLog.js";
+import { getTool, listTools, registerTool, unregisterTool, executeTool } from "../src/core/toolRegistry.js";
 
 test("account tier resolves from explicit plan and entitlements", () => {
   assert.equal(normalizePlan("Pro"), "pro");
@@ -436,4 +437,47 @@ test("agent-triggered execution is authorized at the execution boundary", async 
   assert.equal(result.success, true);
   assert.equal(result.authorization.authorized, true);
   assert.equal(result.authorization.decision, "allowed");
+});
+
+test("tool registry descriptors cannot expose or rewrite live execution policy", async () => {
+  const name = "test.registry.immutable_policy";
+  const suppliedMetadata = {
+    capabilities: ["browser.open_url"],
+    permission: "browser.open_url",
+    permissions: ["browser.open_url"],
+    riskLevel: "medium",
+    requiresConfirmation: true,
+  };
+  let executions = 0;
+  try {
+    const registered = registerTool(name, async () => {
+      executions += 1;
+      return { success: true, verified: true };
+    }, suppliedMetadata);
+
+    suppliedMetadata.permission = null;
+    suppliedMetadata.capabilities.length = 0;
+    const lookup = getTool(name);
+    const listed = listTools().find((tool) => tool.name === name);
+
+    assert.equal(Object.hasOwn(registered, "handler"), false);
+    assert.equal(Object.hasOwn(lookup, "handler"), false);
+    assert.equal(lookup.metadata.permission, "browser.open_url");
+    assert.deepEqual(lookup.metadata.capabilities, ["browser.open_url"]);
+    assert.equal(listed.metadata.requiresConfirmation, true);
+    assert.equal(Object.isFrozen(lookup.metadata), true);
+    assert.equal(Object.isFrozen(lookup.metadata.capabilities), true);
+    assert.throws(() => { lookup.metadata.permission = null; }, TypeError);
+    assert.throws(() => { lookup.metadata.capabilities.push("terminal.execute"); }, TypeError);
+
+    const denied = await executeTool(name, { url: "https://example.com" }, {
+      user: { id: "registry-user", role: "user", plan: "pro", entitlements: ["pro"], permissions: [] },
+      confirmed: true,
+    });
+    assert.equal(denied.success, false);
+    assert.equal(denied.authorization.authorized, false);
+    assert.equal(executions, 0);
+  } finally {
+    unregisterTool(name);
+  }
 });
