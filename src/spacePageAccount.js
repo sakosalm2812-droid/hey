@@ -6,3 +6,16 @@ export function spacesForAccount(spaces, accountId) {
   if (!Array.isArray(spaces) || !accountId) return [];
   return spaces.filter((space) => space?.accountScope === `account:${accountId}`);
 }
+
+export function spaceMembershipMatchesAccount(snapshot, accountId, activeScope, spaceId) {
+  const expectedScope = accountId ? `account:${accountId}` : "";
+  return Boolean(
+    snapshot?.success === true &&
+    typeof accountId === "string" && accountId &&
+    activeScope === expectedScope &&
+    snapshot.accountScope === expectedScope &&
+    snapshot.spaceId === spaceId &&
+    Number.isSafeInteger(snapshot.revision) && snapshot.revision >= 0 &&
+    Array.isArray(snapshot.toolIds)
+  );
+}

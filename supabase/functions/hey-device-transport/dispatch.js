@@ -33,6 +33,15 @@ export function normalizeTransportRequest(body) {
       if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS || keys.some((key) => !["deviceId", "operation", "leaseMs"].includes(key))) return null;
       return { deviceId: source.deviceId, operation: "claim", leaseMs };
     }
+    if (source.operation === "renew") {
+      const leaseMs = source.leaseMs === undefined ? 30_000 : source.leaseMs;
+      if (!validUuid(source.commandId) || !validUuid(source.leaseToken)
+        || typeof source.idempotencyKey !== "string" || !source.idempotencyKey.trim() || source.idempotencyKey.length > 128
+        || [...source.idempotencyKey].some((char) => char.codePointAt(0) < 32 || char.codePointAt(0) === 127)
+        || !Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS
+        || keys.some((key) => !["deviceId", "operation", "commandId", "leaseToken", "idempotencyKey", "leaseMs"].includes(key))) return null;
+      return { deviceId: source.deviceId, operation: "renew", commandId: source.commandId, leaseToken: source.leaseToken, idempotencyKey: source.idempotencyKey.trim(), leaseMs };
+    }
     if (source.operation === "ack" || source.operation === "fail") {
       if (!validUuid(source.commandId) || !validUuid(source.leaseToken)
         || keys.some((key) => !["deviceId", "operation", "commandId", "leaseToken"].includes(key))) return null;
@@ -104,6 +113,11 @@ export async function handleDeviceTransport({ authorization, body, credentialSto
     if (request.operation === "claim") {
       const claim = await queue.claimNext(identity.accountId, identity.deviceId, request.leaseMs);
       return result(true, { status: 200, claim });
+    }
+    if (request.operation === "renew") {
+      if (typeof queue.renewLease !== "function") return result(false, { status: 503, reason: "Device transport is unavailable." });
+      const renewal = await queue.renewLease(identity.accountId, identity.deviceId, request.commandId, request.leaseToken, request.idempotencyKey, request.leaseMs);
+      return result(renewal.renewed, { status: renewal.renewed ? 200 : 409, renewal });
     }
     const accepted = request.operation === "ack"
       ? await queue.acknowledge(identity.accountId, identity.deviceId, request.commandId, request.leaseToken)

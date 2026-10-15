@@ -24,6 +24,27 @@ function usableDevice(device, accountId, deviceId, action) {
     && Array.isArray(device.capabilities) && device.capabilities.includes(action);
 }
 
+function storedMandateScope(mandate) {
+  const mandateIds = [];
+  let current = mandate;
+  let expiresAt = Number.POSITIVE_INFINITY;
+  let revocationEpoch = null;
+  while (current) {
+    const payload = current.payload;
+    if (!payload || typeof payload !== "object" || typeof payload.id !== "string" || !UUID.test(payload.id)
+      || !Number.isSafeInteger(payload.revocationEpoch) || payload.revocationEpoch < 0
+      || typeof payload.expiresAt !== "string" || !Number.isFinite(Date.parse(payload.expiresAt))
+      || new Date(Date.parse(payload.expiresAt)).toISOString() !== payload.expiresAt) return null;
+    mandateIds.push(payload.id);
+    if (mandateIds.length > 5 || (revocationEpoch !== null && payload.revocationEpoch !== revocationEpoch)) return null;
+    revocationEpoch = payload.revocationEpoch;
+    expiresAt = Math.min(expiresAt, Date.parse(payload.expiresAt));
+    current = payload.parent;
+  }
+  if (mandateIds.length === 0 || !Number.isSafeInteger(revocationEpoch) || !Number.isFinite(expiresAt)) return null;
+  return { mandateIds, expiresAt: new Date(expiresAt).toISOString(), revocationEpoch };
+}
+
 /**
  * Server-only authorization and queue boundary. Dependencies must be built from
  * the authenticated request and trusted service-role client in the Edge Function.
@@ -61,6 +82,8 @@ export async function enqueueAuthorizedDeviceCommand({ authenticatedAccountId, b
       currentRevocationEpoch,
     }, { trustedKeys, store: mandateStore, now, online: true });
     if (!mandate.authorized) return deny("Action mandate is invalid, stale, revoked, or already used.");
+    const mandateScope = storedMandateScope(request.mandate);
+    if (!mandateScope || mandateScope.mandateIds[0] !== mandate.mandateId) return deny("Action mandate scope could not be safely retained for device delivery.");
 
     // Recheck permission, owner, and revocation after asynchronous authority
     // checks. The queue RPC also locks and rechecks device ownership/revocation.
@@ -75,7 +98,7 @@ export async function enqueueAuthorizedDeviceCommand({ authenticatedAccountId, b
       return deny("The requested device became unavailable before enqueue.");
     }
 
-    const result = await queue.enqueue(authenticatedAccountId, request.deviceId, request.idempotencyKey, request.envelope);
+    const result = await queue.enqueue(authenticatedAccountId, request.deviceId, request.idempotencyKey, request.envelope, mandateScope);
     return {
       enqueued: true,
       created: result.created,
