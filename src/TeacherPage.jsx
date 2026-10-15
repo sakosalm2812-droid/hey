@@ -4,9 +4,9 @@ import { Link } from "react-router-dom";
 import { HEY } from "./core/index.js";
 import { getAccountScope } from "./core/accountScope.js";
 import { useAuth } from "./AuthContext.jsx";
-import { supabaseClient } from "./lib/supabase.js";
+import { isSupabaseConfigured, supabaseClient } from "./lib/supabase.js";
 import { listRecords } from "./lib/heyRecords.js";
-import { hasTeacherAnswerKeyField, teacherExportsAreComplete, teacherJourneyPersistenceMatches } from "./teacherPageContract.js";
+import { hasTeacherAnswerKeyField, teacherExportsAreComplete, teacherJourneyPersistenceMatches, teacherPreparedJourneyMatches } from "./teacherPageContract.js";
 import "./TeacherPage.css";
 
 const GRADE_BANDS = ["pre-k", "kindergarten", "1-2", "3-5", "6-8", "9-12", "adult", "mixed"];
@@ -50,6 +50,7 @@ export default function TeacherPage() {
   const { user } = useAuth();
   const accountId = user?.id || "";
   const accountRef = useRef(accountId);
+  const saveInFlightRef = useRef(false);
   useLayoutEffect(() => { accountRef.current = accountId; }, [accountId]);
 
   const [access, setAccess] = useState({ status: "checking", message: "Verifying your Teacher access…" });
@@ -72,6 +73,8 @@ export default function TeacherPage() {
   const [questions, setQuestions] = useState([{ ...EMPTY_QUESTION }]);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
+  const [preparedJourney, setPreparedJourney] = useState(null);
+  const [journeyContext, setJourneyContext] = useState(null);
   const [persistenceConfirmed, setPersistenceConfirmed] = useState(false);
   const [savedJourney, setSavedJourney] = useState(null);
   const [safetyReasons, setSafetyReasons] = useState([]);
@@ -87,6 +90,8 @@ export default function TeacherPage() {
     setSelectedClassId("");
     setWorkspaceId("");
     setSavedJourney(null);
+    setPreparedJourney(null);
+    setJourneyContext(null);
     setSafetyReasons([]);
     setSafetyAcknowledged(false);
     setExportsByAudience(null);
@@ -100,6 +105,10 @@ export default function TeacherPage() {
         setAccess({ status: "denied", message: "Sign in with a Teacher account to use this workflow." });
         return;
       }
+      if (!isSupabaseConfigured) {
+        setAccess({ status: "service-unavailable", message: "HEY’s account service is not configured in this build. Teacher role, class access, Forge workspaces, and persistence cannot be verified." });
+        return;
+      }
       try {
         const teacher = await readCurrentTeacher(accountId);
         const records = await listRecords(teacher.userId, "project");
@@ -111,13 +120,16 @@ export default function TeacherPage() {
         setProjects(availableProjects);
         setSelectedClassId(teacher.classIds[0] || "");
         setWorkspaceId(availableProjects[0]?.id || "");
-        setAccess({ status: "ready", message: "Teacher access verified." });
+        setAccess({
+          status: "ready",
+          message: `Teacher account and authorized classes verified; ${availableProjects.length} existing project${availableProjects.length === 1 ? "" : "s"} loaded. Each Forge save is checked separately.`,
+        });
       } catch (loadError) {
         if (!cancelled && accountRef.current === accountId) {
           const denied = /Teacher account|authorized class/i.test(loadError?.message || "");
           setAccess({
             status: denied ? "denied" : "error",
-            message: denied ? loadError.message : "Teacher access or your Forge workspaces could not be loaded. Check your account and retry.",
+            message: denied ? loadError.message : `Teacher account or Forge workspace readiness could not be verified. ${loadError.message || "Check your connection and retry."}`,
           });
         }
       }
@@ -157,22 +169,22 @@ export default function TeacherPage() {
     }
     setExportsByAudience(allExports);
     setOutputAccountId(accountId);
-    setSavedJourney(null);
     setStatus("complete");
     setError("");
   }
 
-  async function createLessonJourney(event) {
+  async function prepareLessonPreview(event) {
     event.preventDefault();
-    if (status === "saving" || status === "exporting" || !workspaceId || !selectedClassId) return;
-    setStatus("saving");
+    if (status === "preparing" || status === "saving" || status === "exporting" || !workspaceId || !selectedClassId) return;
+    setStatus("preparing");
     setError("");
     setPersistenceConfirmed(false);
     setSavedJourney(null);
+    setPreparedJourney(null);
+    setJourneyContext(null);
     setExportsByAudience(null);
     setOutputAccountId("");
     setSafetyAcknowledged(false);
-    let confirmedJourney = false;
     try {
       const teacher = await readCurrentTeacher(accountId, selectedClassId);
       const currentProjects = await listRecords(teacher.userId, "project");
@@ -180,7 +192,7 @@ export default function TeacherPage() {
         throw new Error("Select an existing project that is still available in your account.");
       }
       if (accountRef.current !== accountId || getAccountScope() !== teacher.accountScope) {
-        throw new Error("Your account changed before the lesson could be created.");
+        throw new Error("Your account changed before the preview could be prepared.");
       }
 
       const accountScope = teacher.accountScope;
@@ -217,36 +229,95 @@ export default function TeacherPage() {
         currentWorkspaceId,
         currentClassId,
       };
-      const journey = await HEY.teacher.createTeacherLessonWorksheetJourney({ lesson, assessment, context });
+      const journey = await HEY.teacher.prepareLessonWorksheetJourney({ lesson, assessment, context });
       if (accountRef.current !== accountId || getAccountScope() !== accountScope) {
-        throw new Error("Your account changed while Forge was saving. The save confirmations could not be applied to the active account.");
+        throw new Error("Your account changed while the preview was being prepared. It was discarded.");
       }
-      if (!teacherJourneyPersistenceMatches(journey, context)) {
-        throw new Error("Forge did not return matching persistence confirmations for the lesson, answer key, and worksheet.");
+      if (!teacherPreparedJourneyMatches(journey, context)) {
+        throw new Error("HEY could not verify the account, class, workspace, and audience boundaries for this preview.");
       }
-      confirmedJourney = true;
-      setPersistenceConfirmed(true);
       const reasons = [...new Set([
         ...(journey.lesson.metadata.safety.reviewReasons || []),
         ...(journey.teacherArtifact.metadata.safety.reviewReasons || []),
         ...(journey.studentArtifact.metadata.safety.reviewReasons || []),
       ])];
-      setSavedJourney(journey);
+      setPreparedJourney(journey);
+      setJourneyContext(context);
       setSafetyReasons(reasons);
-      if (reasons.length) {
-        setStatus("review");
-        return;
-      }
-      setStatus("exporting");
-      await prepareExports(journey, context);
-    } catch (journeyError) {
+      setStatus("preview");
+    } catch (previewError) {
       if (accountRef.current === accountId) {
         setStatus("error");
-        setError(confirmedJourney
-          ? `Forge confirmed all three saves, but the exports could not be prepared: ${journeyError.message || "verification failed"}`
-          : `HEY could not confirm all three Forge saves. Some items may have been saved; check Forge before retrying. ${journeyError.message || ""}`.trim());
+        setError(`Preview could not be prepared. Nothing was saved to Forge. ${previewError.message || "Check account and workspace access, then retry."}`);
       }
     }
+  }
+
+  async function savePreparedJourney() {
+    if (!preparedJourney || !journeyContext || status !== "preview" || saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
+    setStatus("saving");
+    setError("");
+    let saveStarted = false;
+    try {
+      const teacher = await readCurrentTeacher(accountId, journeyContext.classId);
+      const currentProjects = await listRecords(teacher.userId, "project");
+      if (!currentProjects.some((project) => project.id === journeyContext.workspaceId)) {
+        throw new Error("The selected Forge project is no longer available to this account.");
+      }
+      if (teacher.accountScope !== journeyContext.accountScope || accountRef.current !== accountId
+        || getAccountScope() !== journeyContext.accountScope) {
+        throw new Error("Your account or class authorization changed before saving.");
+      }
+      saveStarted = true;
+      const journey = await HEY.teacher.saveLessonWorksheetJourney(preparedJourney, journeyContext);
+      if (accountRef.current !== accountId || getAccountScope() !== journeyContext.accountScope) {
+        throw new Error("Your account changed while Forge was saving. Verify the workspace before continuing.");
+      }
+      if (!teacherJourneyPersistenceMatches(journey, journeyContext)) {
+        throw new Error("Forge did not return matching persistence confirmations for all three artifacts.");
+      }
+      setPersistenceConfirmed(true);
+      setSavedJourney(journey);
+      setPreparedJourney(null);
+      if (safetyReasons.length) setStatus("review");
+      else setStatus("saved");
+    } catch (saveError) {
+      if (accountRef.current === accountId) {
+        if (saveStarted) {
+          setStatus("partial-error");
+          setError(`Forge did not confirm all three saves. One or more artifacts may already exist, so review the selected project in Forge before trying again. ${saveError.message || ""}`.trim());
+        } else {
+          setStatus("preview");
+          setError(`The save could not start, so nothing was written. Check your teacher access and selected project, then retry. ${saveError.message || ""}`.trim());
+        }
+      }
+    } finally {
+      saveInFlightRef.current = false;
+    }
+  }
+
+  async function exportSavedJourney(safetyReview) {
+    if (!savedJourney || !journeyContext || status !== "saved") return;
+    setStatus("exporting");
+    setError("");
+    try {
+      await prepareExports(savedJourney, journeyContext, safetyReview);
+    } catch (exportError) {
+      if (accountRef.current === accountId) {
+        setStatus("export-error");
+        setError(`Forge confirmed all three saves, but exports could not be verified. Your saved artifacts remain in Forge. ${exportError.message || "Retry export when account access is ready."}`);
+      }
+    }
+  }
+
+  function discardPreview() {
+    if (status !== "preview") return;
+    setPreparedJourney(null);
+    setJourneyContext(null);
+    setSafetyReasons([]);
+    setStatus("idle");
+    setError("");
   }
 
   async function completeSafetyReview() {
@@ -258,19 +329,15 @@ export default function TeacherPage() {
       if (teacher.accountScope !== `account:${accountId}` || accountRef.current !== accountId) {
         throw new Error("Your account or class authorization changed before export.");
       }
-      await prepareExports(savedJourney, {
+      await prepareExports(savedJourney, journeyContext, {
         accountScope: teacher.accountScope,
-        workspaceId,
-        classId: selectedClassId,
-      }, {
-        accountScope: teacher.accountScope,
-        workspaceId,
+        workspaceId: journeyContext.workspaceId,
         reviewerId: teacher.userId,
         reviewedAt: new Date().toISOString(),
       });
     } catch (reviewError) {
       if (accountRef.current === accountId) {
-        setStatus("error");
+        setStatus("export-error");
         setError(`Forge confirmed all three saves, but the reviewed exports could not be verified: ${reviewError.message || "export failed"}`);
       }
     }
@@ -285,7 +352,8 @@ export default function TeacherPage() {
   }
 
   const visibleExports = outputAccountId === accountId && access.status === "ready" ? exportsByAudience : null;
-  const pageBusy = status === "saving" || status === "exporting" || status === "review";
+  const pageBusy = status === "preparing" || status === "saving" || status === "exporting";
+  const formLocked = pageBusy || ["preview", "review", "saved", "complete", "partial-error", "export-error"].includes(status);
 
   return (
     <main className="teacher-page" aria-labelledby="teacher-page-title">
@@ -294,15 +362,21 @@ export default function TeacherPage() {
         <span className="teacher-page__secure"><GraduationCap size={17} aria-hidden="true" /> Teacher access required</span>
       </header>
 
+      {status === "preparing" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Building a local preview. Nothing is being saved.</p>}
+      {status === "saving" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Saving three artifacts and checking Forge receipts…</p>}
+      {status === "exporting" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> Checking teacher and student exports…</p>}
+
       {access.status === "checking" && <p className="teacher-page__status" role="status"><LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> {access.message}</p>}
-      {(access.status === "denied" || access.status === "error") && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{access.message}</p>{access.status === "error" && <button type="button" onClick={() => setAccessRetry((current) => current + 1)}><RotateCw size={15} aria-hidden="true" /> Retry</button>}</div>}
+      {access.status === "ready" && <p className="teacher-page__status" role="status"><ShieldCheck size={17} aria-hidden="true" /> {access.message}</p>}
+      {(access.status === "denied" || access.status === "error" || access.status === "service-unavailable") && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{access.message}</p>{(access.status === "error" || access.status === "service-unavailable") && <button type="button" onClick={() => setAccessRetry((current) => current + 1)}><RotateCw size={15} aria-hidden="true" /> Retry readiness check</button>}</div>}
 
       {access.status === "ready" && !classIds.length && <div className="teacher-page__message" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Your account has no authorized class assignments.</p></div>}
       {access.status === "ready" && !projects.length && <div className="teacher-page__message" role="status"><AlertCircle size={18} aria-hidden="true" /><p>Create a project first. Forge uses an existing project as the lesson workspace.</p><Link to="/projects">Open Projects</Link></div>}
 
       {access.status === "ready" && classIds.length > 0 && projects.length > 0 && (
         <>
-          <form className="teacher-page__form" onSubmit={createLessonJourney}>
+          <form className="teacher-page__form" onSubmit={prepareLessonPreview}>
+            <fieldset className="teacher-page__form-fields" disabled={formLocked}>
             <section className="teacher-page__scope" aria-labelledby="teacher-scope-title">
               <div><p className="teacher-page__eyebrow">Verified context</p><h2 id="teacher-scope-title">Class and workspace</h2><p>These choices come from your account’s authorized classes and existing projects. Your role is read from your signed-in account.</p></div>
               <label>Authorized class
@@ -356,8 +430,22 @@ export default function TeacherPage() {
               <p className="teacher-page__privacy-note"><ShieldCheck size={16} aria-hidden="true" /> Do not enter student names, grades, records, or personal answers.</p>
             </section>
 
-            <div className="teacher-page__submit-row"><button className="teacher-page__primary" type="submit" disabled={pageBusy || !selectedClassId || !workspaceId || !lessonTitle.trim() || !subject.trim()}>{pageBusy ? <LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}{status === "saving" ? "Saving all three artifacts…" : status === "exporting" ? "Verifying exports…" : "Create and save lesson set"}</button></div>
+            <div className="teacher-page__submit-row"><button className="teacher-page__primary" type="submit" disabled={formLocked || !selectedClassId || !workspaceId || !lessonTitle.trim() || !subject.trim()}>{status === "preparing" ? <LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}{status === "preparing" ? "Preparing preview…" : "Build lesson preview"}</button></div>
+            </fieldset>
           </form>
+
+          {status === "preview" && preparedJourney && (
+            <section className="teacher-page__preview" aria-labelledby="teacher-preview-title">
+              <div className="teacher-page__outputs-heading"><div><p className="teacher-page__eyebrow">Unsaved draft</p><h2 id="teacher-preview-title">Review the lesson set</h2><p>This preview is not in Forge yet. Saving creates three separate artifacts in the selected project.</p></div></div>
+              {safetyReasons.length > 0 && <div className="teacher-page__message" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Safety review flags: {safetyReasons.join(", ")}. Review the content before exporting.</p></div>}
+              <article className="teacher-page__output teacher-page__output--lesson"><header><div><h3>{preparedJourney.lesson.title}</h3><p>Lesson plan · {preparedJourney.lesson.content.subject} · {preparedJourney.lesson.content.gradeBand}</p></div></header><div className="teacher-page__preview-content"><p>{preparedJourney.lesson.content.durationMinutes} minutes</p><h4>Learning objectives</h4><ul>{preparedJourney.lesson.content.learningObjectives.map((objective, index) => <li key={`${index}-${objective}`}>{objective}</li>)}</ul><h4>Class activities</h4>{preparedJourney.lesson.content.activities.map((activity, index) => <p key={`${index}-${activity.title}`}><strong>{activity.title}</strong> · {activity.minutes} min<br />{activity.instructions}</p>)}<h4>Assessment</h4><p>{preparedJourney.lesson.content.assessment.prompt}</p><p>{preparedJourney.lesson.content.assessment.expectedLearning}</p></div></article>
+              <article className="teacher-page__output teacher-page__output--teacher"><header><div><h3>Teacher-only answer key</h3><p>Private teacher preview for the selected authorized class.</p></div></header><div className="teacher-page__preview-content"><p>{preparedJourney.teacherArtifact.content.title} · {preparedJourney.teacherArtifact.content.directions}</p>{preparedJourney.teacherArtifact.content.questions.map((question, index) => <p key={`${index}-${question.prompt}`}><strong>{index + 1}. {question.prompt}</strong><br />Answer: {question.teacherAnswer}<br />Success criteria: {question.expectedLearning}</p>)}</div></article>
+              <article className="teacher-page__output teacher-page__output--student"><header><div><h3>Student worksheet</h3><p>Separate preview checked for teacher-answer fields.</p></div></header><div className="teacher-page__preview-content"><p>{preparedJourney.studentArtifact.content.title} · {preparedJourney.studentArtifact.content.directions}</p><ol>{preparedJourney.studentArtifact.content.questions.map((question, index) => <li key={`${index}-${question.prompt}`}>{question.prompt} <span>({question.points} points)</span></li>)}</ol></div></article>
+              <div className="teacher-page__submit-row"><button className="teacher-page__primary" type="button" onClick={savePreparedJourney} disabled={pageBusy}>{status === "saving" ? <LoaderCircle className="teacher-page__spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}{status === "saving" ? "Saving all three…" : "Save all three to Forge"}</button><button type="button" className="teacher-page__secondary" onClick={discardPreview} disabled={pageBusy}>Edit lesson brief</button></div>
+            </section>
+          )}
+
+          {status === "saved" && persistenceConfirmed && <section className="teacher-page__review" aria-labelledby="teacher-saved-title"><h2 id="teacher-saved-title">All three Forge saves confirmed</h2><p>The lesson, teacher-only answer key, and student worksheet are saved in the selected project. Export files when you’re ready.</p><button type="button" className="teacher-page__primary" onClick={() => exportSavedJourney()}><Download size={16} aria-hidden="true" /> Prepare all three exports</button></section>}
 
           {status === "review" && savedJourney && persistenceConfirmed && (
             <section className="teacher-page__review" aria-labelledby="teacher-review-title">
@@ -378,7 +466,10 @@ export default function TeacherPage() {
             </section>
           )}
 
-          {error && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p></div>}
+          {status === "export-error" && savedJourney && <div className="teacher-page__submit-row"><button type="button" className="teacher-page__primary" onClick={() => { setStatus(safetyReasons.length ? "review" : "saved"); setError(""); }}><RotateCw size={16} aria-hidden="true" /> Retry exports</button></div>}
+          {status === "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p><Link to="/forge">Open Forge and inspect the selected project</Link></div>}
+          {error && status !== "partial-error" && <div className="teacher-page__message teacher-page__message--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p></div>}
+          {status === "saved" && persistenceConfirmed && <p className="teacher-page__success" role="status"><Check size={16} aria-hidden="true" /> Forge confirmed the lesson, teacher answer key, and student worksheet.</p>}
           {status === "complete" && persistenceConfirmed && <p className="teacher-page__success" role="status"><Check size={16} aria-hidden="true" /> Forge confirmed the lesson, teacher answer key, and student worksheet.</p>}
         </>
       )}

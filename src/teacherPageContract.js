@@ -3,12 +3,41 @@ const PERSISTENCE_CONTRACTS = [
   ["teacherArtifact", "hey.teacher.assessment.v1"],
   ["studentArtifact", "hey.teacher.worksheet.v1"],
 ];
+const PRIVATE_STUDENT_FIELDS = new Set([
+  "answer", "answers", "teacheranswer", "answerkey", "correctanswer", "correctanswers",
+  "expectedlearning", "solution", "solutions",
+]);
+
+function normalizedFieldName(value) {
+  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
 
 export function hasTeacherAnswerKeyField(value, seen = new WeakSet()) {
   if (!value || typeof value !== "object" || seen.has(value)) return false;
   seen.add(value);
   if (Array.isArray(value)) return value.some((item) => hasTeacherAnswerKeyField(item, seen));
-  return Object.entries(value).some(([key, item]) => key === "teacherAnswer" || hasTeacherAnswerKeyField(item, seen));
+  return Object.entries(value).some(([key, item]) => PRIVATE_STUDENT_FIELDS.has(normalizedFieldName(key)) || hasTeacherAnswerKeyField(item, seen));
+}
+
+export function studentExportHasTeacherKeyMarker(content) {
+  return typeof content === "string"
+    && /(?:^|\n)\s*(?:#{1,6}\s*)?(?:teacher[- ]only\s+)?answer key\b|\*\*answer:\*\*|teacherAnswer\s*:/i.test(content);
+}
+
+export function teacherPreparedJourneyMatches(journey, { accountScope, workspaceId, classId } = {}) {
+  const lesson = journey?.lesson;
+  const teacherArtifact = journey?.teacherArtifact;
+  const studentArtifact = journey?.studentArtifact;
+  if (!lesson || !teacherArtifact || !studentArtifact) return false;
+  const lessonMetadata = lesson.metadata;
+  const teacherMetadata = teacherArtifact.metadata;
+  const studentMetadata = studentArtifact.metadata;
+  return lessonMetadata?.accountScope === accountScope && lessonMetadata?.workspaceId === workspaceId
+    && teacherMetadata?.accountScope === accountScope && teacherMetadata?.workspaceId === workspaceId
+    && teacherMetadata?.classId === classId && teacherMetadata?.audience === "teacher_only"
+    && studentMetadata?.accountScope === accountScope && studentMetadata?.workspaceId === workspaceId
+    && studentMetadata?.classId === classId && studentMetadata?.audience === "student"
+    && !hasTeacherAnswerKeyField(studentArtifact.content);
 }
 
 export function teacherJourneyPersistenceMatches(journey, { accountScope, workspaceId, classId } = {}) {
@@ -39,5 +68,5 @@ export function teacherExportsAreComplete(exportsByAudience) {
     const exported = exportsByAudience?.[key];
     return exported?.filename === filename && exported.mimeType === "text/markdown"
       && typeof exported.content === "string" && exported.content.trim().length > 0;
-  });
+  }) && !studentExportHasTeacherKeyMarker(exportsByAudience.studentWorksheet?.content);
 }

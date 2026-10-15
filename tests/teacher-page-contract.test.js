@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { hasTeacherAnswerKeyField, teacherExportsAreComplete, teacherJourneyPersistenceMatches } from "../src/teacherPageContract.js";
+import { hasTeacherAnswerKeyField, studentExportHasTeacherKeyMarker, teacherExportsAreComplete, teacherJourneyPersistenceMatches, teacherPreparedJourneyMatches } from "../src/teacherPageContract.js";
 
 const [page, routes, appNavigation, legacyNavigation] = await Promise.all([
   readFile(new URL("../src/TeacherPage.jsx", import.meta.url), "utf8"),
@@ -20,16 +20,28 @@ function persistedJourney() {
   };
 }
 
+function preparedJourney() {
+  const saved = persistedJourney().saved;
+  return { lesson: saved.lesson, teacherArtifact: saved.teacherArtifact, studentArtifact: saved.studentArtifact };
+}
+
 test("Teacher route and navigation reach a fresh server-claim guarded workflow", () => {
   assert.match(routes, /path="\/teacher"[^\n]*TeacherPage/);
   assert.match(appNavigation, /label: "Teacher", path: "\/teacher"/);
   assert.match(legacyNavigation, /label: "Teacher", path: "\/teacher"/);
   assert.match(page, /supabaseClient\.auth\.getUser\(\)/);
+  assert.match(page, /isSupabaseConfigured/);
+  assert.match(page, /service-unavailable/);
+  assert.match(page, /Each Forge save is checked separately/);
   assert.match(page, /claims\.hey_role !== "teacher"/);
   assert.match(page, /claims\.hey_account_scope !== accountScope/);
   assert.match(page, /claims\.hey_class_ids/);
   assert.match(page, /listRecords\(teacher\.userId, "project"\)/);
-  assert.match(page, /HEY\.teacher\.createTeacherLessonWorksheetJourney/);
+  assert.match(page, /HEY\.teacher\.prepareLessonWorksheetJourney/);
+  assert.match(page, /HEY\.teacher\.saveLessonWorksheetJourney/);
+  assert.match(page, /saveInFlightRef\.current/);
+  assert.match(page, /Save all three to Forge/);
+  assert.match(page, /Build lesson preview/);
   assert.doesNotMatch(page, /name="role"|Select role|Choose your role/i);
 });
 
@@ -56,14 +68,43 @@ test("Forge output appears only after three matching persistence receipts and co
   };
   assert.equal(teacherExportsAreComplete(completeExports), true);
   assert.equal(teacherExportsAreComplete({ ...completeExports, studentWorksheet: { ...completeExports.studentWorksheet, content: " " } }), false);
-  assert.match(page, /teacherJourneyPersistenceMatches\(journey, context\)/);
+  assert.equal(teacherExportsAreComplete({ ...completeExports, studentWorksheet: { ...completeExports.studentWorksheet, content: "# Student Worksheet\n## Teacher-only answer key" } }), false);
+  assert.match(page, /teacherJourneyPersistenceMatches\(journey, journeyContext\)/);
   assert.match(page, /teacherExportsAreComplete\(allExports\)/);
   assert.match(page, /outputAccountId === accountId && access.status === "ready"/);
+});
+
+test("unsaved previews are bound to the active account, project, and class and reject private-key leakage", () => {
+  const context = { accountScope: "account:teacher", workspaceId: "project-id", classId: "class-a" };
+  assert.equal(teacherPreparedJourneyMatches(preparedJourney(), context), true);
+
+  const wrongAccount = preparedJourney();
+  wrongAccount.teacherArtifact.metadata.accountScope = "account:other";
+  assert.equal(teacherPreparedJourneyMatches(wrongAccount, context), false);
+
+  const wrongWorkspace = preparedJourney();
+  wrongWorkspace.studentArtifact.metadata.workspaceId = "project-other";
+  assert.equal(teacherPreparedJourneyMatches(wrongWorkspace, context), false);
+
+  const wrongClass = preparedJourney();
+  wrongClass.teacherArtifact.metadata.classId = "class-other";
+  assert.equal(teacherPreparedJourneyMatches(wrongClass, context), false);
+
+  const leaked = preparedJourney();
+  leaked.studentArtifact.content.questions[0].teacherAnswer = "private answer";
+  assert.equal(teacherPreparedJourneyMatches(leaked, context), false);
+  for (const key of ["answerKey", "correct_answer", "expectedLearning", "solutions"]) {
+    const malicious = preparedJourney();
+    malicious.studentArtifact.content.questions[0][key] = "private material";
+    assert.equal(teacherPreparedJourneyMatches(malicious, context), false, `reject leaked field ${key}`);
+  }
 });
 
 test("student worksheet output is checked for answer-key fields and stays distinct from teacher exports", () => {
   assert.equal(hasTeacherAnswerKeyField({ questions: [{ prompt: "Question", points: 1 }] }), false);
   assert.equal(hasTeacherAnswerKeyField({ questions: [{ prompt: "Question", teacherAnswer: "Answer" }] }), true);
+  assert.equal(hasTeacherAnswerKeyField({ questions: [{ prompt: "Question", answer_key: "Answer" }] }), true);
+  assert.equal(studentExportHasTeacherKeyMarker("# Student Worksheet\n## Teacher-only answer key"), true);
   assert.match(page, /HEY\.teacher\.exportAnswerKeyMarkdown/);
   assert.match(page, /HEY\.teacher\.exportWorksheetMarkdown/);
   assert.match(page, /Teacher-only answer key/);
