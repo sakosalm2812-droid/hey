@@ -64,6 +64,7 @@ const CapabilitiesPage = lazy(() => import("./CapabilitiesPage.jsx"));
 const DeviceCenterPage = lazy(() => import("./DeviceCenterPage.jsx"));
 const ToolLibraryPage = lazy(() => import("./ToolLibraryPage.jsx"));
 const SpacesPage = lazy(() => import("./SpacesPage.jsx"));
+const TeacherPage = lazy(() => import("./TeacherPage.jsx"));
 const DebugPage = lazy(() => import("./DebugPage.jsx"));
 const NotFound = lazy(() => import("./pages/NotFound.jsx"));
 const ErrorPage = lazy(() => import("./pages/ErrorPages.jsx").then((module) => ({ default: module.default })));
@@ -310,6 +311,7 @@ function AnimatedRoutes() {
         <Route path="/capabilities" element={<ProtectedLayout><CapabilitiesPage /></ProtectedLayout>} />
         <Route path="/tools" element={<ProtectedLayout><ToolLibraryPage /></ProtectedLayout>} />
         <Route path="/spaces" element={<ProtectedLayout><SpacesPage /></ProtectedLayout>} />
+        <Route path="/teacher" element={<ProtectedLayout><TeacherPage /></ProtectedLayout>} />
         <Route path="/device" element={<ProtectedLayout><DeviceCenterPage /></ProtectedLayout>} />
         <Route path="/debug" element={<ProtectedLayout><DebugPage /></ProtectedLayout>} />
 

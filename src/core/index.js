@@ -899,6 +899,7 @@ import {
       verifyWorksheetArtifact: verifyTeacherWorksheetArtifact,
       saveWorksheetArtifact: saveTeacherWorksheetArtifact,
       exportWorksheetMarkdown: exportTeacherWorksheetMarkdown,
+      createTeacherLessonWorksheetJourney,
       createLessonWorksheetJourney: createTeacherLessonWorksheetJourney,
     },
 
