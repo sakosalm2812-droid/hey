@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { checkHEYAIReadiness, getHEYChatError, isSameHEYAccount, listHEYConversations, withFusionRequestOptIn } from "../src/lib/heyAI.js";
+import { checkHEYAIReadiness, getHEYChatError, isSameHEYAccount, listHEYConversations, parseFusionVerificationMetadata, withFusionRequestOptIn } from "../src/lib/heyAI.js";
 
 test("ordinary chat omits Fusion and explicit opt-in sends only the supported true field", () => {
   const ordinary = withFusionRequestOptIn({ message: "hello", mode: "research", fusion: true });
@@ -45,21 +45,61 @@ test("chat conversation loading does not treat a missing Supabase session as an 
   await assert.rejects(listHEYConversations(), /Supabase session is unavailable/i);
 });
 
+test("the chat client accepts only request- and answer-bound primary/checker provenance", async () => {
+  const requestId = "123e4567-e89b-42d3-a456-426614174000";
+  const answer = "The checked response.";
+  const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(answer)));
+  const answerSha256 = Array.from(digestBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const verified = {
+    status: "verified",
+    independentlyChecked: true,
+    confidence: 0.91,
+    responseSha256: answerSha256,
+    provenance: {
+      status: "verified",
+      requestId,
+      answerSha256,
+      primary: { role: "primary", providerId: "openai", modelId: "gpt-fixture", answerClaimId: "answer" },
+      checker: { role: "checker", providerId: "gemini", modelId: "gemini-fixture", answerClaimId: "answer", verificationClaimId: "verification", confirmed: true },
+    },
+  };
+  const parsed = await parseFusionVerificationMetadata(verified, { answer, requestId });
+  assert.equal(parsed.status, "verified");
+  assert.equal(parsed.requestId, requestId);
+  assert.equal(parsed.primary.providerId, "openai");
+  assert.equal(parsed.checker.providerId, "gemini");
+  assert.equal(Object.isFrozen(parsed), true);
+  assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, confirmed: false } } }, { answer, requestId }), null);
+  assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, providerId: "openai" } } }, { answer, requestId }), null);
+  assert.equal(await parseFusionVerificationMetadata(verified, { answer: "A replayed answer.", requestId }), null);
+  assert.equal(await parseFusionVerificationMetadata(verified, { answer, requestId: "123e4567-e89b-42d3-a456-426614174001" }), null);
+  const hostile = {};
+  Object.defineProperty(hostile, "status", { enumerable: true, get: () => "verified" });
+  assert.equal(await parseFusionVerificationMetadata(hostile, { answer, requestId }), null);
+  const hostileProxy = new Proxy({}, { get() { throw new Error("hostile getter"); } });
+  assert.equal(await parseFusionVerificationMetadata(hostileProxy, { answer, requestId }), null);
+});
+
 test("chat UI exposes Fusion as a per-request checkbox and fences requests on unmount", async () => {
-  const [input, page, client] = await Promise.all([
+  const [input, page, client, message] = await Promise.all([
     readFile(new URL("../src/components/chat/ChatInput.jsx", import.meta.url), "utf8"),
     readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/heyAI.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/components/chat/ChatMessage.jsx", import.meta.url), "utf8"),
   ]);
   assert.match(input, /checked=\{fusionEnabled\}/);
   assert.match(input, /setFusionEnabled\?\.\(event\.target\.checked\)/);
   assert.match(input, /fusionEnabled = false/);
   assert.match(page, /useEffect\(\(\) => \(\) => activeRequestControllerRef\.current\?\.abort\(\), \[\]\)/);
   assert.match(page, /fusion: requestedFusion/);
+  assert.match(page, /onFusionVerification/);
   assert.match(client, /const execution = fusion \? null : await executeRequest/);
   assert.match(client, /withFusionRequestOptIn\([\s\S]*?\}, fusion\)\)/);
   assert.match(page, /aria-label="Service readiness"/);
   assert.match(page, /provider reachability is confirmed when you send a message/);
   assert.match(page, /Supabase could not load your conversations/);
   assert.match(client, /HEY AI could not be reached/);
+  assert.match(client, /parseFusionVerificationMetadata\(data\.fusion,/);
+  assert.match(message, /Independent provider check passed/);
+  assert.match(message, /role="status"/);
 });

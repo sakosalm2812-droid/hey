@@ -10,8 +10,11 @@ export default function ChatMessage({
   onPin,
   pinned,
   copied,
+  verification,
 }) {
   const isUser = role === "user";
+  const providerNames = { openai: "OpenAI", openrouter: "OpenRouter", gemini: "Gemini", groq: "Groq" };
+  const providerName = (providerId) => providerNames[providerId] || providerId;
 
   return (
     <motion.article
@@ -25,6 +28,11 @@ export default function ChatMessage({
       <div className="hey-chat-message-body">
         <div className="hey-chat-message-label">{isUser ? "You" : "HEY"}</div>
         <div className="hey-chat-message-copy">{isUser ? children : <MarkdownResponse>{children}</MarkdownResponse>}</div>
+        {!isUser && verification?.status === "verified" && verification.primary?.providerId && verification.checker?.providerId && (
+          <div className="hey-chat-verification" role="status">
+            Independent provider check passed · {providerName(verification.primary.providerId)} → {providerName(verification.checker.providerId)}
+          </div>
+        )}
         <div className="hey-chat-message-actions">
           <button type="button" onClick={onCopy} aria-label="Copy message" title="Copy message">
             {copied ? <Check size={14} /> : <Copy size={14} />}

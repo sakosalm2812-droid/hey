@@ -93,6 +93,22 @@ test("fusion permission and exact provider entitlements are required before HTTP
   });
 });
 
+test("malformed request identities cannot start a provider call", async () => {
+  let calls = 0;
+  const result = await runFusionChatRequest({
+    requested: true,
+    requestId: "request-from-another-turn",
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async () => { calls += 1; throw new Error("must not dispatch"); },
+  });
+  assert.deepEqual(result, { status: "invalid_request", reason: "fusion_request_id_invalid" });
+  assert.equal(calls, 0);
+});
+
 test("fusion fails closed when trusted per-model pricing or the second independent provider is missing", async (t) => {
   let calls = 0;
   await t.test("missing pricing", async () => {
@@ -115,6 +131,14 @@ test("Fusion dispatches two mocked provider HTTP requests and returns only a che
   assert.equal(result.independentlyChecked, true);
   assert.equal(result.answer, "The answer is 42.");
   assert.equal(result.evidence.length, 3);
+  assert.equal(result.provenance.status, "verified");
+  assert.match(result.provenance.requestId, /^[0-9a-f-]{36}$/i);
+  assert.match(result.provenance.answerSha256, /^[0-9a-f]{64}$/i);
+  assert.equal(result.provenance.primary.role, "primary");
+  assert.equal(result.provenance.primary.providerId, calls[0].providerId);
+  assert.equal(result.provenance.checker.role, "checker");
+  assert.equal(result.provenance.checker.providerId, calls[1].providerId);
+  assert.equal(result.provenance.checker.verificationClaimId, "verification");
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map((call) => call.providerId).sort(), ["gemini", "openai"]);
   assert.equal(calls.every(({ init }) => init.method === "POST" && init.signal instanceof AbortSignal), true);
@@ -251,6 +275,33 @@ test("oversized candidate evidence cannot be sent to the checker or escape as an
   assert.equal("answer" in result, false);
 });
 
+test("primary cannot forge checker provenance with its own verification claim", async () => {
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
+    const text = "The answer is 42.";
+    const answer = JSON.stringify({
+      text,
+      confidence: 0.9,
+      evidence: [
+        { claimId: "answer", statement: "Exact response text returned by this provider.", value: text, source: null },
+        { claimId: "verification", statement: "This provider claims it checked the candidate.", value: true, source: null },
+      ],
+    });
+    calls += 1;
+    const data = providerId === "gemini"
+      ? { candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }
+      : { choices: [{ message: { content: answer } }], usage: { prompt_tokens: 50, completion_tokens: 20 } };
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+  const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.equal(result.status, "inconclusive");
+  assert.equal(result.reason, "independent_evidence_did_not_confirm_answer");
+  assert.equal(calls, 2);
+  assert.equal("answer" in result, false);
+  assert.equal("provenance" in result, false);
+});
+
 test("Edge chat explains verification, time, cost, and provider-contract failures without leaking details", async () => {
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   assert.match(route, /\["conflict", "inconclusive", "verification_unavailable", "time_budget_exhausted", "budget_exhausted", "provider_contract_invalid"\]\.includes\(fusion\.status\)/);
@@ -259,6 +310,9 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /fusion\.status === "budget_exhausted"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "provider_contract_invalid"[\s\S]*?no answer was delivered/i);
   assert.match(route, /latestProfileQuery\.abortSignal\(signal\)/);
+  assert.match(route, /requestId: payload\.requestId/);
+  assert.match(route, /fusion\.provenance\?\.status !== "verified"[\s\S]*?No answer was delivered/i);
+  assert.match(route, /provenance: fusion\.provenance/);
 });
 
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {
