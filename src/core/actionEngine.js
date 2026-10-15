@@ -3,6 +3,7 @@ import { authorizeExecution } from "./permissionManager.js";
 import { evaluateApprovalPolicy } from "./trustKernelPolicy.js";
 import { publish } from "./eventBus.js";
 import { subscribeAccountScope } from "./accountScope.js";
+import { authorizeWithTrustKernel } from "./trustKernelPolicy.js";
 import supabaseClient from "../lib/supabase.js";
 
 const actions = new Map();
@@ -230,6 +231,58 @@ async function verifyActionMandate(action, options) {
   }
 }
 
+async function authorizeActionMandate(action, options) {
+  const trustKernel = options.trustKernel;
+  if (!trustKernel || typeof trustKernel !== "object") return verifyActionMandate(action, options);
+  try {
+    const accountId = authenticatedAccountId(options.user);
+    const actionName = options.authorizationAction || action.tool || action.permission;
+    const resource = options.resource || action.permission;
+    const idempotencyKey = options.idempotencyKey || action.id;
+    const suppliedContext = trustKernel.mandateContext || {};
+    const context = {
+      ...suppliedContext,
+      accountId,
+      action: actionName,
+      resource,
+      idempotencyKey,
+    };
+    const decision = await authorizeWithTrustKernel({
+      authorization: {
+        user: options.user,
+        capability: action.tool || action.permission,
+        permission: action.permission,
+        riskLevel: action.riskLevel,
+        requiresConfirmation: true,
+        confirmed: options.confirmed === true,
+      },
+      input: {
+        actorId: accountId,
+        action: actionName,
+        resource,
+        risk: action.riskLevel,
+        offline: options.offline === true,
+        authStrength: options.authStrength,
+      },
+      policy: trustKernel.policy || options.policy,
+      policyOptions: trustKernel.policyOptions,
+      mandate: options.mandate,
+      mandateContext: context,
+      mandateOptions: trustKernel.mandateOptions,
+    });
+    if (!decision.authorized) return { authorized: false, reason: decision.reason, trustKernel: decision };
+    return {
+      authorized: true,
+      mandateId: decision.mandateDecision?.mandateId,
+      remainingUses: decision.mandateDecision?.remainingUses,
+      policyDecision: decision.policyDecision,
+      trustKernel: decision,
+    };
+  } catch {
+    return { authorized: false, reason: "Trust Kernel authorization failed closed." };
+  }
+}
+
 export function approveAction(actionId) {
   const action = getAction(actionId);
   if (!action || action.status !== "queued") return null;
@@ -339,7 +392,7 @@ export async function executeAction(actionId, handler, options = {}) {
   if (action.status !== "queued" && action.status !== "approved") {
     return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
   }
-  const mandate = await verifyActionMandate(strictAction, strictOptions);
+  const mandate = await authorizeActionMandate(strictAction, strictOptions);
   if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   if (!mandate.authorized) return { success: false, error: mandate.reason, action, mandate };
   // Mandate verification is asynchronous; reserve the action only after it
@@ -624,7 +677,7 @@ export async function undoAction(actionId, handler, options = {}) {
       return releaseReservation(typeof boundTarget.snapshot?.reason === "string" ? boundTarget.snapshot.reason.slice(0, 300) : "The exact computer undo target could not be independently bound.");
     }
   }
-  const mandate = await verifyActionMandate(strictAction, strictOptions);
+  const mandate = await authorizeActionMandate(strictAction, strictOptions);
   if (!mandate.authorized) {
     return { ...releaseReservation(mandate.reason), mandate };
   }
@@ -751,4 +804,4 @@ export async function undoAction(actionId, handler, options = {}) {
   }
 }
 
-export default { createAction, listActions, getAction, approveAction, executeAction, undoAction, clearActions };
+export default { createAction, listActions, getAction, approveAction, executeAction, undoAction, invalidateActionPreviews, clearActions };

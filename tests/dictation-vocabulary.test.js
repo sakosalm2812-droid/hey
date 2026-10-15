@@ -29,6 +29,8 @@ test("vocabulary is bounded, locale-conflict checked, and independent from repla
   });
   assert.deepEqual(preferences.vocabulary, ["OpenAI", "Codex Desktop"]);
   assert.equal(applyDictationPreferences("hey orbit and my signature, signature nearby", preferences), "HEY Orbit and Cheers, signature nearby");
+  const longSnippet = "S".repeat(2000);
+  assert.equal(applyDictationPreferences("sign here", { language: "en-US", snippets: [{ name: "sign here", text: longSnippet }] }), longSnippet);
   assert.equal(applyDictationCorrections("İSTANBUL", [{ from: "istanbul", to: "Istanbul" }], "tr-TR"), "Istanbul");
   assert.equal(applyDictationCorrections("STRASSE", [{ from: "Straße", to: "Street" }], "de-DE"), "Street");
   assert.throws(() => normalizeDictationPreferences({ vocabulary: Array.from({ length: 33 }, (_, index) => `term ${index}`) }), /bounded/);
@@ -128,6 +130,61 @@ test("browser provider passes contextual phrases only when its phrase constructo
   const withoutHintSupport = createBrowserSpeechProvider({ SpeechRecognition: Recognition });
   const second = withoutHintSupport.start({ vocabulary: ["Codex Desktop"] });
   assert.equal(Object.hasOwn(second, "phrases"), false);
+  assert.equal(createBrowserSpeechProvider({ SpeechRecognition: {} }), null);
+  assert.ok(createBrowserSpeechProvider({ webkitSpeechRecognition: Recognition }));
+});
+
+test("native browser provider lifecycle requires consent, applies long saved snippet text, and cancels late results", async () => {
+  const recognitions = [];
+  const permissionOptions = [];
+  const stoppedTracks = [];
+  const metrics = [];
+  class BrowserRecognition {
+    constructor() { recognitions.push(this); }
+    start() { this.started = true; }
+    stop() { this.stopped = true; this.onend?.(); }
+  }
+  const environment = {
+    SpeechRecognition: BrowserRecognition,
+    navigator: {
+      onLine: true,
+      mediaDevices: {
+        async getUserMedia(options) {
+          permissionOptions.push(options);
+          return { getTracks: () => [{ stop() { stoppedTracks.push(true); } }] };
+        },
+      },
+    },
+  };
+  const expandedSnippet = "Regards,\n" + "A".repeat(1800);
+  const transcripts = [];
+  const session = createDictationSession({
+    environment,
+    language: "en-GB",
+    corrections: [{ from: "my signature", to: expandedSnippet }],
+    onTranscript: (value) => transcripts.push(value),
+    onMetrics: (value) => metrics.push(value),
+  });
+
+  assert.equal((await session.start()).status, "consent_required");
+  assert.equal(permissionOptions.length, 0);
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  assert.deepEqual(permissionOptions, [{ audio: true }]);
+  assert.deepEqual(stoppedTracks, [true]);
+  const recognition = recognitions[0];
+  assert.equal(recognition.lang, "en-GB");
+  assert.equal(recognition.interimResults, false);
+  assert.equal(recognition.started, true);
+  recognition.onresult({ results: [[{ transcript: "use my signature" }]] });
+  assert.deepEqual(transcripts, [`use ${expandedSnippet}`]);
+
+  session.stop();
+  recognition.onresult({ results: [[{ transcript: "late private text" }]] });
+  assert.equal(recognition.stopped, true);
+  assert.deepEqual(transcripts, [`use ${expandedSnippet}`]);
+  assert.equal(metrics[0].provider, "browser");
+  assert.equal(metrics[0].status, "stopped");
+  session.destroy();
 });
 
 test("hostile and corrupt vocabulary cannot run getters or overwrite saved settings", () => {

@@ -76,8 +76,13 @@ class ArtifactEngine {
     this.initializeVersionGraph(artifact.id);
 
     try {
-      await this.persistArtifact(artifact);
+      await this.persistArtifact(artifact, { confirmWrite: params.requirePersistence === true });
     } catch (err) {
+      if (params.requirePersistence === true) {
+        this.artifacts.delete(artifact.id);
+        this.versionGraphs.delete(artifact.id);
+        throw new Error("Forge did not confirm durable artifact persistence", { cause: err });
+      }
       console.warn('Failed to persist artifact:', err);
     }
 
@@ -685,8 +690,8 @@ class ArtifactEngine {
     };
   }
 
-  async persistArtifact(artifact) {
-    await supabaseClient
+  async persistArtifact(artifact, { confirmWrite = false } = {}) {
+    let query = supabaseClient
       .from('hey_artifacts')
       .upsert({
         id: artifact.id,
@@ -707,6 +712,16 @@ class ArtifactEngine {
       }, {
         onConflict: 'id',
       });
+    if (confirmWrite) query = query.select('id, project_id, metadata').single();
+    const { data, error } = await query;
+    if (error) throw error;
+    if (confirmWrite && (data?.id !== artifact.id
+      || data?.project_id !== artifact.projectId
+      || data?.metadata?.accountScope !== artifact.metadata?.accountScope
+      || data?.metadata?.classId !== artifact.metadata?.classId)) {
+      throw new Error("Forge persistence confirmation did not match the artifact account boundary");
+    }
+    return data;
   }
 
   async persistVersion(artifactId, version, previous = null) {
