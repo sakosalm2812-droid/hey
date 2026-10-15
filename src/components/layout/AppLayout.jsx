@@ -32,6 +32,7 @@ import {
   BookOpen,
   Target,
   SlidersHorizontal,
+  Wrench,
 } from "lucide-react";
 import { useEffect, useRef, useState, useCallback } from "react";
 
@@ -49,6 +50,7 @@ const sidebarNavItems = [
   { label: "Voice Live", path: "/voice/live", icon: Mic2, roles: ['user', 'admin'] },
   { label: "Cosmos", path: "/cosmos", icon: Globe2, roles: ['user', 'admin'] },
   { label: "Forge", path: "/forge", icon: Hammer, roles: ['user', 'admin'] },
+  { label: "Tools", path: "/tools", icon: Wrench, roles: ['user', 'admin'] },
   { label: "Memory", path: "/memory", icon: Brain, roles: ['user', 'admin'] },
   { label: "Tasks", path: "/tasks", icon: CheckSquare, roles: ['user', 'admin'] },
   { label: "Calendar", path: "/calendar", icon: CalendarDays, roles: ['user', 'admin'] },
