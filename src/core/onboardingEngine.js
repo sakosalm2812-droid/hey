@@ -421,9 +421,9 @@ export class OnboardingEngine {
       }
     }
     return STARTER_SUGGESTIONS
-      .map((suggestion, originalIndex) => ({ ...suggestion, score: scores.get(suggestion.id), originalIndex }))
-      .sort((a, b) => b.score - a.score || a.originalIndex - b.originalIndex)
-      .map(({ originalIndex, ...suggestion }) => suggestion);
+      .map((suggestion, index) => ({ suggestion, score: scores.get(suggestion.id), index }))
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map(({ suggestion, score }) => ({ ...suggestion, score }));
   }
 
   selectPracticeTask(taskId) {
