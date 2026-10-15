@@ -11,7 +11,7 @@ import {
 import { parseNaturalCommand } from "../src/core/commandParser.js";
 import { createNativeAdapter } from "../src/core/osAdapter.js";
 import { createTauriAdapter, isTauriRuntime } from "../src/lib/tauriAdapter.js";
-import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice, registerDeviceAdapter, unregisterDeviceAdapter, unregisterDevice } from "../src/core/deviceGateway.js";
+import { getDevice, getDeviceCapabilities, executeOnDevice, registerDevice, registerDeviceAdapter, unregisterDeviceAdapter, unregisterDevice, revokeDevice } from "../src/core/deviceGateway.js";
 import { VOICE_STATES, createVoiceState } from "../src/core/voiceState.js";
 import { executeRequest } from "../src/core/executionController.js";
 import { subscribe, clearEventListeners } from "../src/core/eventBus.js";
@@ -163,7 +163,7 @@ test("device registry exposes capabilities without allowing fake remote executio
   assert.equal(getDevice(deviceId).deviceType, "phone");
   assert.deepEqual(getDeviceCapabilities(deviceId), ["computer.camera"]);
   const result = await executeOnDevice(deviceId, "computer.camera");
-  assert.equal(result.status, "unavailable");
+  assert.equal(result.status, "permission_denied");
   assert.equal(result.verified, false);
 });
 
@@ -177,12 +177,13 @@ test("device execution requires an explicit device and matching adapter capabili
     execute: async (request) => { executions.push(request); return { success: true, verified: true, value: "ok" }; },
   });
   declaredCapabilities.push("test.edge.other");
-  registerDevice({ id: "edge-empty-grant", platform: "android", status: "online", trusted: true, transport: "local", capabilities: [] });
-  registerDevice({ id: "edge-adapter-denied", platform: "android", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.other"] });
-  registerDevice({ id: "edge-approved", platform: "android", status: "online", trusted: true, transport: "local", capabilities: [action], metadata: { label: "original" } });
+  const account = { id: "edge-account" };
+  registerDevice({ id: "edge-empty-grant", platform: "android", status: "online", trusted: true, transport: "local", capabilities: [] }, { user: account });
+  registerDevice({ id: "edge-adapter-denied", platform: "android", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.other"] }, { user: account });
+  registerDevice({ id: "edge-approved", platform: "android", status: "online", trusted: true, transport: "local", capabilities: [action], metadata: { label: "original" } }, { user: account });
 
-  const noDeviceGrant = await executeOnDevice("edge-empty-grant", action);
-  const noAdapterGrant = await executeOnDevice("edge-adapter-denied", "test.edge.other");
+  const noDeviceGrant = await executeOnDevice("edge-empty-grant", action, {}, { user: { id: "edge-account" } });
+  const noAdapterGrant = await executeOnDevice("edge-adapter-denied", "test.edge.other", {}, { user: { id: "edge-account" } });
   assert.equal(noDeviceGrant.status, "unsupported");
   assert.equal(noAdapterGrant.status, "unsupported");
   assert.equal(executions.length, 0);
@@ -210,7 +211,8 @@ test("device execution requires an explicit device and matching adapter capabili
   assert.equal(executions.length, 1);
   assert.equal(executions[0].device.metadata.label, "original");
   unregisterDeviceAdapter("android");
-  for (const id of ["edge-empty-grant", "edge-adapter-denied", "edge-approved", "edge-copied-input"]) unregisterDevice(id);
+  for (const id of ["edge-empty-grant", "edge-adapter-denied", "edge-approved"]) unregisterDevice(id, { id: "edge-account" });
+  unregisterDevice("edge-copied-input");
 });
 
 test("device execution rejects platform mismatches and adapters without verified postconditions", async () => {
@@ -220,9 +222,9 @@ test("device execution rejects platform mismatches and adapters without verified
     capabilities: ["test.edge.unverified"],
     execute: async () => { executions += 1; return { success: true, verified: false }; },
   });
-  registerDevice({ id: "edge-platform-mismatch", platform: "android", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.unverified"] });
-  registerDevice({ id: "edge-unverified", platform: "ios", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.unverified"] });
   const user = { id: "edge-account", plan: "pro", permissions: ["device.control"] };
+  registerDevice({ id: "edge-platform-mismatch", platform: "android", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.unverified"] }, { user });
+  registerDevice({ id: "edge-unverified", platform: "ios", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.unverified"] }, { user });
 
   const mismatch = await executeOnDevice("edge-platform-mismatch", "test.edge.unverified", {}, { permission: "device.control", riskLevel: "low", confirmed: true, user });
   const unverified = await executeOnDevice("edge-unverified", "test.edge.unverified", {}, { permission: "device.control", riskLevel: "low", confirmed: true, user });
@@ -232,8 +234,8 @@ test("device execution rejects platform mismatches and adapters without verified
   assert.equal(unverified.verified, false);
   assert.equal(executions, 1);
   unregisterDeviceAdapter("ios");
-  unregisterDevice("edge-platform-mismatch");
-  unregisterDevice("edge-unverified");
+  unregisterDevice("edge-platform-mismatch", user);
+  unregisterDevice("edge-unverified", user);
 });
 
 test("device gateway rejects accessor-backed input before evaluating getters", async () => {
@@ -243,7 +245,7 @@ test("device gateway rejects accessor-backed input before evaluating getters", a
     capabilities: ["test.edge.input"],
     execute: async () => ({ success: true, verified: true }),
   });
-  registerDevice({ id: "edge-input-guard", platform: "linux", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.input"] });
+  registerDevice({ id: "edge-input-guard", platform: "linux", status: "online", trusted: true, transport: "local", capabilities: ["test.edge.input"] }, { user: { id: "edge-account" } });
   const input = Object.defineProperty({}, "command", { enumerable: true, get() { getterCalls += 1; return "unauthorized"; } });
 
   assert.throws(() => registerDevice({ id: "edge-metadata-guard", platform: "linux", metadata: input }), /accessors/i);
@@ -256,7 +258,44 @@ test("device gateway rejects accessor-backed input before evaluating getters", a
   assert.equal(result.status, "invalid_input");
   assert.equal(getterCalls, 0);
   unregisterDeviceAdapter("linux");
-  unregisterDevice("edge-input-guard");
+  unregisterDevice("edge-input-guard", { id: "edge-account" });
+});
+
+test("device execution and revocation are bound to the registering account", async () => {
+  const action = "test.edge.account-bound";
+  let executions = 0;
+  const owner = { id: "edge-owner", plan: "pro", permissions: ["device.control"] };
+  registerDeviceAdapter("windows", {
+    platform: "windows",
+    capabilities: [action],
+    execute: async () => { executions += 1; return { success: true, verified: true }; },
+  });
+  registerDevice({ id: "edge-owned-device", accountId: "forged-account", platform: "windows", status: "online", trusted: true, transport: "local", capabilities: [action] }, { user: owner });
+  assert.equal(getDevice("edge-owned-device").accountId, owner.id);
+  assert.throws(() => registerDevice({ id: "edge-owned-device", platform: "windows", capabilities: [action] }, { user: { id: "other-account" } }), /already registered/i);
+
+  const crossAccount = await executeOnDevice("edge-owned-device", action, {}, {
+    permission: "device.control",
+    riskLevel: "low",
+    confirmed: true,
+    user: { id: "other-account", plan: "pro", permissions: ["device.control"] },
+  });
+  assert.equal(crossAccount.status, "permission_denied");
+  assert.equal(revokeDevice("edge-owned-device", { id: "other-account" }).success, false);
+  assert.equal(unregisterDevice("edge-owned-device", { id: "other-account" }), false);
+  assert.equal(getDevice("edge-owned-device").status, "online");
+  assert.equal(executions, 0);
+
+  const revoked = revokeDevice("edge-owned-device", owner);
+  assert.equal(revoked.success, true);
+  assert.equal(revoked.status, "revoked");
+  assert.equal(revoked.device.trusted, false);
+  const afterRevoke = await executeOnDevice("edge-owned-device", action, {}, { user: owner });
+  assert.equal(afterRevoke.status, "unavailable");
+  assert.equal(executions, 0);
+
+  unregisterDeviceAdapter("windows");
+  unregisterDevice("edge-owned-device", owner);
 });
 
 test("voice state rejects impossible transitions and preserves real states", () => {

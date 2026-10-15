@@ -97,18 +97,23 @@ export function unregisterDeviceAdapter(platform) {
   return adapters.delete(platform);
 }
 
-export function registerDevice(device) {
+export function registerDevice(device, options = {}) {
   device = clonePlainData(device, "Device registration");
   if (!device?.id || !device.platform) throw new TypeError("A device id and platform are required.");
   if (!DEVICE_PLATFORMS.includes(device.platform)) throw new TypeError(`Unsupported device platform: ${device.platform}`);
   const id = String(device.id).trim();
   if (!id) throw new TypeError("A device id is required.");
+  if (devices.has(id)) throw new Error(`Device is already registered: ${id}`);
   const status = device.status || "offline";
   const transport = device.transport || "remote";
+  const registrationUser = options?.user;
+  const ownerId = registrationUser?.id || registrationUser?.userId || registrationUser?.accountId;
   if (!DEVICE_STATUSES.includes(status)) throw new TypeError(`Unsupported device status: ${status}`);
   if (!DEVICE_TRANSPORTS.includes(transport)) throw new TypeError(`Unsupported device transport: ${transport}`);
   const registered = {
     id,
+    // Ownership comes from the authenticated registration context, never device payload fields.
+    accountId: typeof ownerId === "string" && ownerId.trim() ? ownerId.trim() : null,
     name: String(device.name || id),
     platform: device.platform,
     osVersion: device.osVersion || null,
@@ -127,10 +132,37 @@ export function registerDevice(device) {
   return copyDevice(registered);
 }
 
-export function unregisterDevice(deviceId) {
+export function unregisterDevice(deviceId, user = null) {
+  const device = devices.get(deviceId);
+  if (!device) return false;
+  const accountId = user?.id || user?.userId || user?.accountId;
+  if (device.accountId && (!accountId || device.accountId !== String(accountId).trim())) return false;
   const removed = devices.delete(deviceId);
   if (removed) recordAudit({ action: "device.unregistered", status: "completed", metadata: { deviceId } });
   return removed;
+}
+
+// Account reset is an internal lifecycle boundary, separate from user-facing removal.
+export function clearDeviceRegistry() {
+  const count = devices.size;
+  devices.clear();
+  return count;
+}
+
+/** Revoke a device only when the authenticated account owns its registration. */
+export function revokeDevice(deviceId, user) {
+  const device = devices.get(deviceId);
+  const accountId = user?.id || user?.userId || user?.accountId;
+  if (!device || !accountId || !device.accountId || device.accountId !== String(accountId).trim()) {
+    return { success: false, status: "denied", error: "Only the authenticated owning account can revoke this device." };
+  }
+  if (device.status === "revoked") return { success: true, status: "revoked", device: copyDevice(device) };
+
+  device.status = "revoked";
+  device.trusted = false;
+  device.revokedAt = new Date().toISOString();
+  recordAudit({ action: "device.revoked", status: "completed", metadata: { deviceId, accountId: device.accountId } });
+  return { success: true, status: "revoked", device: copyDevice(device) };
 }
 
 export function listDevices() {
@@ -159,6 +191,10 @@ export async function executeOnDevice(deviceId, action, input = {}, options = {}
   }
   const device = devices.get(deviceId);
   if (!device) return { success: false, error: "Device is not registered." };
+  const accountId = options.user?.id || options.user?.userId || options.user?.accountId;
+  if (!device.accountId || !accountId || device.accountId !== String(accountId).trim()) {
+    return { success: false, verified: false, status: "permission_denied", error: "Device execution requires the authenticated owning account." };
+  }
   if (device.status !== "online") return { success: false, verified: false, status: "unavailable", error: `Device ${device.name} is ${device.status}.` };
   if (!device.trusted) return { success: false, verified: false, status: "permission_required", error: `Device ${device.name} is not trusted.` };
   if (device.transport !== "local") return { success: false, verified: false, status: "unavailable", error: "Remote device transport is not configured." };
@@ -197,4 +233,4 @@ export async function executeOnDevice(deviceId, action, input = {}, options = {}
   return { ...authorizationResult.result, authorization: authorizationResult.authorization, request: authorizationResult.request };
 }
 
-export default { registerDeviceAdapter, unregisterDeviceAdapter, registerDevice, unregisterDevice, listDevices, getDevice, getDeviceCapabilities, listDeviceAdapters, executeOnDevice };
+export default { registerDeviceAdapter, unregisterDeviceAdapter, registerDevice, unregisterDevice, revokeDevice, listDevices, getDevice, getDeviceCapabilities, listDeviceAdapters, executeOnDevice };

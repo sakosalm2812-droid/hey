@@ -6,7 +6,7 @@ import { clearSuggestionHistory } from "./proactiveEngine.js";
 import { clearActions } from "./actionEngine.js";
 import { clearTasks } from "./taskEngine.js";
 import { clearSkills } from "./skillEngine.js";
-import { listDevices, unregisterDevice } from "./deviceGateway.js";
+import { clearDeviceRegistry } from "./deviceGateway.js";
 
 export function resetAccountState() {
   const workflow = getContext().workflow.activeWorkflow;
@@ -23,6 +23,6 @@ export function resetAccountState() {
   clearAuditEntries();
   clearPermissions();
   clearSuggestionHistory();
-  for (const device of listDevices()) unregisterDevice(device.id);
+  clearDeviceRegistry();
   resetContext();
 }

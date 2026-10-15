@@ -154,7 +154,7 @@ import { validateForgeArtifact, createForgePreview } from "./forgeEngine.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
 import { getDeviceId, getDeviceName, renameDevice, startFabric, listPeers, requestHandoff, getHandoffBundle, clearHandoffBundle, acceptHandoff, producePairCode, registerPairCode, getPairCode } from "./deviceFabric.js";
-import { registerDeviceAdapter, unregisterDeviceAdapter, registerDevice, unregisterDevice, listDevices, getDevice, getDeviceCapabilities, listDeviceAdapters, executeOnDevice } from "./deviceGateway.js";
+import { registerDeviceAdapter, unregisterDeviceAdapter, registerDevice, unregisterDevice, revokeDevice, listDevices, getDevice, getDeviceCapabilities, listDeviceAdapters, executeOnDevice } from "./deviceGateway.js";
 
 import {
   createArtifact,
@@ -558,6 +558,7 @@ import {
       unregisterAdapter: unregisterDeviceAdapter,
       register: registerDevice,
       unregister: unregisterDevice,
+      revoke: revokeDevice,
       all: listDevices,
       get: getDevice,
       capabilities: getDeviceCapabilities,
