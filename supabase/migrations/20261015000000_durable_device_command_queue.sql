@@ -1,5 +1,8 @@
--- Durable command transport. This stores bounded, already-authorized command
--- envelopes for an enrolled device; it does not deliver or execute commands.
+-- Durable command transport only. The trusted server endpoint must authenticate
+-- the account, verify the applicable mandate, and authorize the target device
+-- before it calls these service-role-only RPCs. This queue does not verify
+-- mandates, deliver commands, or execute them.
+-- A single device row lock serializes enqueue and caps pending commands at 100.
 create unique index if not exists hey_devices_id_user_uidx on public.hey_devices(id, user_id);
 
 create table if not exists public.hey_device_commands (
@@ -47,10 +50,12 @@ set search_path = public, auth, pg_temp
 as $$
 declare
   v_command public.hey_device_commands%rowtype;
+  v_device public.hey_devices%rowtype;
+  v_pending_count bigint;
   v_created boolean := false;
 begin
-  if auth.uid() is distinct from p_account_id and coalesce(auth.role(), '') <> 'service_role' then
-    raise exception 'Device command account is not authorized.' using errcode = '42501';
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Trusted device command service required.' using errcode = '42501';
   end if;
   if p_account_id is null or p_device_id is null
     or p_idempotency_key is null or length(trim(p_idempotency_key)) not between 1 and 256
@@ -68,22 +73,35 @@ begin
     or octet_length(p_envelope::text) > 65536 then
     raise exception 'Invalid device command.' using errcode = '22023';
   end if;
-  if not exists (select 1 from public.hey_devices d where d.id = p_device_id and d.user_id = p_account_id and d.status <> 'revoked') then
+  select * into v_device from public.hey_devices d
+    where d.id = p_device_id and d.user_id = p_account_id and d.status <> 'revoked'
+    for update;
+  if not found then
     raise exception 'Device command unavailable.' using errcode = '42501';
+  end if;
+  select * into v_command from public.hey_device_commands
+    where account_id = p_account_id and device_id = p_device_id and idempotency_key = trim(p_idempotency_key)
+    for update;
+  if found then
+    if v_command.envelope is distinct from p_envelope then
+      raise exception 'Device command idempotency conflict.' using errcode = '23505';
+    end if;
+    return jsonb_build_object('created', false, 'command', jsonb_build_object(
+      'commandId', v_command.id, 'deviceId', v_command.device_id, 'envelope', v_command.envelope,
+      'state', v_command.state, 'attempts', v_command.attempts, 'createdAt', v_command.created_at,
+      'lastError', v_command.last_error
+    ));
+  end if;
+  select count(*) into v_pending_count from public.hey_device_commands
+    where account_id = p_account_id and device_id = p_device_id and state = 'pending';
+  if v_pending_count >= 100 then
+    raise exception 'Device command queue is full.' using errcode = '54000';
   end if;
   insert into public.hey_device_commands(account_id, device_id, idempotency_key, envelope)
     values (p_account_id, p_device_id, trim(p_idempotency_key), p_envelope)
-    on conflict (account_id, device_id, idempotency_key) do nothing
     returning * into v_command;
   if found then
     v_created := true;
-  else
-    select * into v_command from public.hey_device_commands
-      where account_id = p_account_id and device_id = p_device_id and idempotency_key = trim(p_idempotency_key)
-      for update;
-    if not found or v_command.envelope is distinct from p_envelope then
-      raise exception 'Device command idempotency conflict.' using errcode = '23505';
-    end if;
   end if;
   return jsonb_build_object('created', v_created, 'command', jsonb_build_object(
     'commandId', v_command.id, 'deviceId', v_command.device_id, 'envelope', v_command.envelope,
@@ -101,8 +119,8 @@ as $$
 declare
   v_command public.hey_device_commands%rowtype;
 begin
-  if auth.uid() is distinct from p_account_id and coalesce(auth.role(), '') <> 'service_role' then
-    raise exception 'Device command account is not authorized.' using errcode = '42501';
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Trusted device command service required.' using errcode = '42501';
   end if;
   if p_account_id is null or p_device_id is null or p_lease_ms is null or p_lease_ms not between 1 and 300000 then
     raise exception 'Invalid device command lease.' using errcode = '22023';
@@ -133,8 +151,8 @@ language plpgsql security definer
 set search_path = public, auth, pg_temp
 as $$
 begin
-  if auth.uid() is distinct from p_account_id and coalesce(auth.role(), '') <> 'service_role' then
-    raise exception 'Device command account is not authorized.' using errcode = '42501';
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Trusted device command service required.' using errcode = '42501';
   end if;
   if p_account_id is null or p_device_id is null or p_command_id is null or p_lease_token is null then
     raise exception 'Invalid device command acknowledgement.' using errcode = '22023';
@@ -168,10 +186,10 @@ create trigger hey_devices_cancel_commands_on_revoke
   after update of status on public.hey_devices
   for each row execute function public.cancel_hey_device_commands_on_revoke();
 
-revoke all on function public.enqueue_hey_device_command(uuid, uuid, text, jsonb) from public, anon;
-revoke all on function public.claim_hey_device_command(uuid, uuid, integer) from public, anon;
-revoke all on function public.ack_hey_device_command(uuid, uuid, uuid, uuid) from public, anon;
+revoke all on function public.enqueue_hey_device_command(uuid, uuid, text, jsonb) from public, anon, authenticated;
+revoke all on function public.claim_hey_device_command(uuid, uuid, integer) from public, anon, authenticated;
+revoke all on function public.ack_hey_device_command(uuid, uuid, uuid, uuid) from public, anon, authenticated;
 revoke all on function public.cancel_hey_device_commands_on_revoke() from public, anon, authenticated, service_role;
-grant execute on function public.enqueue_hey_device_command(uuid, uuid, text, jsonb) to authenticated, service_role;
-grant execute on function public.claim_hey_device_command(uuid, uuid, integer) to authenticated, service_role;
-grant execute on function public.ack_hey_device_command(uuid, uuid, uuid, uuid) to authenticated, service_role;
+grant execute on function public.enqueue_hey_device_command(uuid, uuid, text, jsonb) to service_role;
+grant execute on function public.claim_hey_device_command(uuid, uuid, integer) to service_role;
+grant execute on function public.ack_hey_device_command(uuid, uuid, uuid, uuid) to service_role;

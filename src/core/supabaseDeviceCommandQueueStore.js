@@ -79,7 +79,7 @@ function commandFromRow(row) {
   return { commandId: row.commandId, deviceId: row.deviceId, envelope: normalizeEnvelope(row.envelope), state: row.state, attempts: row.attempts, createdAt: Date.parse(row.createdAt), ...(row.lastError ? { lastError: row.lastError } : {}) };
 }
 
-/** Trusted-server adapter for durable, account/device-scoped command transport. It queues envelopes only; it never executes them. */
+/** Trusted service-role adapter for durable command transport. The caller must already authenticate the account and verify authorization/mandates; this store only queues envelopes. */
 export class SupabaseDeviceCommandQueueStore {
   constructor(client, { trustedServer = false } = {}) {
     if (!client || typeof client.rpc !== "function") throw new TypeError("A configured Supabase client is required for device command storage.");
