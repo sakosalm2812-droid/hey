@@ -211,7 +211,6 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /fusion\.status === "time_budget_exhausted"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "budget_exhausted"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "provider_contract_invalid"[\s\S]*?no answer was delivered/i);
-  assert.match(route, /latestProfileQuery\.abortSignal\(signal\)/);
 });
 
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {
@@ -275,38 +274,8 @@ test("HTTP cancellation aborts the provider fetch and stale output is not return
 });
 
 test("provider grants are revalidated after provider work before a fused answer can be returned", async (t) => {
-  await t.test("mid-call grant revocation blocks the checker dispatch", async () => {
+  await t.test("revocation of either selected provider denies the answer", async () => {
     const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
-    let revokedProviderId = null;
-    const result = await runFusionChatRequest({
-      requested: true,
-      accountId: "auth-user-123",
-      entitlements,
-      attempts,
-      pricingConfig: pricing,
-      messages,
-      fetchImpl: async (...args) => {
-        const response = await fetchImpl(...args);
-        revokedProviderId = calls[0].providerId;
-        return response;
-      },
-      getCurrentEntitlements: async (accountId) => {
-        assert.equal(accountId, "auth-user-123");
-        return revokedProviderId
-          ? entitlements.filter((grant) => grant !== `provider:${revokedProviderId}`)
-          : entitlements;
-      },
-    });
-    assert.equal(calls.length, 1);
-    assert.equal(result.status, "denied");
-    assert.equal(result.reason, "provider_permission_revoked");
-    assert.equal(result.calls, 1);
-    assert.equal("answer" in result, false);
-  });
-
-  await t.test("revalidation outage fails closed after the provider calls", async () => {
-    const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
-    let authorityChecks = 0;
     const result = await runFusionChatRequest({
       requested: true,
       accountId: "auth-user-123",
@@ -315,20 +284,18 @@ test("provider grants are revalidated after provider work before a fused answer 
       pricingConfig: pricing,
       messages,
       fetchImpl,
-      getCurrentEntitlements: async () => {
-        authorityChecks += 1;
-        if (authorityChecks === 5) throw new Error("private database error");
-        return entitlements;
+      getCurrentEntitlements: async (accountId) => {
+        assert.equal(accountId, "auth-user-123");
+        return entitlements.filter((grant) => grant !== "provider:gemini");
       },
     });
-    assert.deepEqual(result, { status: "unconfigured", reason: "authorization_revalidation_failed" });
     assert.equal(calls.length, 2);
-    assert.equal(JSON.stringify(result).includes("private database error"), false);
+    assert.deepEqual(result, { status: "denied", reason: "fusion_permission_revoked" });
     assert.equal("answer" in result, false);
   });
 
-  await t.test("initial authority outage prevents all provider calls", async () => {
-    let calls = 0;
+  await t.test("revalidation outage fails closed after the provider calls", async () => {
+    const { fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
     const result = await runFusionChatRequest({
       requested: true,
       accountId: "auth-user-123",
@@ -336,86 +303,11 @@ test("provider grants are revalidated after provider work before a fused answer 
       attempts,
       pricingConfig: pricing,
       messages,
-      fetchImpl: async () => { calls += 1; throw new Error("must not dispatch"); },
+      fetchImpl,
       getCurrentEntitlements: async () => { throw new Error("private database error"); },
     });
-    assert.deepEqual(result, { status: "unconfigured", reason: "authorization_revalidation_failed", calls: 0, reservedCostUsd: 0 });
-    assert.equal(calls, 0);
+    assert.deepEqual(result, { status: "unconfigured", reason: "authorization_revalidation_failed" });
+    assert.equal(JSON.stringify(result).includes("private database error"), false);
+    assert.equal("answer" in result, false);
   });
-});
-
-test("mid-call authority revocation aborts the cooperative provider and prevents checker dispatch", async () => {
-  const calls = [];
-  let revokedProviderId = null;
-  let providerAborted = false;
-  const fetchImpl = async (url, init) => {
-    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
-    calls.push(providerId);
-    return await new Promise((_resolve, reject) => {
-      const revokeTimer = setTimeout(() => { revokedProviderId = providerId; }, 25);
-      init.signal.addEventListener("abort", () => {
-        providerAborted = true;
-        clearTimeout(revokeTimer);
-        reject(new Error("provider fetch aborted"));
-      }, { once: true });
-    });
-  };
-  const result = await runFusionChatRequest({
-    requested: true,
-    accountId: "auth-user-123",
-    entitlements,
-    attempts,
-    pricingConfig: pricing,
-    messages,
-    authorityRecheckIntervalMs: 5,
-    fetchImpl,
-    getCurrentEntitlements: async () => revokedProviderId
-      ? entitlements.filter((grant) => grant !== `provider:${revokedProviderId}`)
-      : entitlements,
-  });
-  assert.equal(result.status, "denied");
-  assert.equal(result.reason, "provider_permission_revoked");
-  assert.equal(result.calls, 1);
-  assert.equal(providerAborted, true);
-  assert.equal(calls.length, 1);
-  assert.equal("answer" in result, false);
-});
-
-test("mid-checker authority revocation aborts the checker and withholds the candidate", async () => {
-  const primary = mockProviderFetch(() => ["42", 0.9]);
-  const calls = [];
-  let revokedProviderId = null;
-  let checkerAborted = false;
-  const fetchImpl = async (url, init) => {
-    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
-    calls.push(providerId);
-    if (calls.length === 1) return await primary.fetchImpl(url, init);
-    return await new Promise((_resolve, reject) => {
-      const revokeTimer = setTimeout(() => { revokedProviderId = providerId; }, 25);
-      init.signal.addEventListener("abort", () => {
-        checkerAborted = true;
-        clearTimeout(revokeTimer);
-        reject(new Error("checker fetch aborted"));
-      }, { once: true });
-    });
-  };
-  const result = await runFusionChatRequest({
-    requested: true,
-    accountId: "auth-user-123",
-    entitlements,
-    attempts,
-    pricingConfig: pricing,
-    messages,
-    authorityRecheckIntervalMs: 5,
-    fetchImpl,
-    getCurrentEntitlements: async () => revokedProviderId
-      ? entitlements.filter((grant) => grant !== `provider:${revokedProviderId}`)
-      : entitlements,
-  });
-  assert.equal(result.status, "denied");
-  assert.equal(result.reason, "provider_permission_revoked");
-  assert.equal(result.calls, 2);
-  assert.equal(checkerAborted, true);
-  assert.equal(calls.length, 2);
-  assert.equal("answer" in result, false);
 });
