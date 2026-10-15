@@ -2,11 +2,11 @@
 
 Updated: 2026-10-15  
 Repository: `sakosalm2812-droid/hey`  
-Latest verified coordinator baseline: `357ddf1` on `codex/resume-emergency-2026-10-14`. New follow-up worktrees must start from this commit or a newer verified coordinator checkpoint; the worktree assignments below are historical first-wave assignments from `3fe674d`.
+Latest coordinator checkpoint: `9088733` on `codex/resume-emergency-2026-10-14`; full suite 293/293, scoped ESLint, build and diff check passed.
 
 ## Session setup and current access
 
-The local Codex task launcher currently exposes no saved local Git project for this repository, so it cannot create or configure standalone local Codex chats bound to HEY. No standalone chat IDs/settings are claimed. The first-wave specialist worktrees below preserve prior implementation and were based on `3fe674d`; their work is integrated in the coordinator branch. Latest verified coordinator baseline is `357ddf19096ea816a1b5aa847dd64087f3f75e0e`. Chat 01 localization/account isolation, Chat 10 indexed-selector comparison, and Chat 11 authenticated Edge Fusion are complete and integrated. New follow-up work must use separate branches/worktrees based on the latest verified coordinator commit, and the coordinator owns integration. See `HEY_EXECUTION_HANDOFF.md` for active worker references, test evidence, blockers, and next actions.
+The local Codex task launcher exposes no saved local Git project for this repository, so it could not create standalone Codex chats bound to HEY. No standalone chat IDs are claimed. All eleven approved specialist first slices were run as actual isolated local collaboration-agent worktrees, requested with GPT-6 Luna / High, reviewed and integrated through `9088733`. See the table below and `HEY_EXECUTION_HANDOFF.md` for worker task references, branches, commits and evidence. Any next-wave workers must begin from the latest verified coordinator commit and use separate worktrees.
 
 For standalone tasks when the local project becomes available, select **Local**, **GPT-6 Luna**, **High**, then open the exact worktree path below. Verify the branch and commit in the opened checkout before editing. The coordinator owns central integration and review.
 
@@ -31,21 +31,21 @@ All eleven worktrees start at commit `3fe674d09fc14d449726699583946f5e68149ac6`.
 
 ## Additional mission continuation workers
 
-These follow-up branches use the latest verified coordinator tree plus documentation checkpoint `eeffea1`; each was launched with GPT-6 Luna / High through collaboration agents. They are local and have not been pushed. They are not standalone Codex chat IDs.
+The follow-up assignments below began from their recorded historical checkpoints (`eeffea1` or `6b52d49`) and have all completed their initial isolated slices. Their code is integrated locally and has not been pushed. The task references are collaboration workers, not standalone Codex chat IDs.
 
 | Chat | Task reference | Branch | Local worktree | Starting SHA | Initial slice |
 |---:|---|---|---|---|---|
-| 01 | `/root/additional_01_frontend` | `codex/additional-01-frontend-director` | `work/hey-specialists/additional-01-frontend-director` | `eeffea1` | Explicit Fusion request control and honest denial/unconfigured states; ordinary chat stays default |
-| 02 | `/root/additional_02_spaces` | `codex/additional-02-spaces-onboarding` | `work/hey-specialists/additional-02-spaces-onboarding` | `eeffea1` | Account-safe natural-language Space preview/confirmation core contract |
-| 03 | Pending worker slot | `codex/additional-03-tool-library` | `work/hey-specialists/additional-03-tool-library` | `6b52d49` | Extend the canonical capability discovery/metadata lifecycle without creating another tool engine |
-| 04 | Pending worker slot | `codex/additional-04-edge-everywhere` | `work/hey-specialists/additional-04-edge-everywhere` | `6b52d49` | Continue only a permission-gated Edge device slice supported by an actual adapter contract |
-| 05 | Pending worker slot | `codex/additional-05-gesture-control` | `work/hey-specialists/additional-05-gesture-control` | `6b52d49` | Advance gesture lifecycle/authorization contracts; no detector availability claim |
-| 06 | Pending worker slot | `codex/additional-06-flow-dictation` | `work/hey-specialists/additional-06-flow-dictation` | `6b52d49` | Advance provider/privacy/correction capabilities through the existing dictation contract |
-| 07 | `/root/additional_07_voiceos` | `codex/additional-07-voiceos-control` | `work/hey-specialists/additional-07-voiceos-control` | `eeffea1` | VoiceOS intent classes and confirmation preview contract; no OS side effects |
-| 08 | Pending worker slot | `codex/additional-08-teacher-experience` | `work/hey-specialists/additional-08-teacher-experience` | `6b52d49` | Extend verified teacher artifact workflow with provenance/student-data boundaries |
-| 09 | Pending worker slot | `codex/additional-09-hey-one-models` | `work/hey-specialists/additional-09-hey-one-models` | `6b52d49` | Advance reproducible model/inference metadata; do not claim model training or hosted inference |
-| 10 | Pending worker slot | `codex/additional-10-ultrasparse-research` | `work/hey-specialists/additional-10-ultrasparse-research` | `6b52d49` | Continue measured sparse selection research using existing linear default as baseline |
-| 11 | Pending worker slot | `codex/additional-11-fusion-models` | `work/hey-specialists/additional-11-fusion-models` | `6b52d49` | Continue post-Edge Fusion review without changing shared frontend or duplicating provider routing |
+| 01 | `/root/additional_01_frontend` | `codex/additional-01-frontend-director` | `work/hey-specialists/additional-01-frontend-director` | `eeffea1` | Complete: Fusion per-request opt-in, permission/config failures and account-switch fencing; commit `40305ce`, integrated `d44697b`; 41 focused tests, lint, build passed |
+| 02 | `/root/additional_02_spaces` | `codex/additional-02-spaces-onboarding` | `work/hey-specialists/additional-02-spaces-onboarding` | `eeffea1` | Complete: safe account-scoped Space preview/confirmation; commit `977d998`, integrated `f20a6df`; 8 tests, lint passed; no UI/legacy Space wiring |
+| 03 | `/root/additional_03_tool_library` | `codex/additional-03-tool-library` | `work/hey-specialists/additional-03-tool-library` | `6b52d49` | Complete: canonical capability catalog; commit `ea68493`, integrated `330c17d`; 30 tests and scoped lint passed; frontend catalog remains |
+| 04 | `/root/additional_04_edge` | `codex/additional-04-edge-everywhere` | `work/hey-specialists/additional-04-edge-everywhere` | `6b52d49` | Complete: account-bound device execution/revocation/removal; worker `701964e`, integrated `a6fcbae`; 28 focused and 263 full worker tests passed; in-memory only |
+| 05 | `/root/additional_05_gesture` | `codex/additional-05-gesture-control` | `work/hey-specialists/additional-05-gesture-control` | `6b52d49` | Complete: permission-revoked gesture session lifecycle hardening; worker `5285976`, integrated `5300aaf`; 9 focused and 266 full worker tests passed; no production detector |
+| 06 | `/root/additional_06_flow` | `codex/additional-06-flow-dictation` | `work/hey-specialists/additional-06-flow-dictation` | `6b52d49` | Complete: in-memory bounded phrase corrections and stale-provider callback suppression; worker `393f78b`, integrated `3c0e1a6`; 14 tests passed; browser provider only |
+| 07 | `/root/additional_07_voiceos` | `codex/additional-07-voiceos-control` | `work/hey-specialists/additional-07-voiceos-control` | `eeffea1` | Complete: inert account-bound command previews; commits `795c753`, `2636e9c`, integrated `ce74f84`, `19b0d56`; 19 tests, lint passed; no OS effects |
+| 08 | `/root/additional_08_teacher` | `codex/additional-08-teacher-experience` | `work/hey-specialists/additional-08-teacher-experience` | `6b52d49` | Complete: SHA-256 lesson content verification; worker `5024990`, integrated `667e77f` plus coordinator TOCTOU snapshot fix `9088733`; 10 focused tests passed; no UI/signature claim |
+| 09 | `/root/additional_09_models` | `codex/additional-09-hey-one-models` | `work/hey-specialists/additional-09-hey-one-models` | `6b52d49` | Complete: pinned runtime/protocol/base revision serving-target validator; worker `b1268c7`, integrated `b3c8bba` and canonical API export `5164f3f`; 8 tests passed; no live inference |
+| 10 | `/root/additional_10_ultrasparse` | `codex/additional-10-ultrasparse-research` | `work/hey-specialists/additional-10-ultrasparse-research` | `6b52d49` | Complete: masked selector experiment with exact baseline parity; worker `18fab02`, integrated `f1525eb`; two reproducible CPU runs documented; linear remains default; no inference/GPU claims |
+| 11 | `/root/additional_11_fusion` | `codex/additional-11-fusion-models` | `work/hey-specialists/additional-11-fusion-models` | `6b52d49` | Complete: revalidate grants after inference and deny delivery on revocation; worker `6300f2e`, integrated `f243b7b`; 18 mock-provider tests passed; provider usage incurred before revocation check cannot be undone |
 
 ## Ready-to-paste startup prompts
 
