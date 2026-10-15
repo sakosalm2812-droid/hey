@@ -17,12 +17,12 @@ const adapter = {
   async execute() { return { success: true, verified: true }; },
 };
 
-function transportWith({ claims = [], ack = true, fail = true, reservation = { execute: true, alreadyVerified: false, ambiguous: false }, complete = true } = {}) {
+function transportWith({ claims = [], ack = true, fail = true, reservation = { execute: true, alreadyVerified: false, ambiguous: false }, complete = true, renewed = true } = {}) {
   const calls = [];
   return {
     calls,
     async claim(...args) { calls.push(["claim", ...args.slice(0, 2)]); return claims.shift() ?? null; },
-    async renew(...args) { calls.push(["renew", ...args.slice(0, 4)]); return true; },
+    async renew(...args) { calls.push(["renew", ...args.slice(0, 4)]); return renewed; },
     async beginExecution(...args) { calls.push(["begin", ...args]); return typeof reservation === "function" ? reservation() : reservation; },
     async completeExecution(...args) { calls.push(["complete", ...args]); return complete; },
     async acknowledge(...args) { calls.push(["ack", ...args]); return ack; },
@@ -184,6 +184,38 @@ test("worker rejects a stale or revoked lease before local execution", async () 
   assert.equal(transport.calls.some(([operation]) => operation === "ack" || operation === "fail"), false);
 });
 
+test("worker does not reach the adapter when the lease is lost after its execution reservation", async () => {
+  const transport = transportWith({ claims: [{ command, leaseToken }], renewed: false });
+  let executions = 0;
+  const worker = createDeviceCommandWorker({ deviceId, transport, adapter: { ...adapter, async execute() { executions += 1; return { success: true, verified: true }; } } });
+  await worker.runOnce();
+  assert.equal(executions, 0);
+  assert.equal(transport.calls.some(([operation]) => operation === "begin"), true);
+  assert.equal(transport.calls.some(([operation]) => operation === "ack"), false);
+  assert.equal(transport.calls.at(-1)[0], "fail");
+});
+
+test("concurrent workers cannot both reserve the same command for execution", async () => {
+  let reserved = false;
+  const transport = {
+    claims: [{ command, leaseToken }, { command, leaseToken }],
+    async claim() { return this.claims.shift() ?? null; },
+    async renew() { return true; },
+    async beginExecution() {
+      if (reserved) return { execute: false, alreadyVerified: false, ambiguous: true };
+      reserved = true;
+      return { execute: true, alreadyVerified: false, ambiguous: false };
+    },
+    async completeExecution() { return true; },
+    async acknowledge() { return true; },
+    async fail() { return true; },
+  };
+  let executions = 0;
+  const makeWorker = () => createDeviceCommandWorker({ deviceId, transport, adapter: { ...adapter, async execute() { executions += 1; await Promise.resolve(); return { success: true, verified: true }; } } });
+  await Promise.all([makeWorker().runOnce(), makeWorker().runOnce()]);
+  assert.equal(executions, 1);
+});
+
 test("worker refuses to acknowledge when the lease is revoked before verified completion", async () => {
   const transport = transportWith({ claims: [{ command, leaseToken }], complete: false });
   let executions = 0;
@@ -192,6 +224,21 @@ test("worker refuses to acknowledge when the lease is revoked before verified co
   assert.equal(executions, 1);
   assert.equal(transport.calls.some(([operation]) => operation === "ack"), false);
   assert.equal(transport.calls.filter(([operation]) => operation === "fail").length, 1);
+});
+
+test("worker stop raised at the final execution boundary prevents the local side effect", async () => {
+  const transport = transportWith({ claims: [{ command, leaseToken }] });
+  let executions = 0;
+  let worker;
+  worker = createDeviceCommandWorker({
+    deviceId,
+    transport,
+    onStatus({ state }) { if (state === "executing") void worker.stop(); },
+    adapter: { ...adapter, async execute() { executions += 1; return { success: true, verified: true }; } },
+  });
+  await worker.runOnce();
+  assert.equal(executions, 0);
+  assert.equal(transport.calls.some(([operation]) => operation === "fail"), true);
 });
 
 test("worker renews long-running leases before it sends the verified acknowledgement", async () => {

@@ -52,6 +52,7 @@ test("ack migration requires a live exact lease for first transition and denies 
 test("execution receipt migration prevents duplicate execution after restart and requires a verified result before ack", async () => {
   const sql = await readFile(new URL("../supabase/migrations/20261015000500_device_command_execution_receipts.sql", import.meta.url), "utf8");
   assert.match(sql, /execution_state text not null default 'not_started'/i);
+  assert.match(sql, /create or replace function public\.begin_hey_device_command_execution[\s\S]*select \* into v_command[\s\S]*for update[\s\S]*execution_state = 'executing'/i);
   assert.match(sql, /execution_state = 'executing',[\s\S]*execution_lease_token = p_lease_token/i);
   assert.match(sql, /if v_command\.execution_state = 'verified'[\s\S]*'alreadyVerified', true/i);
   assert.match(sql, /if v_command\.execution_state = 'executing'[\s\S]*'ambiguous', true/i);

@@ -220,6 +220,23 @@ export function createDeviceCommandWorker({
       status("execution_reservation_rejected");
       return;
     }
+    if (stopping) {
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
+    status("lease_preflight");
+    const preflightKey = makeIdempotencyKey();
+    if (typeof preflightKey !== "string" || !preflightKey.trim() || preflightKey.length > 128) {
+      status("lease_preflight_rejected");
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
+    const leaseReady = await transport.renew(deviceId, command.commandId, leaseToken, preflightKey, leaseMs);
+    if (!leaseReady || stopping) {
+      status("lease_preflight_rejected");
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
 
     let renewalInFlight = false;
     const timer = setInterval(async () => {
@@ -234,6 +251,11 @@ export function createDeviceCommandWorker({
     }, Math.max(500, Math.floor(leaseMs / 3)));
 
     status("executing");
+    if (stopping) {
+      clearInterval(timer);
+      try { await transport.fail(deviceId, command.commandId, leaseToken); } catch { /* The lease will expire safely. */ }
+      return;
+    }
     let execution;
     try {
       execution = await adapter.execute({ capability, input: command.envelope.input, action, commandId: command.commandId });
