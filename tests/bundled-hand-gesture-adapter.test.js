@@ -68,7 +68,7 @@ test("bundled adapter initializes local MediaPipe assets, emits hand detections,
   const imageData = { width: 640, height: 480, data: new Uint8ClampedArray(640 * 480 * 4) };
   const detection = await adapter.detect(imageData, {}, { signal: new AbortController().signal });
   assert.equal(detectedImage.width, 640);
-  assert.deepEqual(detection, { id: "G01", confidence: 0.98 });
+  assert.deepEqual(detection, { id: "G01", confidence: 0.98, handedness: "unknown" });
 
   adapter.stop("user_stop");
   await new Promise((resolve) => setTimeout(resolve, 0));

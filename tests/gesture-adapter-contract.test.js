@@ -199,7 +199,7 @@ test("profile edits and mappings cannot alter action authority or select device 
   assert.equal(engine.executeBinding(engine.bindings.get(safeBinding.id), { id: "G01", confidence: 1 }), false);
 
   const events = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => events.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => events.push(event));
   engine.recognitionState = GESTURE_STATES.ACTIVE;
   engine.activeProfileId = profile.id;
   engine.bindings.set("forged", {
@@ -217,14 +217,15 @@ test("profile edits and mappings cannot alter action authority or select device 
 });
 
 test("gesture calibration samples are bounded and caller-supplied scores never claim detector validation", () => {
-  const { engine } = makeEngine();
+  const { engine, profile } = makeEngine();
   const custom = engine.createCustomGesture({ name: "Open hand alias", gestureId: "G01", action: "summon", actionType: "ui" });
   const added = engine.addGestureSample(custom.id, [0, 0.25, -0.5, 1]);
   assert.equal(added.samples.length, 1);
   assert.match(engine.addGestureSample(custom.id, [0, 2]).error, /bounded vector/u);
   assert.throws(() => engine.addGestureSample(custom.id, [NaN]), /plain JSON/u);
   const result = engine.testCustomGesture(custom.id, { truePositives: 10_000, falsePositives: 0 });
-  assert.equal(result.status, "unavailable");
+  assert.equal(result.status, "samples_required");
+  assert.throws(() => engine.createBinding({ profileId: profile.id, gestureId: custom.id, action: "summon", actionType: "ui" }), /three real detector samples/u);
   assert.equal(engine.getCustomGesture(custom.id).tested, false);
   assert.throws(() => engine.createCustomGesture({ name: "Danger", gestureId: "G01", action: "device.execute", actionType: "device" }), /allowlisted/u);
 });
@@ -490,7 +491,7 @@ test("browser camera journey requires consent, rejects a stale paused frame, the
     stop() { detectorStops += 1; },
   });
   const actions = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => actions.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => actions.push(event));
 
   assert.equal((await engine.getRecognitionCapability()).recognitionStatus, "adapter_ready");
   assert.equal(cameraRequests, 0); // Capability inspection is read-only.
@@ -580,7 +581,7 @@ test("a detector that exceeds its frame deadline aborts the session and releases
   });
   engine.gestureCooldowns.set(`${profile.id}:G01`, Date.now());
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
 
   try {
     assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
@@ -611,7 +612,7 @@ test("gesture hold and cooldown suppress fleeting and repeated frames, then rese
   const activeProfile = { ...profile, holdMs: 200 };
   const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
   const originalNow = Date.now;
   let now = 1000;
   engine.recognitionState = GESTURE_STATES.ACTIVE;
@@ -648,6 +649,36 @@ test("gesture hold and cooldown suppress fleeting and repeated frames, then rese
   }
 });
 
+test("test mode reports a steady gesture but never requests its mapped action", () => {
+  const { engine, profile } = makeEngine();
+  const activeProfile = { ...profile, holdMs: 200 };
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.recognitionMode = "test";
+  engine.activeProfileId = profile.id;
+  const requests = [];
+  const detections = [];
+  const offRequest = subscribe("gesture.action_requested", (event) => requests.push(event));
+  const offDetection = subscribe("gesture.test_detection", (event) => detections.push(event));
+  const originalNow = Date.now;
+  let now = 1_000;
+  try {
+    Date.now = () => now;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1_100;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1_200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    assert.equal(detections.length, 1);
+    assert.equal(requests.length, 0);
+    assert.equal(engine.gestureCooldowns.size, 0);
+  } finally {
+    Date.now = originalNow;
+    offRequest(); offDetection();
+    engine.stopRecognition("test_cleanup");
+  }
+});
+
 test("low-confidence or interrupted frames reset the gesture hold before action", () => {
   const { engine, profile } = makeEngine();
   const activeProfile = { ...profile, holdMs: 200 };
@@ -655,7 +686,7 @@ test("low-confidence or interrupted frames reset the gesture hold before action"
   engine.recognitionState = GESTURE_STATES.ACTIVE;
   engine.activeProfileId = profile.id;
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
   const originalNow = Date.now;
   let now = 1000;
   Date.now = () => now;
@@ -717,7 +748,7 @@ test("a frame completing after pause and resume cannot trigger an action", async
   engine.setRecognitionAdapter({ detect() { detectStarted(); return pending; } });
   engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
 
   try {
     assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
@@ -777,12 +808,12 @@ test("gesture bindings cannot publish an action outside their active consented s
   const { engine, profile } = makeEngine();
   const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const events = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => events.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => events.push(event));
 
   engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
 
   unsubscribe();
-  clearEventListeners("gesture.action_executed");
+  clearEventListeners("gesture.action_requested");
   assert.equal(binding.enabled, true);
   assert.deepEqual(events, []);
 });

@@ -34,6 +34,7 @@ import {
   SlidersHorizontal,
   Wrench,
   Layers3,
+  Hand,
 } from "lucide-react";
 import { useEffect, useRef, useState, useCallback } from "react";
 
@@ -42,6 +43,7 @@ import { useInterfaceLevel } from "../../context/InterfaceLevelContext.jsx";
 import { buzz, confirmSound } from "../../lib/heyFeedback";
 import { springs } from "../../lib/heyMotion";
 import DynamicIsland from "./DynamicIsland";
+import GestureActionBridge from "./GestureActionBridge.jsx";
 import BlockBackground from "../BlockBackground";
 import { CommandPalette } from "../CommandPalette";
 import { getMobileNavigationAccessibility } from "./mobileNavigationState.js";
@@ -53,6 +55,7 @@ const sidebarNavItems = [
   { label: "Cosmos", path: "/cosmos", icon: Globe2, roles: ['user', 'admin'] },
   { label: "Forge", path: "/forge", icon: Hammer, roles: ['user', 'admin'] },
   { label: "Tools", path: "/tools", icon: Wrench, roles: ['user', 'admin'] },
+  { label: "Gesture Studio", path: "/gestures", icon: Hand, roles: ['user', 'admin'] },
   { label: "Spaces", path: "/spaces", icon: Layers3, roles: ['user', 'admin'] },
   { label: "Memory", path: "/memory", icon: Brain, roles: ['user', 'admin'] },
   { label: "Tasks", path: "/tasks", icon: CheckSquare, roles: ['user', 'admin'] },
@@ -177,6 +180,7 @@ export default function AppLayout() {
 
   return (
     <div className="hey-app-shell" data-interface-level={interfaceLevel}>
+      <GestureActionBridge />
       <BlockBackground />
       
       {/* SIDEBAR */}

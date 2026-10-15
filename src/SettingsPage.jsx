@@ -32,7 +32,7 @@ import {
   getTtsVoices,
   pickVoice,
 } from "./core/heyVoiceSettings.js";
-import GestureControls from "./components/settings/GestureControls.jsx";
+import { Link } from "react-router-dom";
 
 const aiSettings = [
   "Long-Term Memory",
@@ -342,7 +342,12 @@ export default function SettingsPage() {
             {interfaceError && <p className="hey-interface-level-error" role="alert">{interfaceError}</p>}
           </section>
 
-          <GestureControls />
+          <section className="hey-settings-card" aria-labelledby="gesture-studio-settings-title">
+            <div className="hey-settings-card-header">
+              <div><h2 id="gesture-studio-settings-title">Gesture Studio</h2><p>Manage gesture profiles, safe mappings, camera consent, and local test mode.</p></div>
+            </div>
+            <Link className="hey-btn-primary" to="/gestures">Open Gesture Studio</Link>
+          </section>
 
           <section className="hey-settings-card">
             <header className="hey-settings-card-header">

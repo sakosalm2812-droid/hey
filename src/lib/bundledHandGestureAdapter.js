@@ -15,13 +15,23 @@ function cosineAtJoint(base, joint, tip) {
   return first.reduce((sum, value, index) => sum + value * second[index], 0) / (firstLength * secondLength);
 }
 
-function classifyLandmarks(landmarks, handScore, previousGesture) {
+function normalizeLandmarks(landmarks) {
+  if (!Array.isArray(landmarks) || landmarks.length < 21) return null;
+  const wrist = landmarks[0];
+  const points = landmarks.slice(0, 21).map((point) => [point.x - wrist.x, point.y - wrist.y, (point.z || 0) - (wrist.z || 0)]);
+  const scale = Math.max(...points.map((point) => Math.hypot(...point)));
+  if (!Number.isFinite(scale) || scale < 1e-5) return null;
+  return points.flatMap((point) => point.map((value) => Math.max(-1, Math.min(1, value / scale))));
+}
+
+function classifyLandmarks(landmarks, handScore, previousGesture, sensitivity = 0.8) {
   if (!Array.isArray(landmarks) || landmarks.length < 21) return { gesture: null, previousGesture: null };
+  const extensionThreshold = 0.78 + (0.8 - sensitivity) * 0.1;
   const straightness = FINGER_JOINTS.map(({ base, joint, tip }) => {
     const cosine = cosineAtJoint(landmarks[base], landmarks[joint], landmarks[tip]);
     return Math.max(0, Math.min(1, (1 - cosine) / 2));
   });
-  const extended = straightness.map((value) => value >= 0.78);
+  const extended = straightness.map((value) => value >= extensionThreshold);
   let gestureId = null;
 
   if (extended.every(Boolean)) gestureId = "G01";
@@ -74,6 +84,7 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
   let previousGesture = null;
   let canvas = null;
   let canvasContext = null;
+  let latestObservation = null;
   const frameResults = new WeakMap();
 
   return {
@@ -119,7 +130,7 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
         if (loading === prepareTask) loading = null;
       }
     },
-    async detect(frame, _profile, { signal } = {}) {
+    async detect(frame, profile, { signal, customGestures = [] } = {}) {
       const detector = hands;
       if (!detector || signal?.aborted || !frame || !Number.isSafeInteger(frame.width) || !Number.isSafeInteger(frame.height)) return null;
       if (!canvas) canvas = globalThis.document?.createElement?.("canvas") || null;
@@ -135,12 +146,53 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
       const landmarks = result?.multiHandLandmarks?.[0];
       if (!landmarks) {
         previousGesture = null;
+        latestObservation = null;
         return null;
       }
       const score = result?.multiHandedness?.[0]?.score;
-      const classified = classifyLandmarks(landmarks, score, previousGesture);
+      const handLabel = String(result?.multiHandedness?.[0]?.label || "").toLowerCase();
+      const handedness = handLabel === "left" || handLabel === "right" ? handLabel : "unknown";
+      const preferredHand = profile?.handedness || profile?.dominantHand || "both";
+      if (preferredHand !== "both" && handedness !== "unknown" && preferredHand !== handedness) {
+        previousGesture = null;
+        latestObservation = null;
+        return null;
+      }
+      const pose = normalizeLandmarks(landmarks);
+      if (!pose) {
+        previousGesture = null;
+        latestObservation = null;
+        return null;
+      }
+      const classified = classifyLandmarks(landmarks, score, previousGesture, profile?.sensitivity ?? 0.8);
       previousGesture = classified.previousGesture;
-      return classified.gesture;
+      latestObservation = {
+        pose,
+        handedness,
+        handConfidence: Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0,
+        timestamp: Date.now(),
+      };
+
+      let detection = classified.gesture;
+      let closestCustom = null;
+      for (const custom of Array.isArray(customGestures) ? customGestures.slice(0, 32) : []) {
+        const templates = Array.isArray(custom?.templates) ? custom.templates : [];
+        if (templates.length < 3) continue;
+        for (const template of templates) {
+          if (template.handedness !== "unknown" && handedness !== "unknown" && template.handedness !== handedness) continue;
+          if (!Array.isArray(template.data) || template.data.length !== pose.length) continue;
+          const distance = pose.reduce((sum, value, index) => sum + Math.abs(value - template.data[index]), 0) / pose.length;
+          const confidence = Math.max(0, Math.min(1, 1 - distance));
+          if (distance <= 0.1 && (!closestCustom || confidence > closestCustom.confidence)) {
+            closestCustom = { id: custom.id, confidence };
+          }
+        }
+      }
+      if (closestCustom && (!detection || closestCustom.confidence > detection.confidence)) detection = closestCustom;
+      return detection ? { ...detection, handedness } : null;
+    },
+    getLatestObservation() {
+      return latestObservation ? structuredClone(latestObservation) : null;
     },
     stop() {
       generation += 1;
@@ -150,9 +202,10 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
       loading = null;
       canvas = null;
       canvasContext = null;
+      latestObservation = null;
       if (detector) void Promise.resolve(detector.close()).catch(() => {});
     },
   };
 }
 
-export { classifyLandmarks };
+export { classifyLandmarks, normalizeLandmarks };
