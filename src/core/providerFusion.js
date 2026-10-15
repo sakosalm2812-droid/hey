@@ -16,26 +16,78 @@ function result(status, details = {}) {
   return { status, ...details };
 }
 
-function normalizeEvidence(evidence) {
-  if (!Array.isArray(evidence)) return [];
-  return evidence.slice(0, 32).flatMap((item) => {
-    if (!item || typeof item.claimId !== "string" || !item.claimId.trim()) return [];
-    if (typeof item.statement !== "string" || !item.statement.trim()) return [];
-    if (!(typeof item.value === "string" || typeof item.value === "number" || typeof item.value === "boolean" || item.value === null)) return [];
-    return [{
-      claimId: item.claimId.slice(0, 120),
-      statement: item.statement.slice(0, 500),
-      value: item.value,
-      source: typeof item.source === "string" ? item.source.slice(0, 200) : null,
-    }];
-  });
+function strictDataRecord(value, allowedKeys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string" || !allowedKeys.includes(key))) return null;
+  const result = Object.create(null);
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return null;
+    result[key] = descriptor.value;
+  }
+  return result;
 }
 
-function validProviderOutput(output) {
-  return output && typeof output === "object" &&
-    typeof output.text === "string" && output.text.length > 0 &&
-    output.text.length <= MAX_OUTPUT_CHARS &&
-    Number.isFinite(output.confidence) && output.confidence >= 0 && output.confidence <= 1;
+function strictDataArray(value, maxItems) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maxItems) return null;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys.some((key) => key !== "length" && !/^(0|[1-9]\d*)$/.test(key))) return null;
+  const items = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return null;
+    items.push(descriptor.value);
+  }
+  return items;
+}
+
+function parseProviderOutput(output, maxCostUsd) {
+  try {
+    const record = strictDataRecord(output, ["text", "confidence", "evidence", "costUsd", "latencyMs"]);
+    if (!record || typeof record.text !== "string" || !record.text.trim() || record.text.length > MAX_OUTPUT_CHARS) return null;
+    if (!Number.isFinite(record.confidence) || record.confidence < 0 || record.confidence > 1) return null;
+    if (record.costUsd !== undefined && (!Number.isFinite(record.costUsd) || record.costUsd < 0 || record.costUsd > maxCostUsd)) return null;
+    if (record.latencyMs !== undefined && (!Number.isFinite(record.latencyMs) || record.latencyMs < 0)) return null;
+
+    let evidence = [];
+    if (record.evidence !== undefined) {
+      const items = strictDataArray(record.evidence, 32);
+      if (!items) return null;
+      evidence = [];
+      for (const item of items) {
+        const evidenceRecord = strictDataRecord(item, ["claimId", "statement", "value", "source"]);
+        if (!evidenceRecord || typeof evidenceRecord.claimId !== "string" || !evidenceRecord.claimId.trim() || evidenceRecord.claimId.length > 120) return null;
+        if (typeof evidenceRecord.statement !== "string" || !evidenceRecord.statement.trim() || evidenceRecord.statement.length > 500) return null;
+        if (!(typeof evidenceRecord.value === "string" || typeof evidenceRecord.value === "number" || typeof evidenceRecord.value === "boolean" || evidenceRecord.value === null)) return null;
+        if (typeof evidenceRecord.value === "number" && !Number.isFinite(evidenceRecord.value)) return null;
+        if (evidenceRecord.source !== undefined && evidenceRecord.source !== null && (typeof evidenceRecord.source !== "string" || evidenceRecord.source.length > 200)) return null;
+        evidence.push(Object.freeze({
+          claimId: evidenceRecord.claimId,
+          statement: evidenceRecord.statement,
+          value: evidenceRecord.value,
+          source: typeof evidenceRecord.source === "string" ? evidenceRecord.source : null,
+        }));
+      }
+    }
+    return {
+      text: record.text,
+      confidence: record.confidence,
+      evidence: Object.freeze(evidence),
+      costUsd: record.costUsd ?? maxCostUsd,
+      latencyMs: record.latencyMs ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const item of Object.values(value)) deepFreeze(item);
+  return Object.freeze(value);
 }
 
 function findConflicts(outputs) {
@@ -117,10 +169,19 @@ export async function runProviderFusion({
   if (!Array.isArray(permissions) || typeof invoke !== "function") {
     return result("invalid_request", { reason: "provider_contract_required" });
   }
+  if (typeof isCurrent !== "function") return result("invalid_request", { reason: "scope_fence_required" });
   if (!Number.isFinite(maxCostUsd) || maxCostUsd < 0 || !Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
     return result("invalid_request", { reason: "budget_or_threshold_invalid" });
   }
   if (signal?.aborted) return result("cancelled");
+
+  const isScopeCurrent = () => {
+    try {
+      return isCurrent(accountScope) === true;
+    } catch {
+      return false;
+    }
+  };
 
   // Use the canonical selector to keep capability and preference semantics aligned
   // with normal HEY routing; then apply the extra fusion/privacy eligibility rules.
@@ -155,14 +216,14 @@ export async function runProviderFusion({
       outputs[0]?.confidence < minConfidence || outputs[0]?.evidence.length === 0
     ));
     if (!shouldCall) break;
-    if (signal?.aborted || !isCurrent(accountScope)) return result("cancelled");
+    if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
 
     const estimate = model.maxCostUsd;
     if (!Number.isFinite(estimate) || estimate < 0) {
-      return result("budget_unpriced", { calls: outputs.length, reservedCostUsd });
+      return result("budget_unpriced", { calls: dispatchedCalls, reservedCostUsd });
     }
     if (reservedCostUsd + estimate > maxCostUsd) {
-      return result("budget_exhausted", { calls: outputs.length, reservedCostUsd });
+      return result("budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
     }
     reservedCostUsd += estimate;
 
@@ -179,23 +240,20 @@ export async function runProviderFusion({
         maxOutputChars: MAX_OUTPUT_CHARS,
       });
     } catch {
-      if (signal?.aborted || !isCurrent(accountScope)) return result("cancelled");
+      if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
       if (outputs.length) break;
       primaryFailed = true;
       continue;
     }
-    if (signal?.aborted || !isCurrent(accountScope)) return result("cancelled");
-    if (!validProviderOutput(raw) || (raw.costUsd !== undefined && (!Number.isFinite(raw.costUsd) || raw.costUsd < 0 || raw.costUsd > estimate))) {
-      return result("provider_contract_invalid", { calls: outputs.length + 1, reservedCostUsd });
+    if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
+    const parsedOutput = parseProviderOutput(raw, estimate);
+    if (!parsedOutput) {
+      return result("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });
     }
     outputs.push({
       providerId: model.providerId,
       modelId: model.id,
-      text: raw.text,
-      confidence: raw.confidence,
-      evidence: normalizeEvidence(raw.evidence),
-      costUsd: raw.costUsd ?? estimate,
-      latencyMs: Number.isFinite(raw.latencyMs) && raw.latencyMs >= 0 ? raw.latencyMs : null,
+      ...parsedOutput,
     });
   }
 
@@ -222,14 +280,14 @@ export async function runProviderFusion({
   let synthesis = "primary_consensus";
   if (verifier && typeof synthesize === "function") {
     try {
-      answer = await synthesize({
+      answer = await synthesize(deepFreeze({
         primary: { text: primary.text, confidence: primary.confidence, evidence: primary.evidence },
         checker: { text: verifier.text, confidence: verifier.confidence, evidence: verifier.evidence },
-      });
+      }));
     } catch {
       return result("synthesis_failed", { reason: "local_synthesizer_failed", calls: outputs.length, reservedCostUsd });
     }
-    if (signal?.aborted || !isCurrent(accountScope)) return result("cancelled");
+    if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
     if (typeof answer !== "string" || !answer.trim() || answer.length > MAX_OUTPUT_CHARS) {
       return result("synthesis_invalid", { reason: "synthesized_answer_invalid", calls: outputs.length, reservedCostUsd });
     }

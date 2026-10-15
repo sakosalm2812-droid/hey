@@ -138,6 +138,67 @@ test("provider-reported spend above its reservation is rejected", async () => {
   assert.equal(response.calls, 1);
 });
 
+test("provider result accessors are rejected without evaluating getters", async () => {
+  providers();
+  let getterCalls = 0;
+  const hostile = { confidence: 0.9, evidence: evidence() };
+  Object.defineProperty(hostile, "text", {
+    enumerable: true,
+    get() { getterCalls += 1; return "forged"; },
+  });
+  const response = await runProviderFusion({ ...base, invoke: async () => hostile });
+  assert.equal(response.status, "provider_contract_invalid");
+  assert.equal(getterCalls, 0);
+});
+
+test("cyclic, sparse, and decorated evidence arrays fail closed", async (t) => {
+  providers();
+  const cases = [
+    ["cyclic evidence item", () => {
+      const item = { claimId: "a", statement: "claim", value: "x" };
+      item.source = item;
+      return [item];
+    }],
+    ["sparse evidence", () => { const sparse = []; sparse.length = 1; return sparse; }],
+    ["accessor evidence", () => {
+      const item = { claimId: "a", value: "x" };
+      Object.defineProperty(item, "statement", { enumerable: true, get() { throw new Error("must not run"); } });
+      return [item];
+    }],
+    ["decorated evidence", () => {
+      const rows = evidence();
+      rows.extra = "untrusted metadata";
+      return rows;
+    }],
+    ["prototype-decorated evidence", () => [Object.assign(Object.create({ inherited: "untrusted" }), { claimId: "a", statement: "claim", value: "x" })]],
+  ];
+  for (const [name, createEvidence] of cases) {
+    await t.test(name, async () => {
+      const response = await runProviderFusion({
+        ...base,
+        invoke: async () => ({ text: "answer", confidence: 0.9, evidence: createEvidence(), costUsd: 0.01 }),
+      });
+      assert.equal(response.status, "provider_contract_invalid");
+    });
+  }
+});
+
+test("the local synthesizer cannot mutate evidence used for the returned decision", async () => {
+  providers();
+  const response = await runProviderFusion({
+    ...base,
+    invoke: async ({ providerId }) => providerId === "fusion-primary"
+      ? { text: "42", confidence: 0.2, evidence: evidence(), costUsd: 0.01 }
+      : { text: "42 confirmed", confidence: 0.9, evidence: evidence(), costUsd: 0.01 },
+    synthesize: ({ checker }) => {
+      checker.evidence[0].value = "forged";
+      return "forged answer";
+    },
+  });
+  assert.equal(response.status, "synthesis_failed");
+  assert.equal("evidence" in response, false);
+});
+
 test("primary outage falls back to the next permitted provider within the same cost ceiling", async () => {
   providers();
   const response = await runProviderFusion({
@@ -158,6 +219,18 @@ test("fallback outage reports the actual dispatched call count without leaking p
   assert.equal(response.status, "provider_unavailable");
   assert.equal(response.calls, 2);
   assert.equal(JSON.stringify(response).includes("private endpoint"), false);
+});
+
+test("failed primary calls are counted when fallback is blocked by its reservation", async () => {
+  providers();
+  const response = await runProviderFusion({
+    ...base,
+    maxCostUsd: 0.02,
+    invoke: async () => { throw new Error("offline"); },
+  });
+  assert.equal(response.status, "budget_exhausted");
+  assert.equal(response.calls, 1);
+  assert.equal(response.reservedCostUsd, 0.02);
 });
 
 test("Fusion mode requires two authorized providers and refuses sensitive hybrid routing", async () => {
@@ -236,6 +309,14 @@ test("cancellation and account-scope fencing discard stale provider output", asy
     invoke: async () => { calls += 1; return { text: "stale", confidence: 1, evidence: evidence(), costUsd: 0.01 }; },
   });
   assert.equal(switchedAccount.status, "cancelled");
+  assert.equal(calls, 1);
+
+  const asynchronousFence = await runProviderFusion({
+    ...base,
+    isCurrent: async () => true,
+    invoke: async () => { calls += 1; return { text: "stale", confidence: 1, evidence: evidence(), costUsd: 0.01 }; },
+  });
+  assert.equal(asynchronousFence.status, "cancelled");
   assert.equal(calls, 1);
 });
 
