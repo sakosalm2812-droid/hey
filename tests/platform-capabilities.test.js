@@ -154,6 +154,127 @@ test("unknown capabilities remain unsupported", () => {
   assert.equal(result.available, false);
 });
 
+test("capability registration validates supported platforms and semantic versions while preserving legacy fields", () => {
+  const legacy = registerCapability({ id: "test.metadata.legacy", name: "Legacy metadata", platforms: ["web"] });
+  assert.deepEqual(legacy.platforms, ["web"]);
+  assert.deepEqual(legacy.supportedPlatforms, ["web"]);
+  assert.equal(legacy.version, "1.0.0");
+  assert.deepEqual(legacy.dependencies, []);
+  assert.deepEqual(legacy.runtimeRequirements, { features: [] });
+  assert.equal(getCapabilityAvailability(legacy.id, "ios").status, CAPABILITY_STATUS.unsupported);
+
+  assert.throws(() => registerCapability({ id: "test.metadata.bad_platform", name: "Bad platform", supportedPlatforms: ["web", "unknown"] }), /platforms/i);
+  assert.throws(() => registerCapability({ id: "test.metadata.platform_mismatch", name: "Platform mismatch", platforms: ["web"], supportedPlatforms: ["ios"] }), /must match/i);
+  assert.throws(() => registerCapability({ id: "test.metadata.bad_version", name: "Bad version", version: "latest" }), /semantic version/i);
+  assert.throws(() => registerCapability({ id: "test.metadata.null_version", name: "Null version", version: null }), /semantic version/i);
+
+  let getterReads = 0;
+  const hostile = { id: "test.metadata.accessor", name: "Accessor metadata" };
+  Object.defineProperty(hostile, "version", { enumerable: true, get() { getterReads += 1; return "1.0.0"; } });
+  assert.throws(() => registerCapability(hostile), /accessors/i);
+  assert.equal(getterReads, 0);
+  const cyclic = { id: "test.metadata.cycle", name: "Cyclic metadata" };
+  cyclic.runtimeRequirements = { nested: cyclic };
+  assert.throws(() => registerCapability(cyclic), /cycles/i);
+  assert.equal(getCapability("test.metadata.accessor"), null);
+  assert.equal(getCapability("test.metadata.cycle"), null);
+});
+
+test("capability dependencies fail closed when missing or cyclic and are enforced by discovery", () => {
+  const missingParent = "test.dependencies.missing_parent";
+  const missingDependency = "test.dependencies.missing_leaf";
+  registerCapability({
+    id: missingParent,
+    name: "Missing dependency parent",
+    supportedPlatforms: ["web"],
+    platformSupport: { web: CAPABILITY_STATUS.supported },
+    dependencies: [missingDependency],
+  });
+  const missing = getCapabilityAvailability(missingParent, "web");
+  assert.equal(missing.status, CAPABILITY_STATUS.unsupported);
+  assert.match(missing.error, /missing dependency/);
+
+  registerCapability({
+    id: missingDependency,
+    name: "Dependency leaf",
+    supportedPlatforms: ["web"],
+    platformSupport: { web: CAPABILITY_STATUS.supported },
+  });
+  assert.equal(getCapabilityAvailability(missingParent, "web").status, CAPABILITY_STATUS.supported);
+
+  const cycleA = "test.dependencies.cycle_a";
+  const cycleB = "test.dependencies.cycle_b";
+  registerCapability({ id: cycleA, name: "Cycle A", dependencies: [cycleB] });
+  assert.throws(() => registerCapability({ id: cycleB, name: "Cycle B", dependencies: [cycleA] }), /cannot contain cycles/i);
+  assert.equal(getCapability(cycleB), null);
+  assert.throws(() => registerCapability({ id: "test.dependencies.self", name: "Self dependency", dependencies: ["test.dependencies.self"] }), /itself/i);
+  assert.throws(() => registerCapability({ id: "test.dependencies.duplicate", name: "Duplicate dependencies", dependencies: ["test.dependencies.one", "test.dependencies.one"] }), /duplicates/i);
+
+  let previous = null;
+  for (let index = 0; index <= 33; index += 1) {
+    const id = `test.dependencies.depth_${index}`;
+    const input = { id, name: `Dependency depth ${index}`, dependencies: previous ? [previous] : [] };
+    if (index === 33) assert.throws(() => registerCapability(input), /exceeds the supported depth/i);
+    else registerCapability(input);
+    previous = id;
+  }
+});
+
+test("runtime version and feature requirements are checked before capability execution", async () => {
+  const capabilityId = "test.runtime.requirement";
+  let executions = 0;
+  registerCapability({
+    id: capabilityId,
+    name: "Runtime constrained capability",
+    version: "2.4.0-rc.1+metadata.3",
+    supportedPlatforms: ["web"],
+    platformSupport: { web: CAPABILITY_STATUS.supported },
+    runtimeRequirements: { minVersion: "1.2.3", features: ["runtime.feature"] },
+  });
+  const adapter = {
+    platform: "web",
+    capabilities: [capabilityId],
+    runtimeVersion: "1.2.3-rc.1",
+    runtimeFeatures: ["runtime.feature"],
+    execute() { executions += 1; return { success: true }; },
+  };
+  assert.equal(getCapability(capabilityId).version, "2.4.0-rc.1+metadata.3");
+  assert.equal(getCapabilityAvailability(capabilityId, "web", adapter).status, CAPABILITY_STATUS.unsupported);
+  assert.match(getCapabilityAvailability(capabilityId, "web", adapter).error, /requires runtime/);
+  assert.equal((await executeCapability(capabilityId, {}, adapter)).success, false);
+  assert.equal(executions, 0);
+
+  adapter.runtimeVersion = "1.2.3";
+  assert.equal(getCapabilityAvailability(capabilityId, "web", adapter).status, CAPABILITY_STATUS.supported);
+  assert.equal((await executeCapability(capabilityId, {}, adapter)).success, true);
+  adapter.runtimeFeatures = [];
+  assert.equal(getCapabilityAvailability(capabilityId, "web", adapter).status, CAPABILITY_STATUS.unsupported);
+  assert.match(getCapabilityAvailability(capabilityId, "web", adapter).error, /runtime feature/);
+  assert.equal(executions, 1);
+
+  let getterReads = 0;
+  const hostileAdapter = { platform: "web", capabilities: [capabilityId], execute() { executions += 1; } };
+  Object.defineProperty(hostileAdapter, "runtimeVersion", { get() { getterReads += 1; return "9.0.0"; } });
+  assert.equal(getCapabilityAvailability(capabilityId, "web", hostileAdapter).status, CAPABILITY_STATUS.unsupported);
+  assert.equal(getterReads, 0);
+
+  assert.throws(() => registerCapability({
+    id: "test.runtime.bad_requirement",
+    name: "Bad runtime requirement",
+    runtimeRequirements: { minVersion: "stable" },
+  }), /semantic version/i);
+  assert.throws(() => registerCapability({
+    id: "test.runtime.unknown_requirement",
+    name: "Unknown runtime requirement",
+    runtimeRequirements: { minVersion: "1.0.0", vendorRuntime: true },
+  }), /unsupported field/i);
+  assert.throws(() => registerCapability({
+    id: "test.runtime.null_features",
+    name: "Null runtime features",
+    runtimeRequirements: { features: null },
+  }), /bounded plain array/i);
+});
+
 test("Tauri bridge stays inactive in a normal web runtime", () => {
   assert.equal(isTauriRuntime(), false);
   assert.equal(createTauriAdapter(), null);

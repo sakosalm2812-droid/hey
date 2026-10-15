@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { parseFusionPricingConfig, runFusionChatRequest } from "../supabase/functions/hey/fusionProvider.js";
 
 const pricingText = JSON.stringify({
@@ -197,9 +198,19 @@ test("Fusion withholds the candidate when verifier evidence does not bind to its
       : new Response(JSON.stringify({ choices: [{ message: { content: answer } }], usage: { prompt_tokens: 50, completion_tokens: 20 } }), { status: 200 });
   };
   const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
-  assert.deepEqual(result, { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" });
+  assert.equal(result.status, "verification_unavailable");
+  assert.equal(result.reason, "independent_provider_failed");
   assert.equal(calls.length, 2);
   assert.equal("answer" in result, false);
+});
+
+test("Edge chat explains verification, time, cost, and provider-contract failures without leaking details", async () => {
+  const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
+  assert.match(route, /\["conflict", "inconclusive", "verification_unavailable", "time_budget_exhausted", "budget_exhausted", "provider_contract_invalid"\]\.includes\(fusion\.status\)/);
+  assert.match(route, /fusion\.status === "verification_unavailable"[\s\S]*?no answer was delivered/i);
+  assert.match(route, /fusion\.status === "time_budget_exhausted"[\s\S]*?no answer was delivered/i);
+  assert.match(route, /fusion\.status === "budget_exhausted"[\s\S]*?no answer was delivered/i);
+  assert.match(route, /fusion\.status === "provider_contract_invalid"[\s\S]*?no answer was delivered/i);
 });
 
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {

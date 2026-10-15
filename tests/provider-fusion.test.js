@@ -88,17 +88,15 @@ test("agreement is synthesized locally from both provider outputs without a thir
     ...base,
     invoke: async ({ providerId }) => {
       providerCalls += 1;
-      return providerId === "fusion-primary"
-        ? { text: "The answer is 42.", confidence: 0.3, evidence: evidence(), costUsd: 0.01 }
-        : { text: "The evidence confirms 42.", confidence: 0.92, evidence: evidence(), costUsd: 0.01 };
+      return { text: "42", confidence: providerId === "fusion-primary" ? 0.3 : 0.92, evidence: evidence(), costUsd: 0.01 };
     },
     synthesize: (input) => {
       synthesisInput = input;
-      return "The answer is 42, confirmed by the independent check.";
+      return "42";
     },
   });
   assert.equal(response.status, "complete");
-  assert.equal(response.answer, "The answer is 42, confirmed by the independent check.");
+  assert.equal(response.answer, "42");
   assert.equal(response.synthesis, "local_synthesizer");
   assert.equal(providerCalls, 2);
   assert.equal("accountScope" in synthesisInput, false);
@@ -112,7 +110,7 @@ test("the checker reservation is rejected before dispatch when it exceeds the ha
     maxCostUsd: 0.05,
     invoke: async () => {
       calls += 1;
-      return { text: "uncertain", confidence: 0.2, evidence: evidence(), costUsd: 0.01 };
+      return { text: "42", confidence: 0.2, evidence: evidence(), costUsd: 0.01 };
     },
   });
   assert.equal(response.status, "budget_exhausted");
@@ -189,7 +187,7 @@ test("the local synthesizer cannot mutate evidence used for the returned decisio
     ...base,
     invoke: async ({ providerId }) => providerId === "fusion-primary"
       ? { text: "42", confidence: 0.2, evidence: evidence(), costUsd: 0.01 }
-      : { text: "42 confirmed", confidence: 0.9, evidence: evidence(), costUsd: 0.01 },
+      : { text: "42", confidence: 0.9, evidence: evidence(), costUsd: 0.01 },
     synthesize: ({ checker }) => {
       checker.evidence[0].value = "forged";
       return "forged answer";
@@ -197,6 +195,127 @@ test("the local synthesizer cannot mutate evidence used for the returned decisio
   });
   assert.equal(response.status, "synthesis_failed");
   assert.equal("evidence" in response, false);
+});
+
+test("independent verification rejects spoofed provider text before dispatching a checker", async () => {
+  providers();
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    invoke: async ({ providerId }) => {
+      calls.push(providerId);
+      return { text: "Spoofed answer", confidence: 0.2, evidence: evidence("42"), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "provider_contract_invalid");
+  assert.equal(response.reason, "candidate_answer_not_bound_to_evidence");
+  assert.equal(response.answer, undefined);
+  assert.deepEqual(calls, ["fusion-primary"]);
+});
+
+test("Auto does not spend a second provider call when the candidate has no evidence", async () => {
+  providers();
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    invoke: async ({ providerId }) => {
+      calls.push(providerId);
+      return { text: "42", confidence: 0.4, evidence: [], costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "inconclusive");
+  assert.equal(response.reason, "candidate_evidence_missing");
+  assert.equal(response.answer, undefined);
+  assert.deepEqual(calls, ["fusion-primary"]);
+});
+
+test("Fusion returns no partial answer when the independent checker fails", async () => {
+  providers();
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    mode: FUSION_MODES.FUSION,
+    invoke: async ({ providerId }) => {
+      calls.push(providerId);
+      if (providerId === "fusion-checker") throw new Error("private provider failure");
+      return { text: "42", confidence: 0.95, evidence: evidence(), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "verification_unavailable");
+  assert.equal(response.reason, "independent_provider_failed");
+  assert.equal(response.answer, undefined);
+  assert.deepEqual(calls, ["fusion-primary", "fusion-checker"]);
+  assert.equal(JSON.stringify(response).includes("private provider failure"), false);
+});
+
+test("a non-cooperative checker is aborted at the provider timeout and no partial answer escapes", async () => {
+  providers();
+  const calls = [];
+  let checkerAborted = false;
+  const response = await runProviderFusion({
+    ...base,
+    mode: FUSION_MODES.FUSION,
+    providerTimeoutMs: 10,
+    maxDurationMs: 40,
+    invoke: async ({ providerId, signal }) => {
+      calls.push(providerId);
+      if (providerId !== "fusion-checker") return { text: "42", confidence: 0.95, evidence: evidence(), costUsd: 0.01 };
+      return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => {
+        checkerAborted = true;
+        reject(new Error("aborted"));
+      }, { once: true }));
+    },
+  });
+  assert.equal(response.status, "verification_unavailable");
+  assert.equal(response.reason, "provider_timeout");
+  assert.equal(response.answer, undefined);
+  assert.deepEqual(calls, ["fusion-primary", "fusion-checker"]);
+  assert.equal(checkerAborted, true);
+});
+
+test("a provider cannot exceed the hard per-call time ceiling", async () => {
+  providers();
+  const response = await runProviderFusion({
+    ...base,
+    providerTimeoutMs: 20_001,
+    invoke: async () => ({ text: "42", confidence: 0.9, evidence: evidence(), costUsd: 0.01 }),
+  });
+  assert.equal(response.status, "invalid_request");
+  assert.equal(response.reason, "time_budget_invalid");
+});
+
+test("the total deadline prevents a delayed primary from dispatching another provider", async () => {
+  providers();
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    providerTimeoutMs: 100,
+    maxDurationMs: 10,
+    invoke: async ({ providerId }) => {
+      calls.push(providerId);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { text: "42", confidence: 0.4, evidence: evidence(), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "time_budget_exhausted");
+  assert.deepEqual(calls, ["fusion-primary"]);
+});
+
+test("verification requires trusted provider and model provenance", async () => {
+  let calls = 0;
+  const response = await runProviderFusion({
+    ...base,
+    mode: FUSION_MODES.FUSION,
+    permissions: [...base.permissions, "provider:undefined"],
+    providerModels: [
+      { id: "spoof-primary", capabilities: ["chat"], priority: 1, maxCostUsd: 0.02 },
+      { id: "known-checker", providerId: "fusion-checker", capabilities: ["chat"], priority: 2, maxCostUsd: 0.02 },
+    ],
+    invoke: async () => { calls += 1; return { text: "42", confidence: 0.9, evidence: evidence(), costUsd: 0.01 }; },
+  });
+  assert.equal(response.status, "unsupported_mode");
+  assert.equal(response.reason, "provider_provenance_unavailable");
+  assert.equal(calls, 0);
 });
 
 test("primary outage falls back to the next permitted provider within the same cost ceiling", async () => {
@@ -211,6 +330,20 @@ test("primary outage falls back to the next permitted provider within the same c
   assert.equal(response.status, "complete");
   assert.equal(response.answer, "fallback");
   assert.deepEqual(response.providers.map(({ providerId }) => providerId), ["fusion-checker"]);
+});
+
+test("a fallback cannot deliver text that its own answer evidence does not bind", async () => {
+  providers();
+  const response = await runProviderFusion({
+    ...base,
+    invoke: async ({ providerId }) => {
+      if (providerId === "fusion-primary") throw new Error("primary unavailable");
+      return { text: "Spoofed fallback", confidence: 0.9, evidence: evidence("42"), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "provider_contract_invalid");
+  assert.equal(response.reason, "fallback_answer_not_bound_to_evidence");
+  assert.equal(response.answer, undefined);
 });
 
 test("fallback outage reports the actual dispatched call count without leaking provider errors", async () => {
