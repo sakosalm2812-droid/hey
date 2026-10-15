@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
-import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry } from "../src/core/toolRegistry.js";
+import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, getToolLifecycleContract } from "../src/core/toolRegistry.js";
 import { seedPermissions, clearPermissions } from "../src/core/permissionManager.js";
 
 test("Tool Library catalog derives availability from capability policy without exposing handlers", () => {
@@ -203,4 +203,131 @@ test("Tool Library run rechecks platform policy and delegates account permission
     unregisterTool(supported);
     unregisterTool(restricted);
   }
+});
+
+test("tool lifecycle reports only declared actions and requires canonical account authorization", async () => {
+  const name = "test.tool_library.lifecycle_contract";
+  const capability = "test.tool_library.lifecycle_contract_capability";
+  registerCapability({ id: capability, name: "Lifecycle contract capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  try {
+    registerTool(name, async () => ({ success: true }), {
+      description: "A lifecycle contract fixture.",
+      capabilities: [capability],
+      permission: "filesystem.write",
+    });
+    const denied = startToolLibraryEntry(name, {}, { user: { id: "contract-account" } });
+    assert.equal(denied.status, "unsupported", "tools without lifecycle handlers cannot claim start support");
+    const contract = getToolLifecycleContract(name, { user: { id: "contract-account" } });
+    assert.deepEqual(contract.actions, { start: false, stop: false, status: true, permissions: true, help: true, activity: true });
+    assert.equal(contract.permissions.granted, false);
+    assert.equal(contract.status, "registered");
+    assert.equal(stopToolLibraryEntry(name, "not-a-session", { user: { id: "contract-account" } }).status, "unsupported");
+  } finally {
+    unregisterTool(name);
+  }
+});
+
+test("lifecycle start is denied after permission revocation and never dispatches the handler", () => {
+  const name = "test.tool_library.revoked_lifecycle";
+  const capability = "test.tool_library.revoked_lifecycle_capability";
+  registerCapability({ id: capability, name: "Revoked lifecycle capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  let executions = 0;
+  try {
+    registerTool(name, async () => { executions += 1; return { success: true }; }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true },
+    });
+    seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "revoked-lifecycle-account");
+    clearPermissions();
+    const revoked = startToolLibraryEntry(name, {}, { user: { id: "revoked-lifecycle-account", plan: "elite", entitlements: ["elite"] } });
+    assert.equal(revoked.success, false);
+    assert.equal(revoked.status, "denied");
+    assert.equal(executions, 0);
+  } finally {
+    clearPermissions();
+    unregisterTool(name);
+  }
+});
+
+test("account-scoped lifecycle sessions resist concurrent reuse, cross-account stop, and cancellation races", async () => {
+  const name = "test.tool_library.lifecycle_session";
+  const capability = "test.tool_library.lifecycle_session_capability";
+  registerCapability({ id: capability, name: "Lifecycle session capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-owner");
+  let entered;
+  let handlerFinished;
+  const handlerEntered = new Promise((resolve) => { entered = resolve; });
+  const handlerDone = new Promise((resolve) => { handlerFinished = resolve; });
+  try {
+    registerTool(name, async (_input, { signal }) => {
+      entered();
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      handlerFinished();
+      return { success: false, error: "cancelled" };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, stop: true },
+    });
+
+    const started = startToolLibraryEntry(name, {}, { platform: "web", user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } });
+    assert.equal(started.success, true);
+    await handlerEntered;
+    assert.equal(getToolLifecycleContract(name, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } }).status, "running");
+    assert.equal(startToolLibraryEntry(name, {}, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } }).status, "conflict");
+    assert.equal(getToolLifecycleContract(name, { user: { id: "other-account", plan: "elite", entitlements: ["elite"] } }).sessionId, null);
+    assert.equal(stopToolLibraryEntry(name, started.sessionId, { user: { id: "other-account", plan: "elite", entitlements: ["elite"] } }).status, "not_found");
+    const stopping = stopToolLibraryEntry(name, started.sessionId, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } });
+    assert.equal(stopping.status, "stopping");
+    await handlerDone;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const completed = getToolLifecycleContract(name, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } });
+    assert.equal(completed.status, "cancelled");
+    assert.deepEqual(completed.activity.map(({ status }) => status), ["cancelled", "stopping", "running", "starting"]);
+    assert.equal(stopToolLibraryEntry(name, started.sessionId, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } }).success, false);
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+  }
+});
+
+test("a non-cooperative handler is never reported as stopped when it completes after a stop request", async () => {
+  const name = "test.tool_library.lifecycle_noncooperative";
+  const capability = "test.tool_library.lifecycle_noncooperative_capability";
+  registerCapability({ id: capability, name: "Noncooperative lifecycle capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-noncooperative");
+  let entered;
+  let release;
+  const handlerEntered = new Promise((resolve) => { entered = resolve; });
+  const releaseHandler = new Promise((resolve) => { release = resolve; });
+  try {
+    registerTool(name, async () => {
+      entered();
+      await releaseHandler;
+      return { success: true };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, stop: true },
+    });
+    const context = { user: { id: "lifecycle-noncooperative", plan: "elite", entitlements: ["elite"] } };
+    const started = startToolLibraryEntry(name, {}, context);
+    await handlerEntered;
+    assert.equal(stopToolLibraryEntry(name, started.sessionId, context).status, "stopping");
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(getToolLifecycleContract(name, context).status, "completed_after_stop");
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+  }
+});
+
+test("lifecycle metadata is plain, explicit, and cannot claim stop without start", () => {
+  const handler = async () => ({ success: true });
+  assert.throws(() => registerTool("test.tool.lifecycle_accessor", handler, { lifecycle: { get start() { return true; } } }), /accessors/);
+  assert.throws(() => registerTool("test.tool.lifecycle_stop_only", handler, { lifecycle: { stop: true } }), /must also declare start/);
+  assert.throws(() => registerTool("test.tool.lifecycle_unknown_action", handler, { lifecycle: { install: true } }), /unsupported action/);
+  assert.equal(getToolLifecycleContract("test.tool.lifecycle_accessor", { user: { id: "a" } }).status, "not_found");
 });

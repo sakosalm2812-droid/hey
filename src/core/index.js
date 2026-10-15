@@ -50,6 +50,9 @@ import {
   listToolCatalog,
   searchToolCatalog,
   runToolLibraryEntry,
+  startToolLibraryEntry,
+  stopToolLibraryEntry,
+  getToolLifecycleContract,
   executeTool,
 } from "./toolRegistry.js";
 
@@ -520,6 +523,9 @@ import {
       catalog: listToolCatalog,
       search: searchToolCatalog,
       run: runToolLibraryEntry,
+      start: startToolLibraryEntry,
+      stop: stopToolLibraryEntry,
+      lifecycle: getToolLifecycleContract,
       execute: executeTool,
     },
 

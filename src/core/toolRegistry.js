@@ -3,6 +3,10 @@ import { executeWithPermission, authorizeExecution, hasPermission } from "./perm
 import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
 
 const tools = new Map();
+const activeToolSessions = new Map();
+const toolSessionActivity = new Map();
+const MAX_TOOL_ACTIVITY = 50;
+const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
 
 function cloneMetadata(metadata) {
   return cloneMetadataValue(metadata, new WeakSet());
@@ -95,6 +99,21 @@ export function registerTool(name, handler, metadata = {}) {
     throw new TypeError("A tool name and function are required.");
   }
 
+  const safeMetadata = cloneMetadata(metadata);
+  const lifecycle = safeMetadata.lifecycle;
+  if (lifecycle !== undefined && (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle))) {
+    throw new TypeError("Tool lifecycle metadata must be a plain object.");
+  }
+  if (lifecycle && Object.keys(lifecycle).some((key) => !["start", "stop"].includes(key))) {
+    throw new TypeError("Tool lifecycle metadata contains an unsupported action.");
+  }
+  if (lifecycle?.stop === true && lifecycle.start !== true) {
+    throw new TypeError("A stoppable tool must also declare start support.");
+  }
+  if (lifecycle && Object.values(lifecycle).some((supported) => typeof supported !== "boolean")) {
+    throw new TypeError("Tool lifecycle support declarations must be booleans.");
+  }
+
   const registered = Object.freeze({
     name,
     handler,
@@ -105,7 +124,7 @@ export function registerTool(name, handler, metadata = {}) {
       requiresConfirmation: false,
       supportedPlatforms: ["web", "desktop", "mobile"],
       maxRetries: 0,
-      ...cloneMetadata(metadata),
+      ...safeMetadata,
     }),
   });
   tools.set(name, registered);
@@ -113,6 +132,12 @@ export function registerTool(name, handler, metadata = {}) {
 }
 
 export function unregisterTool(name) {
+  for (const [key, session] of activeToolSessions) {
+    if (session.name === name) {
+      session.controller.abort(new Error("Tool was unregistered."));
+      activeToolSessions.delete(key);
+    }
+  }
   return tools.delete(name);
 }
 
@@ -231,11 +256,155 @@ export async function runToolLibraryEntry(name, input, context = {}) {
   return executeTool(name, input, { ...context, permissionScope: "account" });
 }
 
+function resolveToolAccount(context = {}) {
+  const user = context.user || context.session?.user || context.account || null;
+  const accountId = user?.id || user?.userId || user?.accountId || null;
+  return accountId ? { user, accountId: String(accountId) } : null;
+}
+
+function sessionKey(accountId, name) {
+  return `${accountId}\u0000${name}`;
+}
+
+function appendToolActivity(accountId, activity) {
+  const activityList = toolSessionActivity.get(accountId) || [];
+  activityList.unshift(Object.freeze({ ...activity, accountId }));
+  activityList.length = Math.min(activityList.length, MAX_TOOL_ACTIVITY);
+  toolSessionActivity.set(accountId, activityList);
+}
+
+/**
+ * Start an explicitly lifecycle-enabled registered tool as an account-bound
+ * run. The run still passes through the same capability and permission path
+ * as `runToolLibraryEntry`; no package installation or background service is
+ * implied by this operation.
+ */
+export function startToolLibraryEntry(name, input, context = {}) {
+  const tool = tools.get(name);
+  const identity = resolveToolAccount(context);
+  if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
+  if (tool.metadata.lifecycle?.start !== true) {
+    return { success: false, status: "unsupported", error: `Tool ${name} does not supply start behavior.` };
+  }
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+
+  const permission = tool.metadata.permission || tool.metadata.permissions?.[0];
+  if (!permission || !hasPermission(permission, "account", identity.accountId)) {
+    return { success: false, status: "denied", error: "Canonical account permission is required to start this tool." };
+  }
+  const catalogEntry = listToolCatalog({ platform: context.platform || "web", adapter: context.adapter || null }).find((entry) => entry.name === name);
+  if (catalogEntry?.status !== CAPABILITY_STATUS.supported) {
+    return { success: false, status: catalogEntry?.status || CAPABILITY_STATUS.unsupported, error: `Tool ${name} is not supported on ${context.platform || "web"}.` };
+  }
+
+  const key = sessionKey(identity.accountId, name);
+  const current = activeToolSessions.get(key);
+  if (current && ["starting", "running", "stopping"].includes(current.status)) {
+    return { success: false, status: "conflict", error: "This account already has an active run for this tool." };
+  }
+
+  const id = crypto.randomUUID();
+  const controller = new AbortController();
+  const session = { id, name, accountId: identity.accountId, status: "starting", startedAt: new Date().toISOString(), controller, result: null };
+  activeToolSessions.set(key, session);
+  appendToolActivity(identity.accountId, { id, name, status: "starting", at: session.startedAt });
+
+  // Save the promise before yielding so concurrent starts see the active run.
+  session.promise = runToolLibraryEntry(name, input, {
+    ...context,
+    signal: controller.signal,
+    [LIFECYCLE_START_CALLBACK]: () => {
+      if (activeToolSessions.get(key) === session && session.status === "starting" && !controller.signal.aborted) {
+        session.status = "running";
+        appendToolActivity(identity.accountId, { id, name, status: "running", at: new Date().toISOString() });
+      }
+    },
+  });
+  session.promise.then((result) => {
+      // Ignore stale completions after unregister/re-register or replacement.
+      if (activeToolSessions.get(key) !== session) return;
+      session.result = result;
+      const cancellationReported = result?.status === "cancelled" || /cancel|abort/i.test(result?.error || "");
+      session.status = controller.signal.aborted
+        ? result?.success ? "completed_after_stop" : cancellationReported ? "cancelled" : "failed_after_stop"
+        : result?.success ? "completed" : "failed";
+      session.finishedAt = new Date().toISOString();
+      appendToolActivity(identity.accountId, { id, name, status: session.status, at: session.finishedAt });
+    }, (error) => {
+      if (activeToolSessions.get(key) !== session) return;
+      const message = error instanceof Error ? error.message : String(error);
+      session.status = controller.signal.aborted
+        ? /cancel|abort/i.test(message) ? "cancelled" : "failed_after_stop"
+        : "failed";
+      session.result = { success: false, error: message };
+      session.finishedAt = new Date().toISOString();
+      appendToolActivity(identity.accountId, { id, name, status: session.status, at: session.finishedAt });
+    });
+
+  return { success: true, status: "starting", sessionId: id, name };
+}
+
+/** Stop a cooperative run owned by the authenticated account. A handler that
+ * ignores AbortSignal remains `stopping` until it settles; it is never falsely
+ * reported as stopped. */
+export function stopToolLibraryEntry(name, sessionId, context = {}) {
+  const tool = tools.get(name);
+  const identity = resolveToolAccount(context);
+  if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
+  if (tool.metadata.lifecycle?.stop !== true) {
+    return { success: false, status: "unsupported", error: `Tool ${name} does not supply stop behavior.` };
+  }
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+  const key = sessionKey(identity.accountId, name);
+  const session = activeToolSessions.get(key);
+  if (!session || session.id !== sessionId) return { success: false, status: "not_found", error: "Active tool run not found for this account." };
+  if (!["starting", "running"].includes(session.status)) {
+    return { success: false, status: session.status, error: "Tool run is no longer stoppable." };
+  }
+  session.status = "stopping";
+  session.controller.abort(new Error("Tool run stopped by account request."));
+  appendToolActivity(identity.accountId, { id: session.id, name, status: "stopping", at: new Date().toISOString() });
+  return { success: true, status: "stopping", sessionId: session.id };
+}
+
+/** Status, Help, and Permissions are derived only from registered metadata;
+ * Activity is account-filtered in-memory history from this registry. */
+export function getToolLifecycleContract(name, context = {}) {
+  const tool = tools.get(name);
+  if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
+  const identity = resolveToolAccount(context);
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+  const lifecycle = tool.metadata.lifecycle || {};
+  const permission = tool.metadata.permission || tool.metadata.permissions?.[0] || null;
+  const session = activeToolSessions.get(sessionKey(identity.accountId, name));
+  return {
+    success: true,
+    name,
+    actions: Object.freeze({
+      start: lifecycle.start === true,
+      stop: lifecycle.stop === true,
+      status: true,
+      permissions: Boolean(permission),
+      help: typeof tool.metadata.description === "string" && tool.metadata.description.length > 0,
+      activity: true,
+    }),
+    status: session?.status || "registered",
+    permissions: permission ? Object.freeze({ required: permission, granted: hasPermission(permission, "account", identity.accountId) }) : null,
+    help: typeof tool.metadata.description === "string" ? tool.metadata.description : "",
+    activity: Object.freeze((toolSessionActivity.get(identity.accountId) || []).filter((item) => item.name === name).map(({ id, name: toolName, status, at }) => Object.freeze({ id, name: toolName, status, at }))),
+    sessionId: session?.id || null,
+  };
+}
+
 export async function executeTool(name, input, context = {}) {
   const tool = tools.get(name) || null;
   const requestId = context.requestId || crypto.randomUUID();
   if (!tool) {
     return { success: false, result: null, error: `Tool not found: ${name}`, metadata: { requestId } };
+  }
+
+  if (context.signal?.aborted) {
+    return { success: false, result: null, error: "Tool run was cancelled.", status: "cancelled", metadata: { requestId, source: "tool_registry" } };
   }
 
   const metadata = tool.metadata;
@@ -322,6 +491,12 @@ async function runWithRetries(tool, input, context) {
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
+      if (context.signal?.aborted) {
+        recordAudit({ action: "tool.cancelled", tool: tool.name, status: "cancelled", requestId: context.requestId });
+        return { success: false, result: null, error: "Tool run was cancelled.", status: "cancelled", metadata: { requestId: context.requestId, attempts: attempt, source: tool.metadata.source || "tool_registry", confidence: 0 } };
+      }
+      const onLifecycleStart = context[LIFECYCLE_START_CALLBACK];
+      if (typeof onLifecycleStart === "function") onLifecycleStart();
       const result = await tool.handler(input, context);
       if (result?.success === false) {
         const retryable = isTransientFailure(result);
@@ -371,5 +546,8 @@ export default {
   listToolCatalog,
   searchToolCatalog,
   runToolLibraryEntry,
+  startToolLibraryEntry,
+  stopToolLibraryEntry,
+  getToolLifecycleContract,
   executeTool,
 };
