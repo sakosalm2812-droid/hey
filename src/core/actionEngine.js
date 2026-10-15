@@ -37,6 +37,14 @@ function copyPlainJson(value, ancestors = new WeakSet(), depth = 0) {
   } finally { ancestors.delete(value); }
 }
 
+function freezePlainJson(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freezePlainJson(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 export function clearActions() {
   for (const action of actions.values()) action.status = "cancelled";
   actions.clear();
@@ -117,6 +125,36 @@ export async function executeAction(actionId, handler, options = {}) {
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
   if (typeof handler !== "function") return { success: false, error: "No action handler registered." };
+  const requiresIndependentVerification = options.requireIndependentVerification === true;
+  if (requiresIndependentVerification) {
+    if (!options.requireMandate || typeof options.verifyTargetBinding !== "function" || typeof options.verifyPostcondition !== "function" || typeof options.resource !== "string" || !options.resource.trim()) {
+      return { success: false, error: "Target binding, independent verification, a signed mandate, and an exact resource target are required." };
+    }
+  }
+  // Snapshot before mandate verification yields to asynchronous storage/network
+  // work; callers cannot retarget an admitted action while authority is checked.
+  let executionInput = action.input;
+  if (requiresIndependentVerification) {
+    try { executionInput = freezePlainJson(copyPlainJson(action.input)); }
+    catch { return { success: false, error: "Strict computer action input must be bounded plain JSON data.", action }; }
+  }
+  const executionContext = requiresIndependentVerification
+    ? Object.freeze({ id: action.id, tool: action.tool, permission: action.permission, resource: options.resource, input: executionInput })
+    : action;
+  if (requiresIndependentVerification) {
+    let binding;
+    try {
+      binding = await options.verifyTargetBinding({ actionId: executionContext.id, capability: executionContext.tool || executionContext.permission, resource: executionContext.resource, input: executionContext.input });
+    } catch {
+      return { success: false, error: "The exact computer-control target could not be independently bound.", action };
+    }
+    if (binding?.verified !== true) {
+      return { success: false, error: binding?.reason || "The exact computer-control target could not be independently bound.", action };
+    }
+  }
+  if (action.status !== "queued" && action.status !== "approved") {
+    return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
+  }
   const mandate = await verifyActionMandate(action, options);
   if (!mandate.authorized) return { success: false, error: mandate.reason, action, mandate };
   // Mandate verification is asynchronous; reserve the action only after it
@@ -128,8 +166,20 @@ export async function executeAction(actionId, handler, options = {}) {
   action.updatedAt = new Date();
   publish("action.updated", action);
   try {
-    action.result = await handler(action.input, action);
-    if (!action.result || action.result.success !== true || action.result.verified !== true) {
+    action.result = await handler(executionInput, executionContext);
+    if (requiresIndependentVerification) {
+      const verification = await options.verifyPostcondition({
+        actionId: action.id,
+        capability: executionContext.tool || executionContext.permission,
+        resource: options.resource,
+        input: executionInput,
+        result: action.result,
+      });
+      if (verification?.verified !== true) {
+        throw new Error(verification?.reason || "Independent postcondition verification failed.");
+      }
+      action.verification = { verified: true, resource: options.resource, evidence: copyPlainJson(verification.evidence ?? null) };
+    } else if (!action.result || action.result.success !== true || action.result.verified !== true) {
       throw new Error(action.result?.error || "The action could not be verified.");
     }
     action.status = "completed";
@@ -158,6 +208,26 @@ export async function undoAction(actionId, handler, options = {}) {
     confirmed: options.confirmed === true,
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
+  if (options.requireIndependentVerification === true
+    && (!options.requireMandate || typeof options.verifyTargetBinding !== "function" || typeof options.verifyPostcondition !== "function" || typeof options.resource !== "string" || !options.resource.trim())) {
+    return { success: false, error: "Target binding, independent verification, a signed mandate, and an exact resource target are required.", action };
+  }
+  let undoInput = action.undo;
+  let undoContext = action;
+  if (options.requireIndependentVerification === true) {
+    try { undoInput = freezePlainJson(copyPlainJson(action.undo)); }
+    catch { return { success: false, error: "Strict computer undo input must be bounded plain JSON data.", action }; }
+    undoContext = Object.freeze({ id: action.id, tool: action.tool, permission: action.permission, resource: options.resource, input: undoInput });
+    let binding;
+    try {
+      binding = await options.verifyTargetBinding({ actionId: undoContext.id, capability: undoContext.tool || undoContext.permission, resource: undoContext.resource, input: undoContext.input, operation: "undo" });
+    } catch {
+      return { success: false, error: "The exact computer undo target could not be independently bound.", action };
+    }
+    if (binding?.verified !== true) {
+      return { success: false, error: binding?.reason || "The exact computer undo target could not be independently bound.", action };
+    }
+  }
   action.status = "undo_authorizing";
   action.updatedAt = new Date();
   const mandate = await verifyActionMandate(action, options);
@@ -170,8 +240,11 @@ export async function undoAction(actionId, handler, options = {}) {
   action.updatedAt = new Date();
   publish("action.updated", action);
   try {
-    const result = await handler(action.undo, action);
-    if (!result || result.success !== true || result.verified !== true) {
+    const result = await handler(undoInput, undoContext);
+    if (options.requireIndependentVerification === true) {
+      const verification = await options.verifyPostcondition({ actionId: action.id, capability: undoContext.tool || undoContext.permission, resource: options.resource, input: undoInput, result, operation: "undo" });
+      if (verification?.verified !== true) throw new Error(verification?.reason || "Independent undo verification failed.");
+    } else if (!result || result.success !== true || result.verified !== true) {
       throw new Error(result?.error || "The undo operation could not be verified.");
     }
     action.status = "undone";
