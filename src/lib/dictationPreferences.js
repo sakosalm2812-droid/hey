@@ -7,6 +7,7 @@ const MAX_CORRECTIONS = 64;
 const MAX_SNIPPETS = 32;
 const MAX_APPLICATIONS = 32;
 const MAX_APPLICATION_ID_LENGTH = 96;
+const storesBeingMutated = new WeakSet();
 
 export const DEFAULT_DICTATION_PREFERENCES = Object.freeze({
   language: "en-US",
@@ -201,6 +202,8 @@ export function createDictationPreferenceStore({
   storageProvider = () => globalThis.localStorage,
   getScope = getAccountScope,
 } = {}) {
+  let mutationInProgress = false;
+
   function getStorage() {
     try { return storageProvider(); } catch { return null; }
   }
@@ -212,7 +215,7 @@ export function createDictationPreferenceStore({
     const scope = activeAccountScope(getScope);
     if (!scope) return { success: false, status: "account_required", preferences: null, settings: null };
     const store = getStorage();
-    if (!store) return { success: false, status: "unavailable", preferences: null, settings: null };
+    if (!store || !["object", "function"].includes(typeof store)) return { success: false, status: "unavailable", preferences: null, settings: null };
     let raw;
     try { raw = store.getItem(getAccountStorageKey(STORAGE_KEY, scope)); }
     catch { return { success: false, status: "storage_failed", preferences: null, settings: null }; }
@@ -239,15 +242,28 @@ export function createDictationPreferenceStore({
     const serialized = JSON.stringify({ version: 2, scope, preferences });
     if (serialized.length > MAX_BYTES) return { success: false, status: "too_large", preferences: null, settings: null };
     let previous;
-    try {
-      previous = store.getItem(key);
-      store.setItem(key, serialized);
-      if (store.getItem(key) !== serialized) {
+    let previousRead = false;
+    let writeAttempted = false;
+    const rollback = () => {
+      if (!previousRead || !writeAttempted) return;
+      try {
         if (previous == null) store.removeItem(key);
         else store.setItem(key, previous);
+      } catch { /* Report failure even when storage cannot be restored. */ }
+    };
+    try {
+      previous = store.getItem(key);
+      previousRead = true;
+      if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required", preferences: null, settings: null };
+      writeAttempted = true;
+      store.setItem(key, serialized);
+      if (store.getItem(key) !== serialized || activeAccountScope(getScope) !== scope) {
+        rollback();
+        if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required", preferences: null, settings: null };
         return { success: false, status: "storage_failed", preferences: null, settings: null };
       }
     } catch {
+      rollback();
       return { success: false, status: "storage_failed", preferences: null, settings: null };
     }
     return { success: true, status: "saved", preferences, settings: preferences };
@@ -263,20 +279,30 @@ export function createDictationPreferenceStore({
     try { preferences = normalizeDictationPreferences(value); }
     catch (error) { return { success: false, status: "invalid_input", error: error.message, preferences: null, settings: null }; }
     const store = getStorage();
-    if (!store) return { success: false, status: "unavailable", preferences: null, settings: null };
-    if (identity === null) return write(scope, store, preferences);
-    const current = load({ applicationId: identity });
-    if (!current.success) return { success: false, status: current.status, preferences: null, settings: null };
-    if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required", preferences: null, settings: null };
-    const apps = current.settings.applications.filter((app) => app.applicationId !== identity);
-    apps.push({ applicationId: identity, preferences: { language: preferences.language, corrections: preferences.corrections, snippets: preferences.snippets } });
+    if (!store || !["object", "function"].includes(typeof store)) return { success: false, status: "unavailable", preferences: null, settings: null };
+    if (mutationInProgress || storesBeingMutated.has(store)) return { success: false, status: "storage_failed", preferences: null, settings: null };
+    mutationInProgress = true;
+    storesBeingMutated.add(store);
     try {
+      const current = load({ applicationId: identity });
+      if (!current.success) return { success: false, status: current.status, preferences: null, settings: null };
+      if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required", preferences: null, settings: null };
+      if (identity === null) {
+        // A global editor only changes global fields; current app overrides are authoritative.
+        const settings = normalizeDictationPreferences({ ...preferences, applications: current.settings.applications });
+        return write(scope, store, settings);
+      }
+      const apps = current.settings.applications.filter((app) => app.applicationId !== identity);
+      apps.push({ applicationId: identity, preferences: { language: preferences.language, corrections: preferences.corrections, snippets: preferences.snippets } });
       const settings = normalizeDictationPreferences({ ...current.settings, applications: apps });
       const result = write(scope, store, settings);
       if (result.success) result.preferences = resolveDictationPreferences(settings, identity);
       return result;
     } catch (error) {
       return { success: false, status: "invalid_input", error: error.message, preferences: null, settings: null };
+    } finally {
+      mutationInProgress = false;
+      storesBeingMutated.delete(store);
     }
   }
 
@@ -287,25 +313,53 @@ export function createDictationPreferenceStore({
     const scope = activeAccountScope(getScope);
     if (!scope) return { success: false, status: "account_required" };
     const store = getStorage();
-    if (!store) return { success: false, status: "unavailable" };
-    if (identity !== null) {
-      const current = load({ applicationId: identity });
-      if (!current.success) return { success: false, status: current.status };
-      if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required" };
-      const settings = normalizeDictationPreferences({
-        ...current.settings,
-        applications: current.settings.applications.filter((app) => app.applicationId !== identity),
-      });
-      const result = write(scope, store, settings);
-      if (result.success) {
-        result.status = "cleared";
-        result.preferences = resolveDictationPreferences(settings, identity);
+    if (!store || !["object", "function"].includes(typeof store)) return { success: false, status: "unavailable" };
+    if (mutationInProgress || storesBeingMutated.has(store)) return { success: false, status: "storage_failed" };
+    mutationInProgress = true;
+    storesBeingMutated.add(store);
+    try {
+      if (identity !== null) {
+        const current = load({ applicationId: identity });
+        if (!current.success) return { success: false, status: current.status };
+        if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required" };
+        const settings = normalizeDictationPreferences({
+          ...current.settings,
+          applications: current.settings.applications.filter((app) => app.applicationId !== identity),
+        });
+        const result = write(scope, store, settings);
+        if (result.success) {
+          result.status = "cleared";
+          result.preferences = resolveDictationPreferences(settings, identity);
+        }
+        return result;
       }
-      return result;
+      const key = getAccountStorageKey(STORAGE_KEY, scope);
+      let previous;
+      let previousRead = false;
+      let removeAttempted = false;
+      const rollback = () => {
+        if (!previousRead || !removeAttempted || previous == null) return;
+        try { store.setItem(key, previous); } catch { /* Report failure even when storage cannot be restored. */ }
+      };
+      try {
+        previous = store.getItem(key);
+        previousRead = true;
+        if (activeAccountScope(getScope) !== scope) return { success: false, status: "account_required" };
+        removeAttempted = true;
+        store.removeItem(key);
+        if (store.getItem(key) !== null || activeAccountScope(getScope) !== scope) {
+          rollback();
+          return { success: false, status: activeAccountScope(getScope) !== scope ? "account_required" : "storage_failed" };
+        }
+      } catch {
+        rollback();
+        return { success: false, status: "storage_failed" };
+      }
+      return { success: true, status: "cleared" };
+    } finally {
+      mutationInProgress = false;
+      storesBeingMutated.delete(store);
     }
-    try { store.removeItem(getAccountStorageKey(STORAGE_KEY, scope)); }
-    catch { return { success: false, status: "storage_failed" }; }
-    return { success: true, status: "cleared" };
   }
 
   return Object.freeze({ load, save, clear });

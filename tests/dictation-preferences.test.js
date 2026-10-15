@@ -150,20 +150,28 @@ test("per-application preferences are bounded, account-scoped overrides of the g
   assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "ar-IQ");
   assert.deepEqual(store.load({ applicationId: "mail.desktop" }).preferences.snippets, [{ name: "signature", text: "Hello" }]);
 
+  // The global editor only knows global fields and may send an empty app list.
+  // Saving that draft must retain the current account's app overrides.
+  const globalDraft = { language: "ku-Arab", corrections: [], snippets: [], applications: [] };
+  assert.equal(store.save(globalDraft).success, true);
+  assert.equal(store.load().preferences.language, "ku-Arab");
+  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "ar-IQ");
+  assert.deepEqual(store.load({ applicationId: "mail.desktop" }).preferences.snippets, [{ name: "signature", text: "Hello" }]);
+
   const otherApp = store.load({ applicationId: "editor.desktop" }).preferences;
-  assert.equal(otherApp.language, "fr-FR");
-  assert.deepEqual(otherApp.corrections, [{ from: "hey", to: "bonjour" }]);
+  assert.equal(otherApp.language, "ku-Arab");
+  assert.deepEqual(otherApp.corrections, []);
   assert.deepEqual(otherApp.snippets, []);
-  assert.equal(store.load().preferences.language, "fr-FR");
+  assert.equal(store.load().preferences.language, "ku-Arab");
 
   scope = "account:app-b";
   assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "en-US");
   scope = "account:app-a";
   const cleared = store.clear({ applicationId: "mail.desktop" });
   assert.equal(cleared.success, true);
-  assert.equal(cleared.preferences.language, "fr-FR");
-  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "fr-FR");
-  assert.equal(store.load().preferences.language, "fr-FR");
+  assert.equal(cleared.preferences.language, "ku-Arab");
+  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "ku-Arab");
+  assert.equal(store.load().preferences.language, "ku-Arab");
 });
 
 test("application identity and app preference payloads fail closed on invalid or hostile input", () => {
@@ -216,4 +224,49 @@ test("an account switch during an app save cannot copy one account's settings in
   assert.equal(saved.success, false);
   assert.equal(saved.status, "account_required");
   assert.equal(storage.values.size, 0);
+});
+
+test("global save fails closed when the account changes during its preservation read", () => {
+  const storage = new MemoryStorage();
+  const scopes = ["account:before", "account:after", "account:after"];
+  const store = createDictationPreferenceStore({ storageProvider: () => storage, getScope: () => scopes.shift() ?? "account:after" });
+  const saved = store.save({ language: "ar-IQ", corrections: [], snippets: [] });
+  assert.equal(saved.success, false);
+  assert.equal(saved.status, "account_required");
+  assert.equal(storage.values.size, 0);
+});
+
+test("reentrant preference writes are rejected while a global save preserves app overrides", () => {
+  const storage = new MemoryStorage();
+  const scope = "account:reentrant";
+  let store;
+  let nestedStore;
+  let reentrantResult;
+  let runReentrant = false;
+  const guardedStorage = {
+    getItem(key) {
+      if (runReentrant) {
+        runReentrant = false;
+        reentrantResult = nestedStore.save({ language: "ar-IQ", corrections: [], snippets: [] }, { applicationId: "mail.desktop" });
+      }
+      return storage.getItem(key);
+    },
+    setItem(key, value) {
+      if (runReentrant) {
+        runReentrant = false;
+        reentrantResult = nestedStore.save({ language: "ar-IQ", corrections: [], snippets: [] }, { applicationId: "mail.desktop" });
+      }
+      storage.setItem(key, value);
+    },
+    removeItem(key) { storage.removeItem(key); },
+  };
+  store = createDictationPreferenceStore({ storageProvider: () => guardedStorage, getScope: () => scope });
+  nestedStore = createDictationPreferenceStore({ storageProvider: () => guardedStorage, getScope: () => scope });
+  assert.equal(store.save({ language: "fr-FR", corrections: [], snippets: [] }, { applicationId: "mail.desktop" }).success, true);
+  runReentrant = true;
+  const saved = store.save({ language: "ku-Arab", corrections: [], snippets: [], applications: [] });
+  assert.equal(saved.success, true);
+  assert.equal(reentrantResult.status, "storage_failed");
+  assert.equal(store.load().preferences.language, "ku-Arab");
+  assert.equal(store.load({ applicationId: "mail.desktop" }).preferences.language, "fr-FR");
 });
