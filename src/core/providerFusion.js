@@ -176,9 +176,9 @@ function findConflicts(outputs) {
   return { conflicts, truncated };
 }
 
-function eligibleModels(mode, models, { manualProvider, permissions, sensitive }) {
+function eligibleModels(mode, models, { manualProvider, permissions, sensitive, requireRegisteredModels }) {
   const allowed = models.filter((model) => {
-    if (!isRegisteredModelSnapshot(model)) return false;
+    if (requireRegisteredModels && !isRegisteredModelSnapshot(model)) return false;
     const isLocal = model.local === true;
     if (!permissions.includes(isLocal ? "provider.local" : "provider.remote")) return false;
     if (!permissions.includes(`provider:${model.providerId}`)) return false;
@@ -252,11 +252,16 @@ export async function runProviderFusion({
   }
   if (signal?.aborted) return result("cancelled");
 
+  // Edge dispatch supplies models and entitlements from its authenticated
+  // server boundary. Browser/core dispatch instead uses the owner-bound local
+  // permission snapshot below.
+  const serverAuthority = typeof authorizeProviderCall === "function";
+
   const isScopeCurrent = () => {
     try {
-      return getAccountScope() === accountScope
-        && isProviderPermissionSnapshotCurrent(permissionSnapshot)
-        && isCurrent(accountScope) === true;
+      return isCurrent(accountScope) === true && (serverAuthority || (
+        getAccountScope() === accountScope && isProviderPermissionSnapshotCurrent(permissionSnapshot)
+      ));
     } catch {
       return false;
     }
@@ -270,19 +275,24 @@ export async function runProviderFusion({
       : selectModel({ intent, preferredProvider: manualProvider })), attempts: [] }
     : createProviderPlan({ intent }, providerModels);
   const permissionSnapshot = basePlan.permissionSnapshot;
-  if (accountScope !== getAccountScope() || !isProviderPermissionSnapshotCurrent(permissionSnapshot)) {
+  if (!serverAuthority && (accountScope !== getAccountScope() || !isProviderPermissionSnapshotCurrent(permissionSnapshot))) {
     return result("denied", { reason: "provider_permission_or_account_scope_stale" });
   }
   const grantedPermissions = new Set();
-  for (const { providerId, local } of permissionSnapshot.permittedModels) {
-    grantedPermissions.add(local ? "provider.local" : "provider.remote");
-    grantedPermissions.add(`provider:${providerId}`);
+  if (serverAuthority) {
+    for (const permission of permissions) grantedPermissions.add(permission);
+  } else {
+    for (const { providerId, local } of permissionSnapshot.permittedModels) {
+      grantedPermissions.add(local ? "provider.local" : "provider.remote");
+      grantedPermissions.add(`provider:${providerId}`);
+    }
   }
   const effectivePermissions = permissions.filter((permission) => grantedPermissions.has(permission));
   const candidates = eligibleModels(mode, basePlan.selected ? [basePlan.selected, ...basePlan.fallbacks] : [], {
     manualProvider,
     permissions: effectivePermissions,
     sensitive,
+    requireRegisteredModels: !serverAuthority,
   }).filter((model, index, models) => models.findIndex((candidate) => candidate.providerId === model.providerId) === index);
   const selected = mode === FUSION_MODES.MANUAL
     ? candidates.slice(0, 1)

@@ -309,6 +309,23 @@ test("the total deadline prevents a delayed primary from dispatching another pro
   assert.deepEqual(calls, ["fusion-primary"]);
 });
 
+test("a total deadline shorter than the provider timeout stops dispatch as time budget exhaustion", async () => {
+  providers();
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    providerTimeoutMs: 100,
+    maxDurationMs: 10,
+    invoke: async ({ providerId }) => {
+      calls.push(providerId);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { text: "42", confidence: 0.4, evidence: evidence(), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "time_budget_exhausted");
+  assert.deepEqual(calls, ["fusion-primary"]);
+});
+
 test("verification requires trusted provider and model provenance", async () => {
   let calls = 0;
   const response = await runProviderFusion({
