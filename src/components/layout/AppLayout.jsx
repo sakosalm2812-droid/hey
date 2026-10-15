@@ -33,6 +33,7 @@ import {
   Target,
   SlidersHorizontal,
   Wrench,
+  Layers3,
 } from "lucide-react";
 import { useEffect, useRef, useState, useCallback } from "react";
 
@@ -51,6 +52,7 @@ const sidebarNavItems = [
   { label: "Cosmos", path: "/cosmos", icon: Globe2, roles: ['user', 'admin'] },
   { label: "Forge", path: "/forge", icon: Hammer, roles: ['user', 'admin'] },
   { label: "Tools", path: "/tools", icon: Wrench, roles: ['user', 'admin'] },
+  { label: "Spaces", path: "/spaces", icon: Layers3, roles: ['user', 'admin'] },
   { label: "Memory", path: "/memory", icon: Brain, roles: ['user', 'admin'] },
   { label: "Tasks", path: "/tasks", icon: CheckSquare, roles: ['user', 'admin'] },
   { label: "Calendar", path: "/calendar", icon: CalendarDays, roles: ['user', 'admin'] },

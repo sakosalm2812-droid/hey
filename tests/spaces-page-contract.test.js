@@ -1,0 +1,60 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
+
+const page = await readFile(new URL("../src/SpacesPage.jsx", import.meta.url), "utf8");
+const accountHelpers = await readFile(new URL("../src/spacePageAccount.js", import.meta.url), "utf8");
+const routes = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
+const navigation = await readFile(new URL("../src/components/layout/AppLayout.jsx", import.meta.url), "utf8");
+
+test("Spaces page exposes accessible loading, empty, error, and retry states", () => {
+  assert.match(routes, /path="\/spaces"[^\n]*SpacesPage/);
+  assert.match(navigation, /label: "Spaces", path: "\/spaces"/);
+  assert.match(page, /<label htmlFor="space-prompt">/);
+  assert.match(page, /aria-describedby="space-prompt-help"/);
+  assert.match(page, /role="status" aria-live="polite"/);
+  assert.match(page, /role="alert"/);
+  assert.match(page, /No Spaces yet/);
+  assert.match(page, /onClick=\{loadSpaces\}/);
+});
+
+test("Space creation reviews exact private effects and requires an explicit confirm action", () => {
+  assert.match(page, /HEY\.spaces\.previewNaturalLanguageCreation\(\{ prompt \}\)/);
+  assert.match(page, /HEY\.spaces\.confirmNaturalLanguageCreation\(\{ previewId: pending\.previewId, confirm: true \}\)/);
+  assert.match(page, /result\.action !== "create_private_space"/);
+  assert.match(page, /result\.space\?\.visibility !== "private"/);
+  assert.match(page, /result\.space\?\.sharing !== "off"/);
+  assert.match(page, /result\.permissionsChanged !== false/);
+  assert.match(page, /result\.space\.accountScope !== `account:\$\{accountId\}`/);
+  assert.match(accountHelpers, /space\?\.accountScope === `account:\$\{accountId\}`/);
+  assert.match(page, /Confirm and create/);
+  assert.doesNotMatch(page, /accountScope\s*:/);
+});
+
+test("pending confirmation is invalidated on account switch and cannot confirm for a different signed-in user", () => {
+  assert.match(page, /const accountId = user\?\.id \|\| ""/);
+  assert.match(page, /setPreview\(null\)/);
+  assert.match(page, /\[accountId, refreshSpaces\]/);
+  assert.match(page, /spacePreviewMatchesAccount\(pending, accountId, accountRef\.current\)/);
+  assert.match(page, /preview\.accountId !== accountId/);
+  assert.match(page, /accountRef\.current !== accountId/);
+});
+
+test("account switch invalidates stale page previews and filters listed Spaces to the active account", () => {
+  const previewA = { previewId: "preview-a", accountId: "account-a" };
+  assert.equal(spacePreviewMatchesAccount(previewA, "account-a", "account-a"), true);
+  assert.equal(spacePreviewMatchesAccount(previewA, "account-b", "account-b"), false);
+  assert.equal(spacePreviewMatchesAccount(previewA, "account-a", "account-b"), false);
+  assert.equal(spacePreviewMatchesAccount(null, "account-a", "account-a"), false);
+
+  const mixed = [
+    { id: "a", accountScope: "account:account-a" },
+    { id: "b", accountScope: "account:account-b" },
+    { id: "missing" },
+  ];
+  assert.deepEqual(spacesForAccount(mixed, "account-a").map((space) => space.id), ["a"]);
+  assert.deepEqual(spacesForAccount(mixed, "account-b").map((space) => space.id), ["b"]);
+  assert.deepEqual(spacesForAccount(mixed, ""), []);
+  assert.deepEqual(spacesForAccount(null, "account-a"), []);
+});

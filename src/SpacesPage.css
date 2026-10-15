@@ -1,0 +1,98 @@
+.spaces-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(24px, 4vw, 56px);
+  color: var(--text-primary, #f5f2ec);
+}
+
+.spaces-page__header,
+.spaces-page__list-heading,
+.spaces-page__preview-heading,
+.spaces-page__form-footer,
+.spaces-page__actions,
+.spaces-page__card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.spaces-page__header { align-items: flex-start; margin-bottom: 28px; }
+.spaces-page__eyebrow { margin: 0 0 9px; color: var(--gold-primary, #d6b66b); font-size: 11px; letter-spacing: .15em; text-transform: uppercase; }
+.spaces-page h1 { margin: 0; font-family: "Instrument Serif", "DM Serif Display", serif; font-size: clamp(42px, 6vw, 70px); font-weight: 400; line-height: 1; }
+.spaces-page__intro { max-width: 660px; margin: 14px 0 0; color: var(--text-secondary, #a7a4ae); line-height: 1.65; }
+.spaces-page__privacy,
+.spaces-page__private-label { display: inline-flex; align-items: center; gap: 7px; color: #83d9ae; font-size: 12px; }
+.spaces-page__privacy { flex: none; padding: 9px 12px; border: 1px solid rgba(131, 217, 174, .28); border-radius: 999px; }
+
+.spaces-page__create,
+.spaces-page__preview,
+.spaces-page__empty,
+.spaces-page__message,
+.spaces-page__card {
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, .035);
+}
+
+.spaces-page__create { padding: clamp(18px, 3vw, 28px); }
+.spaces-page__create label { display: block; margin-bottom: 7px; font-size: 16px; font-weight: 600; }
+.spaces-page__hint,
+.spaces-page__list-heading p { margin: 0; color: var(--text-secondary, #a7a4ae); font-size: 13px; line-height: 1.55; }
+.spaces-page__create textarea { display: block; width: 100%; min-height: 86px; margin-top: 14px; padding: 13px 15px; resize: vertical; border: 1px solid rgba(255, 255, 255, .14); border-radius: 13px; background: rgba(0, 0, 0, .13); color: var(--text-primary, #f5f2ec); font: inherit; line-height: 1.5; }
+.spaces-page__create textarea::placeholder { color: var(--text-secondary, #a7a4ae); opacity: .8; }
+.spaces-page__create textarea:focus-visible,
+.spaces-page button:focus-visible { outline: 2px solid var(--gold-primary, #d6b66b); outline-offset: 3px; }
+.spaces-page__form-footer { margin-top: 13px; color: var(--text-secondary, #a7a4ae); font-size: 12px; }
+.spaces-page button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 15px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 12px; background: transparent; color: var(--text-primary, #f5f2ec); font: inherit; cursor: pointer; }
+.spaces-page button:disabled { cursor: not-allowed; opacity: .58; }
+.spaces-page .spaces-page__primary { border-color: rgba(214, 182, 107, .42); background: rgba(214, 182, 107, .15); }
+.spaces-page__icon-button { width: 38px; min-width: 38px; padding: 0 !important; }
+
+.spaces-page__preview { margin-top: 20px; padding: clamp(18px, 3vw, 26px); border-color: rgba(214, 182, 107, .25); }
+.spaces-page__preview h2,
+.spaces-page__list-heading h2 { margin: 0; font-family: "Instrument Serif", "DM Serif Display", serif; font-size: 29px; font-weight: 400; }
+.spaces-page__preview-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 22px 0 14px; }
+.spaces-page__preview-details div { padding: 13px; border-radius: 13px; background: rgba(255, 255, 255, .035); }
+.spaces-page__preview-details dt { color: var(--text-secondary, #a7a4ae); font-size: 11px; }
+.spaces-page__preview-details dd { margin: 5px 0 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.spaces-page__effect { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--text-secondary, #a7a4ae); font-size: 13px; line-height: 1.5; }
+.spaces-page__effect svg { flex: none; margin-top: 1px; color: #83d9ae; }
+.spaces-page__actions { justify-content: flex-end; margin-top: 20px; }
+
+.spaces-page__status,
+.spaces-page__alert,
+.spaces-page__notice { display: flex; align-items: center; gap: 9px; margin: 16px 0 0; padding: 13px 15px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+.spaces-page__status { color: var(--text-secondary, #a7a4ae); }
+.spaces-page__alert { border: 1px solid rgba(255, 155, 139, .25); background: rgba(255, 155, 139, .07); color: #ffb0a4; }
+.spaces-page__notice { border: 1px solid rgba(131, 217, 174, .22); background: rgba(131, 217, 174, .06); color: #9be2bb; }
+.spaces-page__list-section { margin-top: 42px; }
+.spaces-page__list-heading { align-items: flex-end; margin-bottom: 16px; }
+.spaces-page__count { color: var(--text-secondary, #a7a4ae); font-size: 12px; white-space: nowrap; }
+.spaces-page__empty,
+.spaces-page__message { display: flex; align-items: center; gap: 14px; min-height: 110px; padding: 22px; color: var(--text-secondary, #a7a4ae); }
+.spaces-page__empty > svg { color: var(--gold-primary, #d6b66b); flex: none; }
+.spaces-page__empty h3 { margin: 0 0 5px; color: var(--text-primary, #f5f2ec); font-size: 16px; }
+.spaces-page__empty p,
+.spaces-page__message p { margin: 0; font-size: 13px; line-height: 1.5; }
+.spaces-page__message--error { color: #ffb0a4; }
+.spaces-page__message .spaces-page__secondary { margin-left: auto; }
+.spaces-page__list { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+.spaces-page__card { min-width: 0; padding: 17px 19px; }
+.spaces-page__card-icon { display: grid; width: 39px; height: 39px; flex: none; place-items: center; border-radius: 13px; background: rgba(214, 182, 107, .13); color: var(--gold-primary, #d6b66b); }
+.spaces-page__card-copy { flex: 1; min-width: 0; }
+.spaces-page__card-copy h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.spaces-page__card-copy p { margin: 4px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; }
+.spaces-page__card time { color: var(--text-secondary, #a7a4ae); font-size: 12px; white-space: nowrap; }
+.spaces-page__spin { animation: spaces-spin .9s linear infinite; }
+.spaces-page__sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@keyframes spaces-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 650px) {
+  .spaces-page__header { flex-direction: column; }
+  .spaces-page__privacy { align-self: flex-start; }
+  .spaces-page__card { align-items: flex-start; flex-wrap: wrap; }
+  .spaces-page__card-copy { width: calc(100% - 60px); flex: initial; }
+  .spaces-page__private-label { margin-left: 57px; }
+  .spaces-page__list-heading { align-items: flex-start; }
+}
