@@ -8,6 +8,8 @@ const ACTIVITY_FIELDS = new Set(["title", "instructions", "minutes"]);
 const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
 const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
 const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "studentDataPolicy", "provenance", "safety", "verification"]);
+const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
+const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "grades", "roster", "names", "email", "phone", "dateOfBirth",
@@ -25,8 +27,10 @@ const SENSITIVE_CONTENT = [
 /**
  * Teacher Mode contract for the frontend: provide the active account scope and
  * Space ID twice (request scope plus trusted current context), then call this
- * builder and verifier before offering the Markdown export. This is a local
- * artifact contract; it does not call or replace HEY Brain, Cosmos, or Forge.
+ * async builder and verifier, then await the Markdown export before offering
+ * it. Verification rechecks a SHA-256 content digest for stale edits; this
+ * digest detects changes but is not a signature or authenticity proof. This is
+ * a local artifact contract; it does not call or replace HEY Brain, Cosmos, or Forge.
  * Do not pass student records. Curriculum references remain teacher-supplied
  * and unverified, and exported lessons always carry a teacher-review notice.
  */
@@ -125,7 +129,19 @@ function escapeMarkdown(value) {
   return String(value).replace(/[\\`*_{}[\]()#+.!|>]/g, "\\$&").replace(/[\r\n]+/g, " ");
 }
 
-export function buildTeacherLessonArtifact(input) {
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+async function digestLesson(lesson) {
+  if (!globalThis.crypto?.subtle) throw new Error("Web Crypto SHA-256 is required to verify teacher lesson exports");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(lesson)));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export async function buildTeacherLessonArtifact(input) {
   assertOnlyDataFields(input, "Lesson request", REQUEST_FIELDS);
   const accountScope = requiredText(input.accountScope, "Account scope", 240);
   const workspaceId = requiredText(input.workspaceId, "Workspace ID", 200);
@@ -169,6 +185,7 @@ export function buildTeacherLessonArtifact(input) {
   const safetyReview = detectSafetyReview(lesson);
   const createdAt = input.createdAt || new Date().toISOString();
   if (!Number.isFinite(Date.parse(createdAt))) throw new TypeError("createdAt must be a valid date");
+  const contentDigest = await digestLesson(lesson);
   const artifact = {
     type: "document",
     title: lesson.title,
@@ -192,13 +209,13 @@ export function buildTeacherLessonArtifact(input) {
         reviewReasons: safetyReview,
         teacherReviewRequiredBeforeUse: true,
       },
-      verification: { valid: true, checks: { accountWorkspaceBound: true, studentDataAbsent: true, objectivesPresent: true, assessmentPresent: true, activityTimeWithinDuration: true } },
+      verification: { valid: true, checks: { accountWorkspaceBound: true, studentDataAbsent: true, objectivesPresent: true, assessmentPresent: true, activityTimeWithinDuration: true }, contentDigest },
     },
   };
   return freezeDeep(artifact);
 }
 
-export function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId } = {}) {
+export async function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId } = {}) {
   let lessonShapeSafe = false;
   let detectedSafetyReview = null;
   try {
@@ -206,6 +223,8 @@ export function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceI
     assertOnlyDataFields(artifact.metadata, "Artifact metadata", METADATA_FIELDS);
     assertOnlyDataFields(artifact.metadata.provenance, "Artifact provenance", new Set(["generatedBy", "method", "references", "createdAt", "factualClaimsVerified"]));
     assertOnlyDataFields(artifact.metadata.safety, "Artifact safety metadata", new Set(["gradeBand", "reviewRequired", "reviewReasons", "teacherReviewRequiredBeforeUse"]));
+    assertOnlyDataFields(artifact.metadata.verification, "Artifact verification", VERIFICATION_FIELDS);
+    assertOnlyDataFields(artifact.metadata.verification.checks, "Artifact verification checks", VERIFICATION_CHECK_FIELDS);
     const lesson = artifact.content;
     assertOnlyDataFields(lesson, "Lesson content", new Set(["title", "subject", "gradeBand", "durationMinutes", "learningObjectives", "curriculumReferences", "resources", "activities", "assessment"]));
     scanText(lesson.title, "Lesson title");
@@ -240,7 +259,16 @@ export function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceI
   } catch {
     // Imported, mutated, and otherwise malformed artifact payloads fail verification.
   }
+  let contentDigest;
+  try {
+    contentDigest = typeof artifact?.metadata?.verification?.contentDigest === "string"
+      && /^sha256:[a-f0-9]{64}$/.test(artifact.metadata.verification.contentDigest)
+      && await digestLesson(artifact.content) === artifact.metadata.verification.contentDigest;
+  } catch {
+    contentDigest = false;
+  }
   const checks = {
+    workflow: artifact?.metadata?.workflow === "teacher_lesson_plan",
     artifactType: artifact?.type === "document",
     titleMatchesContent: artifact?.title === artifact?.content?.title,
     lessonShapeSafe,
@@ -254,6 +282,10 @@ export function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceI
       && JSON.stringify(artifact?.metadata?.provenance?.references) === JSON.stringify(artifact?.content?.curriculumReferences)
       && Number.isFinite(Date.parse(artifact?.metadata?.provenance?.createdAt || "")),
     teacherReviewRequired: artifact?.metadata?.safety?.teacherReviewRequiredBeforeUse === true,
+    verificationEvidence: artifact?.metadata?.verification?.valid === true
+      && VERIFICATION_CHECK_FIELDS.size === Object.keys(artifact?.metadata?.verification?.checks || {}).length
+      && [...VERIFICATION_CHECK_FIELDS].every((field) => artifact.metadata.verification.checks[field] === true),
+    contentDigest,
     safetyGradeMatchesContent: artifact?.metadata?.safety?.gradeBand === artifact?.content?.gradeBand,
     objectives: Array.isArray(artifact?.content?.learningObjectives) && artifact.content.learningObjectives.length > 0,
     assessment: Boolean(artifact?.content?.assessment?.prompt && artifact.content.assessment.expectedLearning),
@@ -264,8 +296,8 @@ export function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceI
   return Object.freeze({ valid: Object.values(checks).every(Boolean), checks });
 }
 
-export function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
-  const verification = verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId });
+export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
+  const verification = await verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId });
   if (!verification.valid) throw new Error("Lesson artifact failed verification for the active account and workspace");
   if (artifact.metadata.safety.reviewRequired) {
     if (!isPlainRecord(safetyReview)) throw new Error("Teacher safety review is required for the active account and workspace before exporting this lesson");
