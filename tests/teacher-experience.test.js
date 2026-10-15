@@ -538,30 +538,30 @@ test("wrong-role and cross-class journey attempts never call the batch persisten
   }
 });
 
-test("teacher journey supports a no-write preview followed by explicit receipt-checked save", async () => {
-  let forgeWrites;
-  const result = await withForgePersistence(async (writes) => {
-    const prepared = await HEY.teacher.prepareLessonWorksheetJourney({
-      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+test("Teacher preview performs no writes, then the explicit atomic save returns verified readback", async () => {
+  const request = {
+    lesson: lessonInput(),
+    assessment: assessmentInput(),
+    context: { ...teacherContext(), journeyCreatedAt: "2026-10-15T09:00:00.000Z" },
+    journeyId: "e0e5c6a1-29a6-4ccb-9ca8-f57a7073fe93",
+  };
+  await withForgeBatchPersistence(async (calls, rowsById) => {
+    const preview = await HEY.teacher.prepareLessonWorksheetJourney({
+      lesson: request.lesson, assessment: request.assessment, context: request.context,
     });
-    assert.equal(writes.length, 0, "preview preparation must not persist artifacts");
-    assert.equal(prepared.teacherArtifact.metadata.audience, "teacher_only");
-    assert.equal(prepared.studentArtifact.metadata.audience, "student");
-    assert.doesNotMatch(JSON.stringify(prepared.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
+    assert.equal(calls.length, 0, "preview preparation must not persist artifacts");
+    assert.equal(preview.teacherArtifact.metadata.audience, "teacher_only");
+    assert.equal(preview.studentArtifact.metadata.audience, "student");
+    assert.doesNotMatch(JSON.stringify(preview.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
 
-    const saved = await HEY.teacher.saveLessonWorksheetJourney(prepared, teacherContext());
-    forgeWrites = writes;
-    return { prepared, saved };
+    const saved = await HEY.teacher.createLessonWorksheetJourney(request);
+    assert.equal(calls.length, 1, "explicit save should make one atomic batch request");
+    assert.equal(rowsById.size, 3);
+    assert.equal(saved.saved.lesson.metadata.artifactContract, "hey.teacher.lesson.v1");
+    assert.equal(saved.saved.teacherArtifact.metadata.audience, "teacher_only");
+    assert.equal(saved.saved.studentArtifact.metadata.audience, "student");
+    assert.doesNotMatch(JSON.stringify(saved.saved.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
   });
-  assert.equal(forgeWrites.length, 3);
-  assert.equal(result.saved.saved.lesson.metadata.artifactContract, "hey.teacher.lesson.v1");
-  assert.equal(result.saved.saved.teacherArtifact.metadata.audience, "teacher_only");
-  assert.equal(result.saved.saved.studentArtifact.metadata.audience, "student");
-  await assert.rejects(HEY.teacher.saveLessonWorksheetJourney(result.prepared, teacherContext()), /already started saving/);
-  await assert.rejects(HEY.teacher.saveLessonWorksheetJourney({
-    ...result.prepared,
-    studentArtifact: { ...result.prepared.studentArtifact },
-  }, teacherContext()), /active Teacher runtime/);
 });
 
 test("assessment inputs reject student data, accessors, unsafe markup, and objectives outside the lesson", async () => {

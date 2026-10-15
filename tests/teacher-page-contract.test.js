@@ -38,7 +38,7 @@ test("Teacher route and navigation reach a fresh server-claim guarded workflow",
   assert.match(page, /claims\.hey_class_ids/);
   assert.match(page, /listRecords\(teacher\.userId, "project"\)/);
   assert.match(page, /HEY\.teacher\.prepareLessonWorksheetJourney/);
-  assert.match(page, /HEY\.teacher\.saveLessonWorksheetJourney/);
+  assert.match(page, /HEY\.teacher\.createLessonWorksheetJourney/);
   assert.match(page, /saveInFlightRef\.current/);
   assert.match(page, /Save all three to Forge/);
   assert.match(page, /Build lesson preview/);
