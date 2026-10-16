@@ -1,4 +1,36 @@
-## Latest execution checkpoint — 2026-10-16 (Asia/Baghdad)
+## Latest execution checkpoint — 2026-10-16 20:22 Asia/Baghdad
+
+Coordinator branch `codex/resume-emergency-2026-10-14` is pushed through `ccd21ccea8e542d3f6aee7cd8932f7ce248fcb46`; previous pushed documentation checkpoint was `8aedbe7`. New integrated Space backups are in `f364301` (private account backup service/UI/RPC) and `226c3b4` (SQL-side validation parity); `ccd21cc` also rejects names over 80 UTF-16 code units client-side to match SQL. Full Node tests pass **877/877**; focused backup tests pass **6/6** with adversarial validation included; full ESLint passes; production build passes with **2,783 modules**. `git diff --check` is clean. The intentionally untracked `docs/requirements/v3-agent-pack/` remains preserved and unstaged.
+
+The Spaces SQL migration has only static/contract-test verification because no PostgreSQL or live Supabase service is available. Account backup journeys, authenticated classes, providers, real device I/O and production deploy remain **UNVERIFIED**. The real local frontend is available at `http://127.0.0.1:5175`; browser evidence currently covers the public `/download` route. `/login` cannot authenticate because Supabase URL and public anon key are not configured.
+
+### Concurrent specialist continuation
+
+All existing specialist conversations were sent a continuation prompt concurrently on 2026-10-16, requesting GPT-6 Luna with medium reasoning. Their prompts point to coordinator `ccd21cc`, preserve existing branches, avoid duplicate completed features, and require a distinct implementation, adversarial tests, focused lint/build and exact receipts. No follow-up result is integrated yet.
+
+| Specialist | Codex task | Latest known source branch / commit before current follow-up | Current state |
+|---|---|---|---|
+| Frontend Director | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/frontend-purpose-pins-44c5ef8` / `e668fd8` | Resumed; new distinct frontend gap requested. |
+| Onboarding & Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-backend-contract-gap` / `bc5c6b3` | Backup service and SQL validation integrated; resumed for another distinct Spaces contract gap. |
+| Universal Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-permission-revoke-1016` / `ea4b309` | Resumed for a distinct catalog/execution lifecycle gap. |
+| Edge & Everywhere | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-native-capabilities-c62f076` / `d249203` | Resumed for a distinct Edge/native authorization gap. |
+| Gesture Control | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-selected-camera-recovery` / `de3db5b` | Resumed for a distinct camera/calibration recovery gap. |
+| Flow & Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-dictation-current-c62f076` / `62e0e47` | Resumed for a distinct dictation/flow recovery gap. |
+| VoiceOS & Computer Control | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/voiceos-next-c62f076` / `6667a22` | Resumed for a distinct preview/review/recovery gap. |
+| Teacher Experience | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-question-bank-035ce28` / `4d895e0`; handout security source `6668f46` | Resumed for a distinct Teacher journey; no live Forge/database evidence. |
+| HEY One Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-provider-execution-receipt-44c5ef8` / `7fd5477` | Resumed for distinct provider reliability; no live inference evidence. |
+| UltraSparse Research | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-margin-abstention` / `9ed7962` | Resumed for a distinct routing gap; heuristic remains uncalibrated. |
+| Fusion Multi-Model | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-partial-failure` / `a0299a6` | Resumed for a distinct fusion reliability gap; live providers unverified. |
+
+### Exact next actions
+
+1. Collect the eleven concurrent continuation receipts and independently inspect each branch diff; integrate only nonduplicative work with passing focused checks.
+2. Run full tests, lint, build and SPA route smoke after each safe integration batch; update this handoff and the step evidence map, commit and push checkpoints.
+3. Obtain disposable Supabase/Postgres credentials/configuration and a real authenticated test account before claiming database/RLS verification. Run provider, microphone/camera, native build/device and deployment journeys only where configured, recording blockers precisely.
+4. Keep all 47 program steps In progress or Incomplete until end-to-end working journeys and their applicable external integration evidence are demonstrated.
+
+---
+## Earlier execution checkpoint — 2026-10-16 (Asia/Baghdad)
 
 Coordinator branch `codex/resume-emergency-2026-10-14` is integrated through `fdfcd99d3e11b435b03431839474e78537f44c7f` (`Prioritize private answers in handout RLS`), parent `a37a3ca` (`Add reviewed activity handout export`). This source checkpoint is not yet pushed; after this documentation commit the coordinator will push the verified branch. Latest remote before the batch: `44c5ef80c4cdc8223d0b12b1ce7c25ca3da1ebcf`. Preserve the intentionally untracked `docs/requirements/v3-agent-pack/` extraction; do not stage it.
 
@@ -1076,3 +1108,4 @@ Existing task IDs are retained; no replacement tasks were created. Follow-up mod
 Worker 05 (`01a14073-de07-7a90-b8bb-08faadea17bc`) completed the regression port as `94c8d6f31d43a9260db404b802a5a59c03262fe0`, integrated at `b0c3ce1`. Workers 02, 07, 08 and 11 are idle/completed at their recorded checkpoints; 07's JS-only launch guard is still partial due the direct native IPC gap. Worker 08's page is integrated at `d88d6ce` and nav cleanup `ea48a2f`; both remain contingent on resolving the route duplication and account switch. All existing task IDs remain the recovery references; no replacement worker chats were created.
 
 Current root checkout has no uncommitted tracked source changes; keep `docs/requirements/v3-agent-pack/` untracked and preserved. The previous handoff checkpoint is pushed at `ef062dd`. The next actions are to fix the reachable Teacher route, review current-HEAD ports from 03/04/06/10, integrate only narrow verified commits, rerun full suite/build, and push the next checkpoint. Live Supabase URL/key, signed-in test account, provider credentials, Rust toolchain and device hardware remain unavailable, so authenticated service, real inference, native execution and camera journeys are still **UNVERIFIED**.
+

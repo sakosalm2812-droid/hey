@@ -1,4 +1,10 @@
-## Integrated execution delta — 2026-10-16, coordinator `fdfcd99`
+## Latest integrated execution delta — 2026-10-16, coordinator `ccd21cc`
+
+Private account-scoped Space backups now have a reviewable client/UI path, revision-checked owner-derived save RPC, authenticated row policy, and server-side parity validation for Space names, descriptions, preference IDs and revisions. The client also enforces the SQL UTF-16 name-length bound. Contract/adversarial tests reject invalid payloads before RPC and inspect the SQL guard; live database execution remains **UNVERIFIED**.
+
+At `ccd21cc`, the full Node suite passed **877/877**, focused backup tests passed **6/6**, full lint passed, and the production build passed (**2,783 modules**). Local browser verification still covers `/download` only; Supabase URL/key are absent, so authenticated UI and database behavior are not demonstrated. **All 47 steps remain In progress or Incomplete.**
+
+## Prior integrated execution delta — 2026-10-16, coordinator `fdfcd99`
 
 The current coordinator added verified local implementation slices across Steps 03, 07, 09–11, 16–17, 21, and 29. Latest full test evidence is **871/871**, full lint passes, production build passes (**2,782 modules**), and built-SPA route delivery passes for `/login`, `/download`, and the hashed entry bundle. These are development checks; no step is marked complete by this checkpoint.
 
