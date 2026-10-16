@@ -194,6 +194,90 @@ test("selected account camera persists and is passed to capture only after conse
   assert.equal(engine.getProfile(profile.id).cameraId, null);
 });
 
+test("camera track listeners and tracks are released on stop and account switch", async () => {
+  const originalScope = getAccountScope();
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousDocument = globalThis.document;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
+  setAccountScope("gesture-track-listener-account-a");
+  const { engine, profile } = makeEngine();
+  const tracks = [];
+  let cameraRequests = 0;
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        async getUserMedia() {
+          cameraRequests += 1;
+          const listeners = new Map();
+          const track = {
+            readyState: "live",
+            stopCount: 0,
+            addEventListener(name, listener) { listeners.set(name, listener); },
+            removeEventListener(name, listener) {
+              if (listeners.get(name) === listener) listeners.delete(name);
+            },
+            stop() { this.stopCount += 1; this.readyState = "ended"; },
+            listeners,
+          };
+          tracks.push(track);
+          return { getTracks: () => [track], getVideoTracks: () => [track] };
+        },
+      },
+    },
+  });
+  globalThis.document = {
+    createElement(kind) {
+      return kind === "video" ? { readyState: 1, srcObject: null, async play() {}, pause() {} } : {};
+    },
+  };
+  globalThis.requestAnimationFrame = () => 1;
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { mode: "test" })).code, "consent_required");
+    assert.equal(cameraRequests, 0);
+    assert.equal(tracks.length, 0);
+
+    assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "test" })).success, true);
+    const firstEndedHandler = tracks[0].listeners.get("ended");
+    assert.equal(typeof firstEndedHandler, "function");
+    assert.equal(tracks[0].listeners.size, 1);
+    engine.stopRecognition("user_stop");
+    assert.equal(tracks[0].listeners.size, 0);
+    assert.equal(tracks[0].stopCount, 1);
+    assert.equal(adapterStops, 1);
+    firstEndedHandler(); // A queued callback after stop must not re-enter cleanup.
+    assert.equal(tracks[0].stopCount, 1);
+    assert.equal(adapterStops, 1);
+
+    assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "test" })).success, true);
+    const secondEndedHandler = tracks[1].listeners.get("ended");
+    assert.equal(tracks[1].listeners.size, 1);
+    setAccountScope("gesture-track-listener-account-b");
+    engine.refreshAccountScope();
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(engine.getProfile(profile.id), null);
+    assert.equal(tracks[1].listeners.size, 0);
+    assert.equal(tracks[1].stopCount, 1);
+    assert.equal(adapterStops, 2);
+    secondEndedHandler();
+    assert.equal(tracks[1].stopCount, 1);
+    assert.equal(adapterStops, 2);
+  } finally {
+    if (engine.getRecognitionState() !== GESTURE_STATES.INACTIVE) engine.stopRecognition("test_cleanup");
+    setAccountScope(originalScope);
+    engine.refreshAccountScope();
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete globalThis.navigator;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousAnimationFrame;
+  }
+});
+
 test("a disconnected profile camera reports actionable recovery without silently switching devices", async () => {
   for (const name of ["NotFoundError", "OverconstrainedError", "ConstraintNotSatisfiedError"]) {
     const { engine, profile } = makeEngine();

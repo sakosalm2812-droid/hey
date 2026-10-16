@@ -259,6 +259,8 @@ export class GestureEngine {
     this.recognitionState = GESTURE_STATES.INACTIVE;
     this.mediaStream = null;
     this.videoElement = null;
+    this.cameraTrack = null;
+    this.cameraTrackEndedHandler = null;
     this.detector = null;
     this.recognitionAdapter = null;
     this.recognitionAbortController = null;
@@ -895,12 +897,15 @@ export class GestureEngine {
         return { success: false, error: "The camera feed ended before recognition could start.", code: "camera_track_ended" };
       }
       let cameraTrackEnded = false;
-      videoTrack.addEventListener?.("ended", () => {
+      const cameraTrackEndedHandler = () => {
         if (generation === this.recognitionGeneration) {
           cameraTrackEnded = true;
           this.stopRecognition("camera_track_ended");
         }
-      }, { once: true });
+      };
+      this.cameraTrack = videoTrack;
+      this.cameraTrackEndedHandler = cameraTrackEndedHandler;
+      videoTrack.addEventListener?.("ended", cameraTrackEndedHandler, { once: true });
       this.videoElement = globalThis.document.createElement("video");
       const video = this.videoElement;
       video.srcObject = stream;
@@ -1338,6 +1343,14 @@ export class GestureEngine {
     }
     this.cameraPermissionStatus = null;
     this.cameraPermissionHandler = null;
+
+    const cameraTrack = this.cameraTrack;
+    const cameraTrackEndedHandler = this.cameraTrackEndedHandler;
+    this.cameraTrack = null;
+    this.cameraTrackEndedHandler = null;
+    if (cameraTrack && cameraTrackEndedHandler) {
+      try { cameraTrack.removeEventListener?.("ended", cameraTrackEndedHandler); } catch { /* Track release still proceeds if listener cleanup fails. */ }
+    }
 
     if (this.visibilityTarget && this.visibilityHandler) {
       this.visibilityTarget.removeEventListener?.("visibilitychange", this.visibilityHandler);
