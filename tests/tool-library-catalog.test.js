@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import HEY from "../src/core/index.js";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
 import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, getToolLifecycleContract, getToolLifecycleActivity } from "../src/core/toolRegistry.js";
 import { seedPermissions, clearPermissions } from "../src/core/permissionManager.js";
@@ -583,6 +584,9 @@ test("unregister records an abort request and preserves account-scoped activity 
     assert.equal(getToolLifecycleActivity(name, {}).status, "denied");
     const afterUnregister = getToolLifecycleActivity(name, owner);
     assert.equal(afterUnregister.success, true);
+    assert.equal(HEY.tools.lifecycleActivity, getToolLifecycleActivity);
+    assert.deepEqual(HEY.tools.lifecycleActivity(name, owner), afterUnregister);
+    assert.equal(HEY.tools.lifecycleActivity(name, { user: { id: "attacker" } }).status, "denied");
     assert.ok(Object.isFrozen(afterUnregister.activity));
     assert.deepEqual(afterUnregister.activity.map(({ status }) => status), ["unregister_requested", "running", "starting"]);
     assert.equal(afterUnregister.activity[0].id, started.sessionId);
