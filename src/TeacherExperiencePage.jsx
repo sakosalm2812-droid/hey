@@ -87,6 +87,10 @@ export default function TeacherExperiencePage() {
   const [activityHandoutReviewAcknowledged, setActivityHandoutReviewAcknowledged] = useState(false);
   const [recoveryHint, setRecoveryHint] = useState(null);
   const [exports, setExports] = useState(null);
+  const [differentiatedHints, setDifferentiatedHints] = useState([]);
+  const [differentiatedExtensionPrompt, setDifferentiatedExtensionPrompt] = useState("");
+  const [differentiatedReviewAcknowledged, setDifferentiatedReviewAcknowledged] = useState(false);
+  const [differentiatedExport, setDifferentiatedExport] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [safetyAcknowledged, setSafetyAcknowledged] = useState(false);
@@ -104,6 +108,10 @@ export default function TeacherExperiencePage() {
     setActivityHandoutError("");
     setActivityHandoutReviewAcknowledged(false);
     setExports(null);
+    setDifferentiatedHints([]);
+    setDifferentiatedExtensionPrompt("");
+    setDifferentiatedReviewAcknowledged(false);
+    setDifferentiatedExport(null);
     setSafetyAcknowledged(false);
     setStatus("idle");
     setError("");
@@ -633,12 +641,75 @@ export default function TeacherExperiencePage() {
     }
   }
 
+  async function prepareDifferentiatedExports() {
+    if (!savedJourney || !preview || !differentiatedReviewAcknowledged
+      || !teacherOperationCanStart(busyRef.current, accountId)) return;
+    const operationAccountId = accountId;
+    const operationAccountScope = preview.expected.accountScope;
+    busyRef.current = operationAccountId;
+    setStatus("differentiating");
+    setError("");
+    setDifferentiatedExport(null);
+    try {
+      const freshAccess = await readCurrentTeacherAccess(preview.expected.userId);
+      if (freshAccess.userId !== preview.expected.userId || !hasActiveContext(preview.expected, freshAccess.classIds)) {
+        throw new Error("Teacher access changed. Sign in again with the assigned class before exporting.");
+      }
+      if (!teacherJourneyPersistenceMatches(savedJourney, { ...preview.expected, journeyId: preview.journeyId })) {
+        throw new Error("The saved worksheet no longer matches the selected Teacher account, class, and project.");
+      }
+      const worksheet = savedJourney.studentArtifact;
+      if (hasTeacherAnswerKeyField(worksheet.content)) {
+        throw new Error("Export stopped because the saved student worksheet contains a teacher-only field.");
+      }
+      const review = {
+        accountScope: preview.expected.accountScope,
+        workspaceId: preview.expected.workspaceId,
+        classId: preview.expected.classId,
+        reviewerId: preview.expected.userId,
+        reviewedAt: new Date().toISOString(),
+      };
+      const safetyReview = worksheet.metadata?.safety?.reviewRequired === true ? {
+        accountScope: review.accountScope,
+        workspaceId: review.workspaceId,
+        reviewerId: review.reviewerId,
+        reviewedAt: review.reviewedAt,
+      } : undefined;
+      const exported = await HEY.teacher.exportDifferentiatedWorksheetMarkdown(worksheet, {
+        accountScope: review.accountScope,
+        workspaceId: review.workspaceId,
+        classId: review.classId,
+        supportHints: differentiatedHints,
+        extensionPrompt: differentiatedExtensionPrompt,
+        teacherReview: review,
+        safetyReview,
+      });
+      if (hasTeacherAnswerKeyField(worksheet.content)) throw new Error("Student worksheet answer-key check failed.");
+      const confirmedAccess = await readCurrentTeacherAccess(preview.expected.userId);
+      if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)) {
+        throw new Error("Teacher access changed during differentiated export preparation.");
+      }
+      if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        throw new Error("Your account changed during differentiated export preparation.");
+      }
+      setDifferentiatedExport(exported);
+      setStatus("differentiated");
+    } catch (exportError) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+        setError(exportError?.message || "Differentiated worksheets could not be prepared.");
+        setStatus("differentiation-error");
+      }
+    } finally {
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
+    }
+  }
+
   const accessIsCurrent = !authLoading && Boolean(accountId) && teacherPageStateMatchesAccount(accessAccountId, accountId);
   const currentAccess = accessIsCurrent
     ? access
     : authLoading || accountId ? { status: "checking", classIds: [] } : { status: "identity-missing", classIds: [] };
   const accountIsCurrent = accessIsCurrent && currentAccess.status === "ready";
-  const busy = ["preparing", "saving", "recovering", "exporting"].includes(status)
+  const busy = ["preparing", "saving", "recovering", "exporting", "differentiating"].includes(status)
     || ["preparing", "saving", "exporting"].includes(activityHandoutStatus);
 
   return (
@@ -757,6 +828,33 @@ export default function TeacherExperiencePage() {
             {exports ? <div className="teacher-experience__outputs teacher-experience__exports" aria-live="polite">
               {[["Lesson plan", exports.lesson], ["Teacher-only answer key", exports.answerKey], ["Student worksheet", exports.worksheet]].map(([label, exported]) => <article key={exported.filename}><div><h3>{label}</h3><p>Access and content checks passed for this export.</p></div><button className="teacher-experience__secondary" type="button" onClick={() => downloadMarkdown(exported)}><Download size={15} aria-hidden="true" /> Download {exported.filename}</button><pre>{exported.content}</pre></article>)}
             </div> : null}
+            {savedJourney ? <section className="teacher-experience__handout" aria-labelledby="teacher-differentiated-heading">
+              <h3 id="teacher-differentiated-heading">Make three difficulty levels</h3>
+              <p>Add your own support hint for each saved worksheet question and one teacher-authored extension challenge. HEY preserves the original on-level prompts and does not invent answer content.</p>
+              {savedJourney.studentArtifact.content.questions.map((question, index) => <label key={`${index}-${question.prompt}`}>
+                Support hint for question {index + 1}
+                <textarea rows={2} maxLength={800} disabled={busy} value={differentiatedHints[index] || ""} onChange={(event) => {
+                  setDifferentiatedHints((current) => { const next = [...current]; next[index] = event.target.value; return next; });
+                  setDifferentiatedReviewAcknowledged(false);
+                  setDifferentiatedExport(null);
+                }} />
+              </label>)}
+              <label>Extension challenge
+                <textarea rows={2} maxLength={1200} disabled={busy} value={differentiatedExtensionPrompt} onChange={(event) => {
+                  setDifferentiatedExtensionPrompt(event.target.value);
+                  setDifferentiatedReviewAcknowledged(false);
+                  setDifferentiatedExport(null);
+                }} />
+              </label>
+              <div className="teacher-experience__review">
+                <label><input type="checkbox" disabled={busy} checked={differentiatedReviewAcknowledged} onChange={(event) => { setDifferentiatedReviewAcknowledged(event.target.checked); setDifferentiatedExport(null); }} /> I reviewed all three versions and will verify them before classroom use.</label>
+                <button type="button" className="teacher-experience__primary" onClick={prepareDifferentiatedExports} disabled={busy || !differentiatedReviewAcknowledged || differentiatedHints.length !== savedJourney.studentArtifact.content.questions.length || Array.from({ length: savedJourney.studentArtifact.content.questions.length }, (_, index) => !differentiatedHints[index]?.trim()).some(Boolean) || !differentiatedExtensionPrompt.trim()}>
+                  {status === "differentiating" ? <LoaderCircle className="teacher-experience__spin" size={17} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+                  {status === "differentiating" ? "Checking access and preparing levels…" : "Prepare printable level pack"}
+                </button>
+              </div>
+              {differentiatedExport ? <article className="teacher-experience__handout-export"><h4>Teacher-reviewed differentiated worksheets</h4><button type="button" className="teacher-experience__secondary" onClick={() => downloadMarkdown(differentiatedExport)}><Download size={15} aria-hidden="true" /> Download {differentiatedExport.filename}</button><pre>{differentiatedExport.content}</pre></article> : null}
+            </section> : null}
           </section> : null}
         </>
       ) : null}

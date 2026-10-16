@@ -7,6 +7,7 @@ import {
   buildTeacherLessonArtifact,
   buildTeacherWorksheetArtifact,
   exportTeacherAssessmentMarkdown,
+  exportTeacherDifferentiatedWorksheetMarkdown,
   exportTeacherLessonMarkdown,
   exportTeacherWorksheetMarkdown,
   saveTeacherActivityHandoutArtifact,
@@ -799,6 +800,72 @@ test("Teacher assessment artifacts derive from a scoped lesson and save/export t
   assert.match(worksheetExport.content, /Where does 1\/4 belong/);
   assert.doesNotMatch(worksheetExport.content, /One quarter is one of four equal parts|Learner places 1\/4|Success criteria|Answer:/);
   assert.match(worksheetExport.content, /Curriculum alignment and factual claims: not independently verified/);
+  const teacherReview = {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    reviewerId: "teacher-1", reviewedAt: "2026-10-16T12:00:00.000Z",
+  };
+  const differentiated = await exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["Mark four equal spaces, then count one."],
+    extensionPrompt: "Explain how you would place 3/4 and compare it with 1/2.",
+    teacherReview,
+  });
+  assert.equal(differentiated.filename, "differentiated-student-worksheets.md");
+  assert.match(differentiated.content, /## Support/);
+  assert.match(differentiated.content, /## On level/);
+  assert.match(differentiated.content, /## Extension/);
+  assert.match(differentiated.content, /Support hint: Mark four equal spaces/);
+  assert.match(differentiated.content, /Explain how you would place 3\/4/);
+  assert.match(differentiated.content, /Teacher review: teacher-1 at 2026-10-16T12:00:00\.000Z/);
+  assert.match(differentiated.content, /Answer key: omitted from all three student versions/);
+  assert.doesNotMatch(differentiated.content, /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: [], extensionPrompt: "Try another example", teacherReview,
+  }), /verified saved worksheet/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-2",
+    supportHints: ["Hint"], extensionPrompt: "Try another example", teacherReview,
+  }), /verified saved worksheet/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["Hint"], extensionPrompt: "Try another example",
+  }), /safe, bounded data/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["Hint"], extensionPrompt: "student@example.org", teacherReview,
+  }), /student contact information/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["learner name: Avery"], extensionPrompt: "Try another example", teacherReview,
+  }), /student-identifying information/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["Hint"], extensionPrompt: "<script>alert(1)</script>", teacherReview,
+  }), /active markup/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:other", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["Hint"], extensionPrompt: "Try another example",
+    teacherReview: { ...teacherReview, accountScope: "account:other" },
+  }), /verified saved worksheet/);
+  await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+    supportHints: ["Hint"], extensionPrompt: "Try another example",
+    teacherReview: { ...teacherReview, reviewerId: "peer-teacher" },
+  }), /review receipt must match/);
+  const originalGetUser = supabaseClient.auth.getUser;
+  try {
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "student-1",
+      app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    await assert.rejects(exportTeacherDifferentiatedWorksheetMarkdown(worksheet, {
+      accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+      supportHints: ["Hint"], extensionPrompt: "Try another example", teacherReview,
+    }), /Authenticated teacher access/);
+  } finally {
+    supabaseClient.auth.getUser = originalGetUser;
+  }
   await assert.rejects(saveTeacherWorksheetArtifact(worksheet, { ...teacherContext(), currentAccountScope: "account:other" }), /must match the active context/);
   await withForgePersistence(async () => {
     await assert.rejects(saveTeacherWorksheetArtifact(worksheet, teacherContext()), /Forge did not confirm durable artifact persistence/);
@@ -948,6 +1015,22 @@ test("saved teacher journeys reopen from persisted rows and reject incomplete or
       assert.equal(reopened.saved.lesson.metadata.journeyId, journeyId);
       assert.match(JSON.stringify(reopened.saved.teacherArtifact.content), /teacherAnswer/);
       assert.doesNotMatch(JSON.stringify(reopened.saved.studentArtifact.content), /teacherAnswer|One quarter is one of four equal parts/);
+      const recoveredPack = await HEY.teacher.exportDifferentiatedWorksheetMarkdown(reopened.saved.studentArtifact, {
+        accountScope: context.accountScope,
+        workspaceId: context.workspaceId,
+        classId: context.classId,
+        supportHints: ["Mark four equal spaces first."],
+        extensionPrompt: "Compare the location of 3/4 with 1/2.",
+        teacherReview: {
+          accountScope: context.accountScope,
+          workspaceId: context.workspaceId,
+          classId: context.classId,
+          reviewerId: "teacher-1",
+          reviewedAt: "2026-10-16T12:00:00.000Z",
+        },
+      });
+      assert.match(recoveredPack.content, /Compare the location of 3\/4/,
+        "a verified persisted recovery can continue into differentiated export");
       const recoveredHandout = await HEY.teacher.buildActivityHandoutArtifact(reopened.lesson, 0, context);
       assert.equal(recoveredHandout.content.type, "teacher_activity_handout");
       assert.doesNotMatch(JSON.stringify(recoveredHandout), /teacherAnswer|expectedLearning/);

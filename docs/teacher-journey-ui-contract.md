@@ -8,6 +8,10 @@ A Teacher can turn one selected activity from a verified lesson into a separate,
 
 After Forge confirms the saved handout, the Teacher may download a student-facing Markdown export using `HEY.teacher.exportActivityHandoutMarkdown(handout, { accountScope, workspaceId, classId, safetyReview })`. Export rechecks the authenticated teacher, account, workspace, class, source digest and artifact content. A review receipt matching the active account/workspace and handout author is required for every export. The file states that factual claims and curriculum alignment remain unverified; downloading it does not distribute it.
 
+## Differentiated worksheet pack
+
+After Forge confirms a lesson journey, the Teacher can prepare a three-level printable pack from the saved, answer-free worksheet with `HEY.teacher.exportDifferentiatedWorksheetMarkdown(worksheet, { accountScope, workspaceId, classId, supportHints, extensionPrompt, teacherReview, safetyReview })`. Supply one teacher-authored support hint for each existing worksheet question and one teacher-authored extension prompt. The on-level section preserves the verified worksheet prompts; the API does not generate or infer instructional facts. The teacher review receipt must match the worksheet author, account, project, and class. Export verifies the worksheet and current Teacher authorization, rejects personal data and active markup, and omits the answer key. This export does not write another Forge artifact or distribute materials to students.
+
 ## Request
 
 `lesson` accepts these fields:

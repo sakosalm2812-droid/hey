@@ -28,6 +28,7 @@ const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
 const PREPARED_TEACHER_JOURNEYS = new WeakSet();
 const BUILT_TEACHER_ACTIVITY_HANDOUTS = new WeakSet();
 const VERIFIED_PERSISTED_TEACHER_LESSONS = new WeakSet();
+const VERIFIED_PERSISTED_TEACHER_WORKSHEETS = new WeakSet();
 const PERSISTED_TEACHER_READBACK = Symbol("verified persisted Teacher journey readback");
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
@@ -1287,6 +1288,7 @@ export async function getTeacherLessonWorksheetJourney({ journeyId, context: con
     throw new Error("Forge returned a saved Teacher journey that failed content verification");
   }
   VERIFIED_PERSISTED_TEACHER_LESSONS.add(lesson);
+  VERIFIED_PERSISTED_TEACHER_WORKSHEETS.add(studentArtifact);
   const saved = Object.freeze({ lesson, teacherArtifact, studentArtifact });
   return Object.freeze({ journeyId, lesson, teacherArtifact, studentArtifact, saved, recovered: true });
 }
@@ -1389,13 +1391,25 @@ export async function exportTeacherAssessmentMarkdown(artifact, { accountScope, 
 export const exportTeacherAnswerKeyMarkdown = exportTeacherAssessmentMarkdown;
 
 export async function exportTeacherWorksheetMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
-  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact)) {
+  const isVerifiedPersistedReadback = Boolean(artifact && typeof artifact === "object"
+    && VERIFIED_PERSISTED_TEACHER_WORKSHEETS.has(artifact));
+  if (!artifact || typeof artifact !== "object"
+    || (!BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact) && !isVerifiedPersistedReadback)) {
     throw new Error("Only a worksheet artifact built in the active Teacher runtime can be exported");
   }
   if (!await canWriteTeacherArtifact(artifact, { accountScope, classId: artifact.metadata.classId })) {
     throw new Error("Authenticated teacher access to this account and class is required to export the student worksheet");
   }
-  const verification = await verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId });
+  const verificationInput = isVerifiedPersistedReadback ? {
+    type: artifact.type,
+    title: artifact.title,
+    description: artifact.description,
+    content: artifact.content,
+    metadata: artifact.metadata,
+    createdBy: artifact.createdBy,
+  } : artifact;
+  const verification = await verifyTeacherWorksheetArtifact(verificationInput, { accountScope, workspaceId },
+    isVerifiedPersistedReadback ? PERSISTED_TEACHER_READBACK : undefined);
   if (!verification.valid) throw new Error("Worksheet artifact failed verification for the active account and workspace");
   let stableArtifact;
   let stableSafetyReview;
@@ -1432,6 +1446,67 @@ export async function exportTeacherWorksheetMarkdown(artifact, { accountScope, w
   return Object.freeze({ filename: "student-worksheet.md", mimeType: "text/markdown", content: lines.join("\n") });
 }
 
+export async function exportTeacherDifferentiatedWorksheetMarkdown(artifact, {
+  accountScope, workspaceId, classId, supportHints, extensionPrompt, teacherReview, safetyReview,
+} = {}) {
+  let stableArtifact;
+  let stableHints;
+  let stableReview;
+  try {
+    stableArtifact = snapshotLessonData(artifact);
+    stableHints = snapshotLessonData(supportHints);
+    stableReview = snapshotLessonData(teacherReview);
+    assertDenseArray(stableHints, "Support hints", 20);
+    assertOnlyDataFields(stableReview, "Teacher review receipt", new Set([
+      "accountScope", "workspaceId", "classId", "reviewerId", "reviewedAt",
+    ]));
+  } catch {
+    throw new Error("Differentiated worksheet inputs and review receipt must be safe, bounded data");
+  }
+  if ((!BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact) && !VERIFIED_PERSISTED_TEACHER_WORKSHEETS.has(artifact))
+    || stableArtifact?.content?.type !== "teacher_worksheet"
+    || stableArtifact.metadata?.accountScope !== accountScope
+    || stableArtifact.metadata?.workspaceId !== workspaceId
+    || stableArtifact.metadata?.classId !== classId
+    || stableHints.length !== stableArtifact.content.questions?.length) {
+    throw new Error("A verified saved worksheet in the active account, project, and class is required");
+  }
+  const verifiedWorksheet = await exportTeacherWorksheetMarkdown(artifact, { accountScope, workspaceId, safetyReview });
+  const reviewerId = requiredText(stableReview.reviewerId, "Teacher reviewer", 200);
+  if (stableReview.accountScope !== accountScope || stableReview.workspaceId !== workspaceId
+    || stableReview.classId !== classId || reviewerId !== stableArtifact.createdBy
+    || !Number.isFinite(Date.parse(stableReview.reviewedAt || ""))) {
+    throw new Error("Teacher review receipt must match the saved worksheet author, account, project, and class");
+  }
+  const hints = stableHints.map((hint, index) => scanAssessmentText(hint, `Support hint ${index + 1}`, 800));
+  const challenge = scanAssessmentText(extensionPrompt, "Extension challenge", 1200);
+  const questions = stableArtifact.content.questions;
+  const worksheetSection = (heading, promptForQuestion, includeChallenge = false) => [
+    `## ${heading}`, "", `**${escapeMarkdown(stableArtifact.content.title)}**  `,
+    `**Subject:** ${escapeMarkdown(stableArtifact.content.subject)} · **Grade band:** ${escapeMarkdown(stableArtifact.content.gradeBand)}`, "",
+    "### Directions", escapeMarkdown(stableArtifact.content.directions), "",
+    "### Questions", ...questions.flatMap((question, index) => [
+      `#### ${index + 1}. ${escapeMarkdown(promptForQuestion(question, index))} (${question.points} points)`, "",
+    ]),
+    ...(includeChallenge ? [`#### ${questions.length + 1}. ${escapeMarkdown(challenge)} (extension challenge)`, ""] : []),
+  ];
+  const lines = [
+    `# Differentiated worksheet pack: ${escapeMarkdown(stableArtifact.content.title)}`, "",
+    "Teacher-authored support and extension content; review each version before classroom use.", "",
+    ...worksheetSection("Support", (question, index) => `${question.prompt}\n\nSupport hint: ${hints[index]}`),
+    "---", "", ...worksheetSection("On level", (question) => question.prompt),
+    "---", "", ...worksheetSection("Extension", (question) => question.prompt, true),
+    "---", "", "## Provenance and review",
+    `- Source worksheet digest: ${stableArtifact.content.sourceAssessmentDigest}`,
+    `- Teacher review: ${escapeMarkdown(reviewerId)} at ${new Date(stableReview.reviewedAt).toISOString()}`,
+    `- Student personal data: ${stableArtifact.metadata.studentDataPolicy}`,
+    "- Curriculum alignment and factual claims: not independently verified",
+    "- Answer key: omitted from all three student versions",
+  ];
+  if (!verifiedWorksheet.content) throw new Error("The saved worksheet could not be verified for export");
+  return Object.freeze({ filename: "differentiated-student-worksheets.md", mimeType: "text/markdown", content: lines.join("\n") });
+}
+
 export default {
   buildTeacherLessonArtifact,
   verifyTeacherLessonArtifact,
@@ -1450,6 +1525,7 @@ export default {
   verifyTeacherWorksheetArtifact,
   saveTeacherWorksheetArtifact,
   exportTeacherWorksheetMarkdown,
+  exportTeacherDifferentiatedWorksheetMarkdown,
   prepareTeacherLessonWorksheetJourney,
   createTeacherLessonWorksheetJourney,
   getTeacherLessonWorksheetJourney,

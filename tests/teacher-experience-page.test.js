@@ -74,6 +74,12 @@ test("real protected entrypoint uses the atomic journey API and keeps retry IDs 
   assert.match(page, /HEY\.teacher\.verifyActivityHandoutArtifact\(artifact, context\)/);
   assert.match(page, /HEY\.teacher\.saveActivityHandoutArtifact\(artifact, context\)/);
   assert.match(page, /HEY\.teacher\.exportActivityHandoutMarkdown\(artifact,/);
+  assert.match(page, /HEY\.teacher\.exportDifferentiatedWorksheetMarkdown\(worksheet,/);
+  assert.match(page, /Support hint for question/);
+  assert.match(page, /Extension challenge/);
+  assert.match(page, /I reviewed all three versions/);
+  assert.match(page, /teacherJourneyPersistenceMatches\(savedJourney, \{ \.\.\.preview\.expected, journeyId: preview\.journeyId \}\)/);
+  assert.match(page, /downloadMarkdown\(differentiatedExport\)/);
   assert.match(page, /activityHandoutReviewAcknowledged/);
   assert.match(page, /Prepare printable handout/);
   assert.match(page, /downloadMarkdown\(activityHandoutExport\)/);
