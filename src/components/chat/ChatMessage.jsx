@@ -11,6 +11,7 @@ export default function ChatMessage({
   pinned,
   copied,
   verification,
+  providerExecutionReceipt,
 }) {
   const isUser = role === "user";
   const providerNames = { openai: "OpenAI", openrouter: "OpenRouter", gemini: "Gemini", groq: "Groq" };
@@ -34,6 +35,23 @@ export default function ChatMessage({
             <div>This records provider-reported agreement for this prompt and answer. It is not a check against independent sources or a guarantee of factual accuracy.</div>
             <div>This receipt is scoped to the signed-in account session that sent the request.</div>
             {verification.cost && <div>Provider-reported usage: ${verification.cost.providerReportedUsd.toFixed(4)} across {verification.cost.callsMetered} metered call(s) · ${verification.cost.reservedUsd.toFixed(4)} reserved of the ${verification.cost.requestCapUsd.toFixed(2)} request cap. {verification.cost.callsMetered < verification.cost.callsDispatched ? `Usage for ${verification.cost.callsDispatched - verification.cost.callsMetered} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.` : "Final provider billing may differ."}</div>}
+          </div>
+        )}
+        {!isUser && providerExecutionReceipt?.status === "provider_response_received" && (
+          <div className="hey-chat-provider-receipt" role="status">
+            <div>Provider response details · {providerName(providerExecutionReceipt.providerId)} · configured {providerExecutionReceipt.configuredModelId}</div>
+            {providerExecutionReceipt.providerReportedModelId && (
+              <div>Provider-reported model: {providerExecutionReceipt.providerReportedModelId}</div>
+            )}
+            {providerExecutionReceipt.providerResponseId && (
+              <div>Provider response ID: {providerExecutionReceipt.providerResponseId}</div>
+            )}
+            <div>Edge round trip: {providerExecutionReceipt.requestTiming.elapsedMs.toLocaleString()} ms · one request, not a model latency benchmark.</div>
+            {providerExecutionReceipt.usageStatus === "reported" && providerExecutionReceipt.usage ? (
+              <div>Provider-reported usage: {providerExecutionReceipt.usage.inputTokens.toLocaleString()} input + {providerExecutionReceipt.usage.outputTokens.toLocaleString()} output tokens. Final billing may differ.</div>
+            ) : (
+              <div>Valid provider token counts were unavailable for this response.</div>
+            )}
           </div>
         )}
         <div className="hey-chat-message-actions">

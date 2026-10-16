@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
 import { cancelProviderResponse, readProviderJson } from "./providerResponse.js";
+import { createProviderExecutionReceipt } from "../../../src/core/providerExecutionReceipt.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
 import {
   filterEntitledProviderAttempts,
@@ -119,6 +120,7 @@ async function callProvider(
       if (authorizeProvider && !await authorizeProvider(provider)) {
         throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
       }
+      const providerStartedAt = Date.now();
       const response = provider.id === "gemini"
         ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent`, {
           method: "POST",
@@ -156,6 +158,7 @@ async function callProvider(
         continue;
       }
       const data = parsedResponse.data;
+      const providerElapsedMs = Math.max(0, Math.min(35_000, Date.now() - providerStartedAt));
       if (signal?.aborted) {
         throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
       }
@@ -168,7 +171,19 @@ async function callProvider(
           throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
         }
       }
-      return { data, providerId: provider.id, model: provider.model };
+      let executionReceipt = null;
+      try {
+        executionReceipt = createProviderExecutionReceipt({
+          providerId: provider.id,
+          configuredModelId: provider.model,
+          data,
+          elapsedMs: providerElapsedMs,
+          receiptId: crypto.randomUUID(),
+        });
+      } catch {
+        // Receipt generation is telemetry-only and must not block a valid answer.
+      }
+      return { data, providerId: provider.id, model: provider.model, executionReceipt };
     } catch (error) {
       if (signal?.aborted) throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
       if (error?.providerEntitlementDenied || error?.providerAuthorizationUnavailable || error?.providerRequestCancelled) throw error;
@@ -947,7 +962,11 @@ Deno.serve(async (request) => {
     if (request.signal.aborted) return jsonResponse({ error: "The provider request was cancelled", code: "provider_request_cancelled" }, 499);
     response = extractProviderText(providerResult.data);
     if (!response) return jsonResponse({ error: "HEY received an empty response" }, 502);
-    providerMetadata = { model: providerResult.model, provider: providerResult.providerId };
+    providerMetadata = {
+      model: providerResult.model,
+      provider: providerResult.providerId,
+      providerExecutionReceipt: providerResult.executionReceipt,
+    };
   }
 
   const answer = sources.length

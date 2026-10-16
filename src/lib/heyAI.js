@@ -5,6 +5,7 @@ import { evaluateResponse } from "../core/qualityEngine.js";
 import { saveQualityReport } from "./intelligenceRecords.js";
 import { recordAudit } from "../core/auditLog.js";
 import { executeRequest } from "../core/executionController.js";
+import { parseProviderExecutionReceipt } from "../core/providerExecutionReceipt.js";
 
 const HEY_SYSTEM = `
 You are HEY.
@@ -338,7 +339,7 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onFusionVerification, confirmed = false, fusion = false, providerProfile = "automatic", signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onFusionVerification, onProviderExecutionReceipt, confirmed = false, fusion = false, providerProfile = "automatic", signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const providerRouteRequest = getProviderRouteRequest(providerProfile, fusion);
@@ -421,10 +422,12 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
     if (fusion && !fusionVerification) {
       throw new Error("Model fusion did not return verified provider provenance. No answer was delivered.");
     }
+    const providerExecutionReceipt = !fusion ? parseProviderExecutionReceipt(data.providerExecutionReceipt) : null;
     if (typeof data.response !== "string" || !data.response.trim()) {
       throw new Error(fusion ? "Model fusion did not return a verified answer. No answer was delivered." : "HEY did not return a response. Please try again.");
     }
     if (fusion) onFusionVerification?.(fusionVerification);
+    else if (providerExecutionReceipt) onProviderExecutionReceipt?.(providerExecutionReceipt);
 
     if (data.conversationId && onConversationId) {
       onConversationId(data.conversationId);

@@ -490,6 +490,7 @@ function ChatWorkspace() {
 
     try {
       let fusionVerification = null;
+      let providerExecutionReceipt = null;
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
@@ -497,6 +498,7 @@ function ChatWorkspace() {
         providerProfile: requestedProviderProfile,
         signal: controller.signal,
         onFusionVerification: (verification) => { fusionVerification = verification; },
+        onProviderExecutionReceipt: (receipt) => { providerExecutionReceipt = receipt; },
         onExecutionResult: (execution) => {
           if (execution.status === "permission_required") {
             setExecutionStatus("HEY still requires permission. No device action was completed.");
@@ -513,6 +515,7 @@ function ChatWorkspace() {
         role: "hey",
         text: response,
         ...(fusionVerification ? { verification: fusionVerification } : {}),
+        ...(providerExecutionReceipt ? { providerExecutionReceipt } : {}),
       }]);
       await refreshConversations();
     } catch (error) {
@@ -931,6 +934,7 @@ function ChatWorkspace() {
                     pinned={pinnedMessages.includes(item.text)}
                     copied={copiedMessage === item.text}
                     verification={item.verification}
+                    providerExecutionReceipt={item.providerExecutionReceipt}
                   >
                     {item.text}
                   </ChatMessage>
