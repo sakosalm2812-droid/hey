@@ -455,6 +455,13 @@ test("fusion disagreement returns no answer and stale account scope cancels befo
     });
     assert.equal(result.status, "cancelled");
     assert.equal(calls, 0);
+    assert.deepEqual(result.costReceipt, {
+      providerReportedUsd: 0,
+      reservedUsd: 0,
+      requestCapUsd: pricing.budgetUsd,
+      callsDispatched: 0,
+      callsMetered: 0,
+    });
   });
 });
 
@@ -607,9 +614,10 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /requestText: message/);
   assert.match(route, /fusion\.provenance\?\.status !== "verified"[\s\S]*?No answer was delivered/i);
   assert.match(route, /provenance: fusion\.provenance/);
-  assert.match(route, /providerReportedUsd: fusion\.costUsd/);
-  assert.match(route, /reservedUsd: fusion\.reservedCostUsd/);
+  assert.match(route, /providerReportedUsd: fusion\.costReceipt\.providerReportedUsd/);
+  assert.match(route, /reservedUsd: fusion\.costReceipt\.reservedUsd/);
   assert.match(route, /requestCapUsd: fusion\.requestCapUsd/);
+  assert.match(route, /fusion: \{ status: fusion\.status, cost: fusion\.costReceipt \}/);
 });
 
 test("Edge chat checks cancellation after verification and before persisting, and aborts an in-flight insert", async () => {
@@ -635,6 +643,30 @@ test("server budget prevents the independent provider call when its reservation 
   const result = await runFusionChatRequest({ requested: true, accountId: "auth-user-123", entitlements, attempts, pricingConfig: constrainedPricing, messages, fetchImpl });
   assert.equal(result.status, "budget_exhausted");
   assert.equal(calls.length, 0);
+  assert.deepEqual(result.costReceipt, {
+    providerReportedUsd: 0,
+    reservedUsd: 0,
+    requestCapUsd: constrainedPricing.budgetUsd,
+    callsDispatched: 0,
+    callsMetered: 0,
+  });
+});
+
+test("a failed checker returns a bounded cost receipt with unknown usage marked unmetered", async () => {
+  const primaryOnlyFetch = mockProviderFetch(() => ["42", 0.9]).fetchImpl;
+  const fetchImpl = async (url, init) => {
+    if (url.includes("generativelanguage.googleapis.com")) throw new Error("simulated checker timeout");
+    return primaryOnlyFetch(url, init);
+  };
+  const result = await runFusionChatRequest({ requested: true, accountId: "auth-user-123", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.equal(result.status, "verification_unavailable");
+  assert.equal(result.costReceipt.providerReportedUsd, 0.00009);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal(result.costReceipt.callsMetered, 1);
+  assert.equal(result.costReceipt.requestCapUsd, pricing.budgetUsd);
+  assert.ok(result.costReceipt.reservedUsd >= result.costReceipt.providerReportedUsd);
+  assert.ok(result.costReceipt.reservedUsd <= pricing.budgetUsd);
+  assert.equal("answer" in result, false);
 });
 
 test("verified fusion receipts carry the exact server request cap and provider-reported usage", async () => {
@@ -702,6 +734,9 @@ test("HTTP cancellation aborts the provider fetch and stale output is not return
   const result = await resultPromise;
   assert.equal(result.status, "cancelled");
   assert.equal(calls, 1);
+  assert.equal(result.costReceipt.callsDispatched, 1);
+  assert.equal(result.costReceipt.callsMetered, 0);
+  assert.ok(result.costReceipt.reservedUsd > 0);
 });
 
 test("provider grants are revalidated after provider work before a fused answer can be returned", async (t) => {
@@ -751,7 +786,10 @@ test("provider grants are revalidated after provider work before a fused answer 
         return entitlements;
       },
     });
-    assert.deepEqual(result, { status: "unconfigured", reason: "authorization_revalidation_failed" });
+    assert.equal(result.status, "unconfigured");
+    assert.equal(result.reason, "authorization_revalidation_failed");
+    assert.equal(result.costReceipt.callsDispatched, 2);
+    assert.ok(result.costReceipt.reservedUsd > 0);
     assert.equal(calls.length, 2);
     assert.equal(JSON.stringify(result).includes("private database error"), false);
     assert.equal("answer" in result, false);
@@ -769,7 +807,13 @@ test("provider grants are revalidated after provider work before a fused answer 
       fetchImpl: async () => { calls += 1; throw new Error("must not dispatch"); },
       getCurrentEntitlements: async () => { throw new Error("private database error"); },
     });
-    assert.deepEqual(result, { status: "unconfigured", reason: "authorization_revalidation_failed", calls: 0, reservedCostUsd: 0 });
+    assert.deepEqual(result, {
+      status: "unconfigured",
+      reason: "authorization_revalidation_failed",
+      calls: 0,
+      reservedCostUsd: 0,
+      costReceipt: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricing.budgetUsd, callsDispatched: 0, callsMetered: 0 },
+    });
     assert.equal(calls, 0);
   });
 });

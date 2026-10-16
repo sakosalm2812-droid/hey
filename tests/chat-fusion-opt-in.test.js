@@ -21,7 +21,20 @@ test("Fusion permission, configuration, and disagreement responses stay visible 
   assert.match(getHEYChatError({ status: 409 }, {}, true), /No verified response was returned/i);
   assert.match(getHEYChatError({ status: 499 }, {}, true), /cancelled before a verified response/i);
   assert.equal(getHEYChatError({ status: 409 }, { error: "x".repeat(300) }, true).length, 240);
-  assert.match(getHEYChatError({ status: 500 }, {}, true), /No answer was delivered/i);
+  const interruptedReceipt = {
+    fusion: { cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1 } },
+  };
+  const interruptedMessage = getHEYChatError({ status: 409 }, { error: "The independent provider check timed out.", ...interruptedReceipt }, true);
+  assert.match(interruptedMessage, /Provider-reported usage: \$0\.0030 from 1 metered call/);
+  assert.match(interruptedMessage, /Usage for 1 interrupted or unmetered call.*unknown/i);
+  assert.match(interruptedMessage, /final billing is unconfirmed/i);
+  const notDispatched = getHEYChatError({ status: 409 }, {
+    error: "The request exceeded its cost budget.",
+    fusion: { cost: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: 0.05, callsDispatched: 0, callsMetered: 0 } },
+  }, true);
+  assert.match(notDispatched, /No provider call was dispatched/);
+  assert.doesNotMatch(notDispatched, /billing/i);
+  assert.match(getHEYChatError({ status: 500 }, {}, true), /No verified response was returned/i);
 });
 
 test("responses from an account that is no longer signed in are rejected", () => {
@@ -63,7 +76,7 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
     independentlyChecked: true,
     confidence: 0.91,
     responseSha256: answerSha256,
-    cost: { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05 },
+    cost: { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 2 },
     provenance: {
       status: "verified",
       requestId,
@@ -79,7 +92,7 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
   assert.equal(parsed.requestSha256, requestSha256);
   assert.equal(parsed.primary.providerId, "openai");
   assert.equal(parsed.checker.providerId, "gemini");
-  assert.deepEqual(parsed.cost, { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05 });
+  assert.deepEqual(parsed.cost, { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 2 });
   assert.equal(Object.isFrozen(parsed), true);
   assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, confirmed: false } } }, { answer, requestId, requestText }), null);
   assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, providerId: "openai" } } }, { answer, requestId, requestText }), null);
@@ -97,8 +110,9 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
     { providerReportedUsd: 0.02, reservedUsd: 0.06, requestCapUsd: 0.05 },
     { providerReportedUsd: 0.02, reservedUsd: 0.04, requestCapUsd: 0.26 },
   ]) {
-    assert.equal(await parseFusionVerificationMetadata({ ...verified, cost }, { answer, requestId, requestText }), null);
+    assert.equal(await parseFusionVerificationMetadata({ ...verified, cost: { ...cost, callsDispatched: 2, callsMetered: 2 } }, { answer, requestId, requestText }), null);
   }
+  assert.equal(await parseFusionVerificationMetadata({ ...verified, cost: { ...verified.cost, callsMetered: 3 } }, { answer, requestId, requestText }), null);
 });
 
 test("chat UI exposes Fusion as a per-request checkbox and fences requests on unmount", async () => {
@@ -127,7 +141,8 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
   assert.match(message, /scoped to the signed-in account session/i);
   assert.match(message, /primary\.modelId/);
   assert.match(message, /checker\.modelId/);
-  assert.match(message, /Provider-reported usage estimate:/);
+  assert.match(message, /Provider-reported usage:/);
+  assert.match(message, /interrupted or unmetered call/);
   assert.match(message, /Final provider billing may differ/);
   assert.match(message, /role="status"/);
 });

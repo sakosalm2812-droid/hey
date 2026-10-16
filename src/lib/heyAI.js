@@ -101,6 +101,8 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
     !Number.isFinite(value.cost.reservedUsd) || value.cost.reservedUsd < value.cost.providerReportedUsd ||
     !Number.isFinite(value.cost.requestCapUsd) || value.cost.requestCapUsd <= 0 || value.cost.requestCapUsd > 0.25 ||
     value.cost.reservedUsd > value.cost.requestCapUsd ||
+    !Number.isSafeInteger(value.cost.callsDispatched) || value.cost.callsDispatched < 0 || value.cost.callsDispatched > 4 ||
+    !Number.isSafeInteger(value.cost.callsMetered) || value.cost.callsMetered < 0 || value.cost.callsMetered > value.cost.callsDispatched ||
     !isPlainDataRecord(value.provenance) || value.provenance.status !== "verified" ||
     value.provenance.requestId !== requestId || typeof value.provenance.requestSha256 !== "string" ||
     !/^[0-9a-f]{64}$/i.test(value.provenance.requestSha256) || typeof value.provenance.answerSha256 !== "string" ||
@@ -128,10 +130,35 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
       providerReportedUsd: value.cost.providerReportedUsd,
       reservedUsd: value.cost.reservedUsd,
       requestCapUsd: value.cost.requestCapUsd,
+      callsDispatched: value.cost.callsDispatched,
+      callsMetered: value.cost.callsMetered,
     }),
     primary: Object.freeze({ role: "primary", providerId: primary.providerId, modelId: primary.modelId }),
     checker: Object.freeze({ role: "checker", providerId: checker.providerId, modelId: checker.modelId }),
   });
+}
+
+function getFusionFailureCostSummary(details) {
+  try {
+    if (!isPlainDataRecord(details) || !isPlainDataRecord(details.fusion) || !isPlainDataRecord(details.fusion.cost)) return "";
+    const cost = details.fusion.cost;
+    if (!Number.isFinite(cost.providerReportedUsd) || cost.providerReportedUsd < 0 ||
+      !Number.isFinite(cost.reservedUsd) || cost.reservedUsd < cost.providerReportedUsd ||
+      !Number.isFinite(cost.requestCapUsd) || cost.requestCapUsd <= 0 || cost.requestCapUsd > 0.25 ||
+      cost.reservedUsd > cost.requestCapUsd || !Number.isSafeInteger(cost.callsDispatched) || cost.callsDispatched < 0 || cost.callsDispatched > 4 ||
+      !Number.isSafeInteger(cost.callsMetered) || cost.callsMetered < 0 || cost.callsMetered > cost.callsDispatched) return "";
+    if (cost.callsDispatched === 0) {
+      return ` No provider call was dispatched; $0.0000 of the $${cost.requestCapUsd.toFixed(2)} request budget was reserved.`;
+    }
+    const unknownCalls = cost.callsDispatched - cost.callsMetered;
+    const usage = ` Provider-reported usage: $${cost.providerReportedUsd.toFixed(4)} from ${cost.callsMetered} metered call(s).`;
+    const reserve = ` Up to $${cost.reservedUsd.toFixed(4)} was reserved from the $${cost.requestCapUsd.toFixed(2)} request cap.`;
+    return unknownCalls > 0
+      ? `${usage}${reserve} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
+      : `${usage}${reserve} Final provider billing may differ.`;
+  } catch {
+    return "";
+  }
 }
 
 export async function parseFusionVerificationMetadata(value, options = {}) {
@@ -149,17 +176,18 @@ export function getHEYChatError(response, details = {}, fusion = false) {
   if (details.code === "provider_profile_invalid") return "That routing profile is unavailable. Refresh the model list and try again.";
   if (details.code === "provider_pricing_unavailable") return "Cost-ranked routing is unavailable because verified model prices are missing.";
   if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
-  if (fusion && response.status === 499) return "Model fusion was cancelled before a verified response was returned.";
+  if (fusion && response.status === 499) return `Model fusion was cancelled before a verified response was returned.${getFusionFailureCostSummary(details)}`;
   if (fusion && (response.status === 409 || response.status === 503)) {
     const serverMessage = typeof details.error === "string" ? details.error.trim().slice(0, 240) : "";
-    if (serverMessage) return serverMessage;
-    return response.status === 409
+    if (serverMessage) return `${serverMessage}${getFusionFailureCostSummary(details)}`;
+    const fallback = response.status === 409
       ? "Model verification could not be completed. No verified response was returned."
       : "Model fusion is unavailable because its provider permissions or pricing are not configured.";
+    return `${fallback}${getFusionFailureCostSummary(details)}`;
   }
   if (response.status === 429) return "HEY is receiving too many requests. Wait a moment and try again.";
   if (response.status >= 500) return fusion
-    ? "Model fusion is unavailable right now. No answer was delivered."
+    ? `Model fusion is unavailable right now. No verified response was returned.${getFusionFailureCostSummary(details)}`
     : "HEY could not reach its AI provider. Check the server configuration and try again.";
   return details.error || "HEY could not send this message.";
 }

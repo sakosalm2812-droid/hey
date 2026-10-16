@@ -193,7 +193,7 @@ function estimateInputTokenCeiling(messages, additionalContextBytes = 0) {
   return new TextEncoder().encode(`${content}\n\n${FUSION_INSTRUCTION}`).byteLength + messages.length * 16 + 128 + additionalContextBytes;
 }
 
-async function requestProvider({ provider, attempt, messages, candidate, signal, fetchImpl }) {
+async function requestProvider({ provider, attempt, messages, candidate, signal, fetchImpl, onDispatch }) {
   if (signal?.aborted) throw new Error("Provider request cancelled");
   const startedAt = Date.now();
   let url;
@@ -238,6 +238,8 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
   let response;
   let responseText;
   try {
+    if (signal?.aborted) throw new Error("Provider request cancelled");
+    onDispatch?.();
     response = await fetchImpl(url, {
       method: "POST",
       headers,
@@ -353,10 +355,20 @@ export async function runFusionChatRequest({
     const reservedCostUsd = inputWorstCaseUsd + (maxOutputTokens * provider.outputUsdPerMillion) / 1_000_000;
     return Object.freeze({ ...provider, maxInputTokens, maxOutputTokens, reservedCostUsd });
   });
-  if (pricedProviders.some((provider) => !provider)) return { status: "budget_exhausted", reason: "request_cannot_fit_provider_price_cap", calls: 0 };
+  if (pricedProviders.some((provider) => !provider)) return {
+    status: "budget_exhausted",
+    reason: "request_cannot_fit_provider_price_cap",
+    calls: 0,
+    costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0 }),
+  };
   const selectedProviders = pricedProviders.slice(0, 2);
   if (selectedProviders.reduce((total, provider) => total + provider.reservedCostUsd, 0) > pricingConfig.budgetUsd) {
-    return { status: "budget_exhausted", reason: "independent_calls_exceed_server_budget", calls: 0 };
+    return {
+      status: "budget_exhausted",
+      reason: "independent_calls_exceed_server_budget",
+      calls: 0,
+      costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0 }),
+    };
   }
   if (getCurrentEntitlements !== undefined && typeof getCurrentEntitlements !== "function") {
     return { status: "unconfigured", reason: "authorization_revalidation_failed" };
@@ -373,6 +385,10 @@ export async function runFusionChatRequest({
   }));
 
   const permissions = ["provider.remote", ...selectedProviders.map((provider) => `provider:${provider.id}`)];
+  let callsDispatched = 0;
+  let callsMetered = 0;
+  let providerReportedUsd = 0;
+  let reservedUsd = 0;
   const result = await runProviderFusion({
     prompt: "Authenticated server-side HEY chat fusion request.",
     intent: "conversation",
@@ -395,12 +411,19 @@ export async function runFusionChatRequest({
     },
     maxCostUsd: pricingConfig.budgetUsd,
     minConfidence: pricingConfig.minConfidence,
-    invoke: async ({ providerId, candidate, signal: providerSignal }) => {
+    invoke: async ({ providerId, candidate, maxCostUsd, signal: providerSignal }) => {
       const provider = selectedProviders.find((item) => item.id === providerId);
       const attempt = attempts.find((item) => item.id === providerId && item.model === provider?.model && item.key);
       if (!provider || !attempt || !Array.isArray(messages)) throw new Error("Provider configuration is unavailable");
+      const onDispatch = () => {
+        callsDispatched += 1;
+        reservedUsd += maxCostUsd;
+      };
       if (typeof getCurrentEntitlements !== "function") {
-        return await requestProvider({ provider, attempt, messages, candidate, signal: providerSignal, fetchImpl });
+        const output = await requestProvider({ provider, attempt, messages, candidate, signal: providerSignal, fetchImpl, onDispatch });
+        callsMetered += 1;
+        providerReportedUsd += output.costUsd;
+        return output;
       }
 
       const authorityController = new AbortController();
@@ -443,10 +466,12 @@ export async function runFusionChatRequest({
       pollTimer = setInterval(() => { void pollAuthority(); }, authorityRecheckIntervalMs);
       if (authorityController.signal.aborted) stopPolling();
       try {
-        const result = await requestProvider({ provider, attempt, messages, candidate, signal: authorityController.signal, fetchImpl });
+        const result = await requestProvider({ provider, attempt, messages, candidate, signal: authorityController.signal, fetchImpl, onDispatch });
         if (authorityFailure) {
           throw Object.assign(new Error("Provider authorization changed"), { providerAuthorization: authorityFailure });
         }
+        callsMetered += 1;
+        providerReportedUsd += result.costUsd;
         return result;
       } catch (error) {
         if (authorityFailure) {
@@ -460,23 +485,30 @@ export async function runFusionChatRequest({
       }
     },
   });
-  if (result.status !== "complete") return result;
+  const costReceipt = Object.freeze({
+    providerReportedUsd,
+    reservedUsd,
+    requestCapUsd: pricingConfig.budgetUsd,
+    callsDispatched,
+    callsMetered,
+  });
+  if (result.status !== "complete") return { ...result, costReceipt };
   if (getCurrentEntitlements !== undefined) {
-    if (typeof getCurrentEntitlements !== "function") return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+    if (typeof getCurrentEntitlements !== "function") return { status: "unconfigured", reason: "authorization_revalidation_failed", costReceipt };
     let currentEntitlements;
     try {
       currentEntitlements = await getCurrentEntitlements(accountId, signal);
     } catch {
-      return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+      return { status: "unconfigured", reason: "authorization_revalidation_failed", costReceipt };
     }
-    if (signal?.aborted || !isCurrent(accountId)) return { status: "cancelled" };
+    if (signal?.aborted || !isCurrent(accountId)) return { status: "cancelled", costReceipt };
     if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
-      return { status: "unconfigured", reason: "authorization_revalidation_failed" };
+      return { status: "unconfigured", reason: "authorization_revalidation_failed", costReceipt };
     }
     const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
     if (!currentGrants.has("hey.fusion") || !currentGrants.has("provider.remote") ||
       result.providers.some((provider) => !currentGrants.has(`provider:${provider.providerId}`))) {
-      return { status: "denied", reason: "fusion_permission_revoked" };
+      return { status: "denied", reason: "fusion_permission_revoked", costReceipt };
     }
   }
   const boundAnswerProviders = new Set(result.evidence
@@ -485,11 +517,11 @@ export async function runFusionChatRequest({
   if (result.confidence < pricingConfig.minConfidence ||
     boundAnswerProviders.size < 2 ||
     result.providers.some((provider) => !boundAnswerProviders.has(provider.providerId))) {
-    return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" };
+    return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer", costReceipt };
   }
   const provenance = await buildFusionProvenance(result, fusionRequestId, requestMessage);
-  if (!provenance) return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" };
-  return { ...result, provenance, requestCapUsd: pricingConfig.budgetUsd };
+  if (!provenance) return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer", costReceipt };
+  return { ...result, provenance, requestCapUsd: pricingConfig.budgetUsd, costReceipt };
 }
 
 export default { parseFusionPricingConfig, runFusionChatRequest };

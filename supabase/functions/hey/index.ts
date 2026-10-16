@@ -867,7 +867,10 @@ Deno.serve(async (request) => {
         : fusion.status === "budget_exhausted" ? "The model verification exceeded its configured cost budget, so no answer was delivered."
         : fusion.status === "provider_contract_invalid" ? "A provider returned invalid verification evidence, so no answer was delivered."
         : "Model fusion is unavailable until its provider permissions and pricing are configured.";
-      return jsonResponse({ error }, status);
+      return jsonResponse({
+        error,
+        ...(fusion.costReceipt ? { fusion: { status: fusion.status, cost: fusion.costReceipt } } : {}),
+      }, status);
     }
     if (fusion.provenance?.status !== "verified" || fusion.provenance.checker?.confirmed !== true) {
       return jsonResponse({ error: "The providers could not independently confirm an answer. No answer was delivered." }, 409);
@@ -888,9 +891,11 @@ Deno.serve(async (request) => {
         independentlyChecked: true,
         confidence: fusion.confidence,
         cost: {
-          providerReportedUsd: fusion.costUsd,
-          reservedUsd: fusion.reservedCostUsd,
+          providerReportedUsd: fusion.costReceipt.providerReportedUsd,
+          reservedUsd: fusion.costReceipt.reservedUsd,
           requestCapUsd: fusion.requestCapUsd,
+          callsDispatched: fusion.costReceipt.callsDispatched,
+          callsMetered: fusion.costReceipt.callsMetered,
         },
         provenance: fusion.provenance,
       },
