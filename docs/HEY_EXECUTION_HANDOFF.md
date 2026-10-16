@@ -1,6 +1,6 @@
 ## Active continuation — 2026-10-16, current checkpoint
 
-Coordinator branch: `codex/resume-emergency-2026-10-14`; integration HEAD `035ce282ce739dbb62b27eb318cf4dc39baee24d`; latest pushed checkpoint `c4d2f84d7d7e416eb95687acbc43d01334f485c2`. Commit `035ce28` adds the verified post-build SPA route and entry-bundle smoke to CI. Coordinator full Node suite: **793/793**; production build: **2,774 modules**; actual built-app HTTP smoke passed for `/login`, `/download`, and `/assets/index-06y-kbx-.js`; Step 47 focused smoke suite **11/11**, including occupied-port cleanup. Changed-file ESLint and diff check pass. The dev server at `http://127.0.0.1:5175` was restarted after the browser exposed a dead-server error; CUA now visibly renders the real `/download` page. Keep the V3 pack extraction untracked and preserve all worker worktrees.
+Coordinator branch: `codex/resume-emergency-2026-10-14`; integration HEAD `035ce282ce739dbb62b27eb318cf4dc39baee24d`; latest pushed handoff checkpoint `a7ddb3fdc2b8c5990ac801e7749cff92a17ad68e`. Commit `035ce28` adds the verified post-build SPA route and entry-bundle smoke to CI. Coordinator full Node suite: **793/793**; production build: **2,774 modules**; actual built-app HTTP smoke passed for `/login`, `/download`, and `/assets/index-06y-kbx-.js`; Step 47 focused smoke suite **11/11**, including occupied-port cleanup. Changed-file ESLint and diff check pass. The dev server at `http://127.0.0.1:5175` was restarted after the browser exposed a dead-server error; CUA now visibly renders the real `/download` page. Keep the V3 pack extraction untracked and preserve all worker worktrees.
 
 ### Current implementation workers
 
@@ -38,7 +38,7 @@ Each chat below received a follow-up in the same parallel dispatch, with GPT-6 L
 
 ### Current uncommitted / unmerged state
 
-- Coordinator code is committed through `035ce28`; one code commit is ahead of pushed checkpoint `c4d2f84` and still needs push. The untracked `docs/requirements/v3-agent-pack/` is preserved. The 11 resumed specialist chats have just been dispatched concurrently; see their exact task refs and source checkpoint branches below. No latest-turn specialist commits have yet been reviewed or integrated.
+- Coordinator code is committed through `035ce28`; handoff/status docs are checkpointed at pushed commit `a7ddb3f`. The untracked `docs/requirements/v3-agent-pack/` is preserved. The 11 resumed specialist chats have just been dispatched concurrently; see their exact task refs and source checkpoint branches below. No latest-turn specialist commits have yet been reviewed or integrated.
 
 ### Exact next actions
 
