@@ -1,4 +1,5 @@
 const RETRACTED_STATES = new Set(["retracted", "withdrawn", "deleted"]);
+import { assessExpertPackEvidence, validateExpertPackManifest } from "./expertPacks.js";
 const SENSITIVE_QUERY_PATTERNS = [
   /\b(password|passcode|secret|api[ _-]?key|access[ _-]?token|credential)\b/i,
   /\b(ssn|social security|credit card|bank account|routing number)\b/i,
@@ -9,12 +10,13 @@ export function containsSensitiveResearchText(value) {
   return SENSITIVE_QUERY_PATTERNS.some((pattern) => pattern.test(String(value || "")));
 }
 
-export async function fetchResearchResults(query, { signal, fetchImpl = globalThis.fetch, now = () => new Date().toISOString() } = {}) {
+export async function fetchResearchResults(query, { signal, fetchImpl = globalThis.fetch, now = () => new Date().toISOString(), expertPack, jurisdiction } = {}) {
   if (typeof fetchImpl !== "function") throw new TypeError("A research fetch provider is required.");
   if (signal?.aborted) throw Object.assign(new Error("Research cancelled."), { name: "AbortError" });
   const safeQuery = String(query || "").trim();
   if (!safeQuery || safeQuery.length > 500) throw new RangeError("Research query must contain 1 to 500 characters.");
   if (containsSensitiveResearchText(safeQuery)) throw new Error("Sensitive research queries are blocked before external search.");
+  if (expertPack && !validateExpertPackManifest(expertPack).valid) throw new TypeError("Invalid expert pack manifest; research was not sent.");
   const response = await fetchImpl(
     `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(safeQuery)}&format=json&origin=*&srlimit=5`,
     { signal },
@@ -22,14 +24,19 @@ export async function fetchResearchResults(query, { signal, fetchImpl = globalTh
   if (!response.ok) throw new Error(`Search provider returned HTTP ${response.status}.`);
   const data = await response.json();
   if (signal?.aborted) throw Object.assign(new Error("Research cancelled."), { name: "AbortError" });
-  return deduplicateSources((data?.query?.search || []).slice(0, 5).filter((hit) => typeof hit?.title === "string" && typeof hit?.snippet === "string").map((hit) => ({
+  const sources = (data?.query?.search || []).slice(0, 5).filter((hit) => typeof hit?.title === "string" && typeof hit?.snippet === "string").map((hit) => ({
     title: hit.title,
     snippet: hit.snippet.replace(/<[^>]+>/g, ""),
     url: `https://en.wikipedia.org/wiki/${encodeURIComponent(hit.title.replaceAll(" ", "_"))}`,
     retrievedAt: now(),
     sourceType: "tertiary_reference",
     authority: "unassessed",
-  })));
+  }));
+  if (!expertPack) return deduplicateSources(sources);
+  return deduplicateSources(sources.flatMap((source) => {
+    const assessment = assessExpertPackEvidence({ manifest: expertPack, source, jurisdiction, now: Date.parse(source.retrievedAt) });
+    return assessment.status === "unverified" ? [{ ...source, expertPackAssessment: assessment }] : [];
+  }));
 }
 
 export function canonicalizeSourceUrl(value) {
@@ -100,7 +107,7 @@ export function createClaimRecord({ id, text, source, accountScope, workspaceId,
 }
 
 /** A source excerpt is only a candidate: this function never asserts entailment. */
-export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), maxAgeDays = 3650, requiredJurisdiction } = {}) {
+export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), maxAgeDays = 3650, requiredJurisdiction, expertPack } = {}) {
   if (!claim?.text || !evidence?.source?.url) return { status: "invalid", reason: "missing_claim_or_source" };
   if (evidence.verification === "retracted" || RETRACTED_STATES.has(evidence.source.status)) {
     return { status: "invalidated", reason: "source_retracted" };
@@ -122,6 +129,12 @@ export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), ma
     if (now >= expiresAt) return { status: "stale", reason: "source_expired" };
   }
 
+  let expertAssessment = null;
+  if (expertPack) {
+    expertAssessment = assessExpertPackEvidence({ manifest: expertPack, source: evidence.source, jurisdiction: requiredJurisdiction ?? claim.jurisdiction, now });
+    if (expertAssessment.status !== "unverified") return expertAssessment;
+  }
+
   const jurisdiction = requiredJurisdiction ?? claim.jurisdiction;
   if (jurisdiction !== undefined && jurisdiction !== null) {
     if (typeof jurisdiction !== "string" || !jurisdiction.trim()) return { status: "invalid", reason: "invalid_required_jurisdiction" };
@@ -135,7 +148,12 @@ export function evaluateCitationCoverage(claim, evidence, { now = Date.now(), ma
   const excerpt = normalizedText(evidence.source.excerpt || evidence.source.snippet);
   const terms = normalizedText(claim.text).split(" ").filter((term) => term.length > 2);
   const coverage = terms.length ? terms.filter((term) => excerpt.includes(term)).length / terms.length : 0;
-  return { status: "unverified", reason: coverage > 0 ? "lexical_overlap_is_not_entailment" : "no_lexical_overlap", lexicalCoverage: Number(coverage.toFixed(3)) };
+  return {
+    status: "unverified",
+    reason: coverage > 0 ? "lexical_overlap_is_not_entailment" : "no_lexical_overlap",
+    lexicalCoverage: Number(coverage.toFixed(3)),
+    ...(expertAssessment ? { expertPack: expertAssessment } : {}),
+  };
 }
 
 export function invalidateClaimsForSource(claims = [], sourceUrl, status = "retracted") {

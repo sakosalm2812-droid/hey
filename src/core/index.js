@@ -94,6 +94,8 @@ import { issueActionMandate, verifyAndConsumeMandate, InMemoryMandateStore, Mand
 import { SupabaseMandateStore } from "./supabaseMandateStore.js";
 import { createEvidenceEnvelope, verifyEvidenceEnvelope, invalidateEvidence, InMemoryEvidenceStore, EvidenceStoreContract, EVIDENCE_ENVELOPE_FORMAT, EVIDENCE_STORE_CONTRACT_VERSION } from "./evidenceIntegrity.js";
 import { SupabaseEvidenceStore } from "./supabaseEvidenceStore.js";
+import { assessExpertPackEvidence, validateExpertPackManifest, EXPERT_PACK_CONTRACT_VERSION } from "./expertPacks.js";
+import { fetchResearchResults, createClaimRecord, evaluateCitationCoverage, invalidateClaimsForSource, containsSensitiveResearchText } from "./researchEvidence.js";
 import { createReleaseInventoryAttestationBody, evaluateReleaseGate } from "./releaseGate.js";
 import { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS } from "./integrationMigrationPlanner.js";
 import { createMission, getMission, getAllMissions, getActiveMissions, getMissionsByState, getMissionsByProject, updateMission, setMissionState, startMission, pauseMission, resumeMission, cancelMission, retryMission, updateMissionStep, createMissionCheckpoint, restoreMissionCheckpoint, getMissionProgress, getMissionReplay, deleteMission, subscribeToMissions, MISSION_STATES, STEP_STATES } from "./missionCenter.js";
@@ -668,6 +670,17 @@ import {
       SupabaseEvidenceStore,
       format: EVIDENCE_ENVELOPE_FORMAT,
       contractVersion: EVIDENCE_STORE_CONTRACT_VERSION,
+    },
+
+    research: {
+      fetch: fetchResearchResults,
+      createClaim: createClaimRecord,
+      evaluateCitation: evaluateCitationCoverage,
+      invalidateClaimsForSource,
+      containsSensitiveText: containsSensitiveResearchText,
+      validateExpertPack: validateExpertPackManifest,
+      assessExpertPackEvidence,
+      expertPackContractVersion: EXPERT_PACK_CONTRACT_VERSION,
     },
 
     releaseGate: {

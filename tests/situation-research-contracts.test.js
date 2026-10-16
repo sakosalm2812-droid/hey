@@ -4,6 +4,8 @@ import { setAccountScope } from "../src/core/accountScope.js";
 import { clearMemoryGraph, connectMemoryNodes, deleteMemoryNode, getMemoryGraph, searchMemoryGraph, upsertMemoryNode } from "../src/core/memoryGraph.js";
 import { compileSituation } from "../src/core/situationEngine.js";
 import { canonicalizeSourceUrl, containsSensitiveResearchText, createClaimRecord, deduplicateSources, evaluateCitationCoverage, fetchResearchResults, invalidateClaimsForSource, sourceFingerprint } from "../src/core/researchEvidence.js";
+import { assessExpertPackEvidence, validateExpertPackManifest } from "../src/core/expertPacks.js";
+import HEY from "../src/core/index.js";
 import { listInbox, queueMemory } from "../src/core/memoryInbox.js";
 import { addImportantFact, resetContext } from "../src/core/contextManager.js";
 import { processInput } from "../src/core/heyBrain.js";
@@ -197,6 +199,83 @@ test("citation evaluation rejects expired, malformed, or jurisdiction-mismatched
     status: "invalid",
     reason: "source_jurisdiction_missing",
   });
+});
+
+function expertPackFixture(overrides = {}) {
+  return {
+    contractVersion: "hey.expert-pack.v1",
+    id: "legal-research-us-ca",
+    version: "1.0.0",
+    domain: "legal-information",
+    scope: "Candidate public legal information for review with counsel.",
+    jurisdictions: ["US-CA"],
+    sourceHierarchy: [{ id: "official-ca", authorityTier: "primary", origins: ["courts.ca.gov"], maxAgeDays: 30 }],
+    highStakes: true,
+    updateCadenceDays: 14,
+    evaluation: { suiteVersion: "suite-1", evaluatedAt: "2026-10-01T00:00:00.000Z", expiresAt: "2026-11-01T00:00:00.000Z", evidenceIds: ["eval-1"] },
+    certification: { status: "uncertified", evidenceIds: [] },
+    escalation: { requiredForHighStakes: true, contactGuidance: "Consult a qualified lawyer in the relevant jurisdiction." },
+    ...overrides,
+  };
+}
+
+test("expert pack contract rejects accessor, sparse, malformed, and self-certified manifests", () => {
+  const getterManifest = expertPackFixture();
+  Object.defineProperty(getterManifest, "domain", { enumerable: true, get() { throw new Error("must not execute"); } });
+  assert.equal(validateExpertPackManifest(getterManifest).valid, false);
+  const sparseJurisdictions = new Array(3);
+  sparseJurisdictions[0] = "US-CA";
+  sparseJurisdictions[2] = "US-NY";
+  const sparse = expertPackFixture({ jurisdictions: sparseJurisdictions });
+  assert.equal(validateExpertPackManifest(sparse).valid, false);
+  assert.equal(validateExpertPackManifest(expertPackFixture({ certification: { status: "certified", evidenceIds: ["model-claim"] } })).valid, false);
+  assert.equal(validateExpertPackManifest(expertPackFixture()).status, "syntactically_valid_unverified");
+  assert.equal(HEY.research.expertPackContractVersion, "hey.expert-pack.v1");
+});
+
+test("expert pack evidence is bounded by declared source, jurisdiction, freshness, and escalation policy", () => {
+  const manifest = expertPackFixture();
+  const now = Date.parse("2026-10-14T12:00:00.000Z");
+  const source = { url: "https://courts.ca.gov/opinion", retrievedAt: "2026-10-14T10:00:00.000Z", jurisdiction: "US-CA", snippet: "A decision." };
+  const accepted = assessExpertPackEvidence({ manifest, source, jurisdiction: "US-CA", now });
+  assert.equal(accepted.status, "unverified");
+  assert.equal(accepted.sourceTier, "primary");
+  assert.equal(accepted.certificationStatus, "uncertified");
+  assert.equal(accepted.professionalEscalationRequired, true);
+  assert.equal(accepted.authorityGranted, false);
+  assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, url: "https://blog.example.org/post" }, jurisdiction: "US-CA", now }).reason, "source_outside_pack_hierarchy");
+  assert.equal(assessExpertPackEvidence({ manifest, source, jurisdiction: "US-NY", now }).reason, "pack_jurisdiction_mismatch");
+  assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, jurisdiction: "US-NY" }, jurisdiction: "US-CA", now }).reason, "source_jurisdiction_mismatch");
+  assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, retrievedAt: "2026-09-01T00:00:00.000Z" }, jurisdiction: "US-CA", now }).status, "stale");
+  const expiredEvaluation = expertPackFixture({ evaluation: { ...manifest.evaluation, expiresAt: "2026-10-10T00:00:00.000Z" } });
+  assert.equal(assessExpertPackEvidence({ manifest: expiredEvaluation, source, jurisdiction: "US-CA", now }).reason, "pack_evaluation_expired");
+  const hostileSource = { ...source };
+  Object.defineProperty(hostileSource, "retrievedAt", { enumerable: true, get() { throw new Error("must not execute"); } });
+  assert.equal(assessExpertPackEvidence({ manifest, source: hostileSource, jurisdiction: "US-CA", now }).reason, "invalid_source");
+  const claim = createClaimRecord({ text: "A decision applies", source: { ...source, title: "Decision" }, accountScope: "account:a", workspaceId: "research", createdAt: source.retrievedAt });
+  const citation = claim.candidateCitations[0];
+  const evaluated = evaluateCitationCoverage(claim, citation, { now, requiredJurisdiction: "US-CA", expertPack: manifest });
+  assert.equal(evaluated.status, "unverified");
+  assert.equal(evaluated.expertPack.professionalEscalationRequired, true);
+});
+
+test("expert pack research only retains sources declared by the pack and carries no authority", async () => {
+  const manifest = expertPackFixture({
+    highStakes: false,
+    jurisdictions: ["*"],
+    sourceHierarchy: [{ id: "encyclopedia", authorityTier: "tertiary", origins: ["en.wikipedia.org"], maxAgeDays: 30 }],
+  });
+  const hits = await fetchResearchResults("climate", {
+    expertPack: manifest,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ query: { search: [{ title: "Climate", snippet: "Climate research results" }] } }) }),
+    now: () => "2026-10-14T12:00:00.000Z",
+  });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].expertPackAssessment.status, "unverified");
+  assert.equal(hits[0].expertPackAssessment.authorityGranted, false);
+  let calls = 0;
+  await assert.rejects(fetchResearchResults("climate", { expertPack: expertPackFixture({ contractVersion: "unsupported" }), fetchImpl: async () => { calls += 1; } }), /Invalid expert pack/);
+  assert.equal(calls, 0);
 });
 
 test("claim construction rejects missing scope, malformed sources, and empty claims", () => {
