@@ -279,10 +279,13 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   return (
     <section className="hey-dictation-edit" aria-label="Edit selected draft text by voice">
       {stage === "idle" && (
-        <div className="hey-dictation-edit__actions">
-          <button type="button" className="hey-dictation__quiet" onClick={beginEdit} disabled={!selection || selection.start === selection.end}>Voice edit selected text</button>
-          {undoEntry && <button type="button" className="hey-dictation__quiet" onClick={undoAppliedEdit}>Undo edit</button>}
-        </div>
+        <>
+          <p id="hey-dictation-edit-help">Select text in your message draft, then choose voice edit. You’ll review a preview before replacing anything.</p>
+          <div className="hey-dictation-edit__actions">
+            <button type="button" className="hey-dictation__quiet" onClick={beginEdit} aria-describedby="hey-dictation-edit-help">Voice edit selected text</button>
+            {undoEntry && <button type="button" className="hey-dictation__quiet" onClick={undoAppliedEdit}>Undo edit</button>}
+          </div>
+        </>
       )}
       {stage === "capture" && (
         <div className="hey-dictation-edit__flow">

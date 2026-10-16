@@ -48,6 +48,20 @@ test("replacement changes only the bound range and rejects stale drafts", () => 
   assert.equal(replaceSelection("new draft", snapshot, "chosen"), null);
 });
 
+test("real Chat page exposes selected-text voice editing with a discoverable idle prompt", async () => {
+  const chatPage = await source("../src/ChatPage.jsx");
+  const chatInput = await source("../src/components/chat/ChatInput.jsx");
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  assert.match(chatPage, /<ChatInput[\s\S]*?value=\{message\}[\s\S]*?setValue=\{setMessage\}/);
+  assert.match(chatInput, /<DictationEditControl[^>]*inputRef=\{inputRef\}[^>]*setValue=\{setValue\}/);
+  assert.match(control, /Select text in your message draft, then choose voice edit\./);
+  assert.match(control, /preview before replacing anything/);
+  assert.match(control, /aria-describedby="hey-dictation-edit-help"/);
+  assert.match(control, /onClick=\{beginEdit\} aria-describedby=/);
+  assert.doesNotMatch(control, /onClick=\{beginEdit\}[^>]*disabled=\{!selection/);
+  assert.match(control, /Select text in the message draft before editing\./);
+});
+
 test("voice edit UI fences account changes, requires provider consent, and never submits", async () => {
   const control = await source("../src/components/chat/DictationEditControl.jsx");
   const inputSource = await source("../src/components/chat/ChatInput.jsx");
