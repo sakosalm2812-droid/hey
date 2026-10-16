@@ -346,6 +346,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
   let destroyed = false;
   let active = false;
   let attempt = null;
+  let visibilityInterruptedAt = null;
 
   function now() {
     try {
@@ -371,7 +372,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     if (!attempt || attempt.finished) return;
     attempt.finished = true;
     const metrics = Object.freeze({
-      schemaVersion: 1,
+      schemaVersion: 2,
       provider: !activeSpeechProvider ? "unavailable" : browserSpeechProviders.has(activeSpeechProvider) ? "browser" : "custom",
       status,
       startupLatencyMs: elapsed(attempt.startedAt, attempt.providerStartedAt),
@@ -379,6 +380,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
       transcriptCount: attempt.transcriptCount,
       emptyTranscriptCount: attempt.emptyTranscriptCount,
       durationMs: elapsed(attempt.startedAt, endedAt),
+      visibilityRecoveryLatencyMs: attempt.visibilityRecoveryLatencyMs,
     });
     try { onMetrics?.(metrics); } catch { /* Optional instrumentation cannot affect dictation. */ }
   }
@@ -401,6 +403,8 @@ export function createDictationSession({ speechProvider, environment = globalThi
 
   function stop(terminalStatus = "stopped") {
     generation += 1;
+    if (terminalStatus === "visibility_hidden") visibilityInterruptedAt = now();
+    else if (terminalStatus === "account_changed") visibilityInterruptedAt = null;
     finishAttempt(["account_changed", "visibility_hidden"].includes(terminalStatus) ? terminalStatus : active ? terminalStatus : "cancelled");
     attempt = null;
     active = false;
@@ -458,6 +462,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
       firstTranscriptAt: null,
       transcriptCount: 0,
       emptyTranscriptCount: 0,
+      visibilityRecoveryLatencyMs: null,
       finished: false,
     };
     if (!activeSpeechProvider) {
@@ -534,6 +539,10 @@ export function createDictationSession({ speechProvider, environment = globalThi
         },
       });
       currentAttempt.providerStartedAt = now();
+      if (visibilityInterruptedAt !== null) {
+        currentAttempt.visibilityRecoveryLatencyMs = elapsed(visibilityInterruptedAt, currentAttempt.providerStartedAt);
+        visibilityInterruptedAt = null;
+      }
     } catch (error) {
       active = false;
       finishAttempt("start_failed");
