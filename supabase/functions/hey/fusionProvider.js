@@ -5,6 +5,7 @@ const MAX_PROVIDER_RATE_USD_PER_MILLION = 1_000;
 const PROVIDER_TIMEOUT_MS = 20_000;
 const AUTHORITY_RECHECK_INTERVAL_MS = 5_000;
 const MAX_VERIFICATION_CONTEXT_BYTES = 8_000;
+const MAX_PROVIDER_RESPONSE_BYTES = 1_000_000;
 const PROVIDER_ENDPOINTS = Object.freeze({
   openai: "https://api.openai.com/v1/chat/completions",
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
@@ -88,6 +89,36 @@ function hasBoundAnswerEvidence(output) {
 
 function calculateCost(usage, pricing) {
   return (usage.inputTokens * pricing.inputUsdPerMillion + usage.outputTokens * pricing.outputUsdPerMillion) / 1_000_000;
+}
+
+async function readBoundedResponseText(response) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_PROVIDER_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("Provider response too large");
+  }
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_PROVIDER_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new Error("Provider response too large");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 async function sha256Hex(value) {
@@ -193,13 +224,12 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
       redirect: "error",
     });
     if (controller.signal.aborted) throw new Error("Provider request cancelled");
-    responseText = await response.text();
+    responseText = await readBoundedResponseText(response);
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abortParent);
   }
   if (signal?.aborted || controller.signal.aborted) throw new Error("Provider request cancelled");
-  if (responseText.length > 1_000_000) throw new Error("Provider response too large");
   let data;
   try {
     data = JSON.parse(responseText);

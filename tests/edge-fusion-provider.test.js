@@ -219,6 +219,34 @@ test("Fusion dispatches two mocked provider HTTP requests and returns only a che
   assert.equal(result.accountScope, undefined);
 });
 
+test("oversized provider response streams are cancelled before the body is fully buffered", async () => {
+  let cancelled = 0;
+  let calls = 0;
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1_000_001));
+        },
+        cancel() {
+          cancelled += 1;
+        },
+      }));
+    },
+  });
+  assert.equal(cancelled, 2);
+  assert.equal(calls, 2);
+  assert.notEqual(result.status, "complete");
+  assert.equal("answer" in result, false);
+});
+
 test("fusion disagreement returns no answer and stale account scope cancels before any provider HTTP call", async (t) => {
   await t.test("providers disagree", async () => {
     const { calls, fetchImpl } = mockProviderFetch((providerId) => [providerId === "openai" ? "42" : "43", 0.9]);
