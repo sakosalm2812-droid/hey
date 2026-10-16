@@ -365,6 +365,51 @@ test("canonical artifact reads deny cached answer keys to students", async () =>
   artifactEngine.artifacts.delete(worksheet.id);
 });
 
+test("artifact mutations require teacher write access even when a worksheet is readable", async () => {
+  const originalGetUser = supabaseClient.auth.getUser;
+  const worksheet = {
+    id: "teacher-worksheet-write-auth-test", projectId: "school-space", type: "document", title: "Student sheet",
+    content: { type: "teacher_worksheet", questions: [{ prompt: "Question", points: 1 }] },
+    createdBy: "teacher-1",
+    metadata: { workflow: "teacher_worksheet", accountScope: "account:teacher-1", classId: "class-1" },
+    status: "draft", version: 1, branchName: "main", tags: [],
+  };
+  const key = {
+    ...worksheet, id: "teacher-key-write-auth-test", createdBy: "teacher-1",
+    content: { type: "teacher_assessment", questions: [{ prompt: "Question", teacherAnswer: "Private" }] },
+    metadata: { workflow: "teacher_assessment", accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  artifactEngine.artifacts.set(worksheet.id, worksheet);
+  artifactEngine.artifacts.set(key.id, key);
+  const readableStudent = { id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  const peerTeacher = { id: "teacher-2", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  try {
+    supabaseClient.auth.getUser = async () => ({ data: { user: readableStudent }, error: null });
+    assert.equal((await artifactEngine.getArtifact(worksheet.id)).id, worksheet.id, "student can read class worksheet");
+    await assert.rejects(artifactEngine.updateArtifact(worksheet.id, { title: "Tampered" }), /Artifact not found/);
+    await assert.rejects(artifactEngine.createVersion(worksheet.id, { content: { type: "teacher_worksheet", answers: "injected" } }), /Artifact not found/);
+    await assert.rejects(artifactEngine.branchArtifact(worksheet.id, { createdBy: "student-1" }), /Artifact not found/);
+    await assert.rejects(artifactEngine.deleteArtifact(worksheet.id), /Artifact not found/);
+
+    supabaseClient.auth.getUser = async () => ({ data: { user: peerTeacher }, error: null });
+    await assert.rejects(artifactEngine.updateArtifact(key.id, { content: { questions: [] } }), /Artifact not found/);
+
+    supabaseClient.auth.getUser = async () => ({ data: { user: null }, error: null });
+    await assert.rejects(artifactEngine.updateArtifact(worksheet.id, { title: "No identity" }), /Artifact not found/);
+
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    assert.equal((await artifactEngine.updateArtifact(worksheet.id, { title: "Teacher edit" })).title, "Teacher edit");
+  } finally {
+    artifactEngine.artifacts.delete(worksheet.id);
+    artifactEngine.artifacts.delete(key.id);
+    artifactEngine.versionGraphs.delete(worksheet.id);
+    artifactEngine.versionGraphs.delete(key.id);
+    supabaseClient.auth.getUser = originalGetUser;
+  }
+});
+
 test("canonical database reads fail closed for legacy private artifacts without a creator", async () => {
   const originalFrom = supabaseClient.from;
   const originalGetUser = supabaseClient.auth.getUser;

@@ -96,6 +96,7 @@ export async function canReadTeacherArtifact(artifact, context) {
 }
 
 export async function canWriteTeacherArtifact(artifact, context) {
+  if (!isTeacherAnswerKeyArtifact(artifact) && !isStudentWorksheetArtifact(artifact) && !isTeacherLessonArtifact(artifact)) return true;
   try {
     const { data, error } = await supabaseClient.auth.getUser();
     return !error && authorizeTeacherArtifactWrite(artifact, context, data?.user);

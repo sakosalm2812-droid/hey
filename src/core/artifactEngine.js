@@ -1,7 +1,7 @@
 import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { supabaseClient } from "../lib/supabase.js";
-import { canReadTeacherArtifact, isTeacherAnswerKeyArtifact, isTeacherLessonArtifact, isStudentWorksheetArtifact } from "./teacherArtifactAccess.js";
+import { canReadTeacherArtifact, canWriteTeacherArtifact, isTeacherAnswerKeyArtifact, isTeacherLessonArtifact, isStudentWorksheetArtifact } from "./teacherArtifactAccess.js";
 
 const TEACHER_SCOPE_METADATA_FIELDS = [
   "workflow", "artifactContract", "accountScope", "workspaceId", "classId", "audience", "studentDataPolicy", "journeyId",
@@ -256,7 +256,7 @@ class ArtifactEngine {
 
   async updateArtifact(artifactId, updates) {
     const artifact = await this.getArtifact(artifactId);
-    if (!artifact) {
+    if (!artifact || !await canWriteTeacherArtifact(artifact)) {
       throw new Error(`Artifact not found: ${artifactId}`);
     }
 
@@ -315,7 +315,7 @@ class ArtifactEngine {
 
   async createVersion(artifactId, params) {
     const artifact = await this.getArtifact(artifactId);
-    if (!artifact) {
+    if (!artifact || !await canWriteTeacherArtifact(artifact)) {
       throw new Error(`Artifact not found: ${artifactId}`);
     }
 
@@ -364,7 +364,7 @@ class ArtifactEngine {
 
   async branchArtifact(artifactId, params) {
     const artifact = await this.getArtifact(artifactId);
-    if (!artifact) {
+    if (!artifact || !await canWriteTeacherArtifact(artifact)) {
       throw new Error(`Artifact not found: ${artifactId}`);
     }
 
@@ -604,6 +604,10 @@ class ArtifactEngine {
   }
 
   async deleteArtifact(artifactId) {
+    const artifact = await this.getArtifact(artifactId);
+    if (!artifact || !await canWriteTeacherArtifact(artifact)) {
+      throw new Error(`Artifact not found: ${artifactId}`);
+    }
     this.artifacts.delete(artifactId);
     this.versionGraphs.delete(artifactId);
 
