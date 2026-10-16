@@ -15,6 +15,9 @@ export default function ChatInput({
   onDictationInsert,
   fusionEnabled = false,
   setFusionEnabled,
+  providerCatalog = { providers: [], profiles: [] },
+  providerProfile = "automatic",
+  setProviderProfile,
 }) {
   const { t } = useLocale();
   const { user } = useAuth();
@@ -60,6 +63,26 @@ export default function ChatInput({
         />
         <span>Use model fusion for this request</span>
       </label>
+      {providerCatalog.profiles?.length > 1 && (
+        <label className="hey-chat-provider-profile">
+          <span>Model routing</span>
+          <select
+            value={providerProfile}
+            onChange={(event) => setProviderProfile?.(event.target.value)}
+            disabled={disabled}
+            aria-label="Model routing profile"
+          >
+            {providerCatalog.profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {providerCatalog.providers?.length > 0 && (
+        <p className="hey-chat-provider-models" aria-live="polite">
+          Available models: {providerCatalog.providers.map((provider) => `${provider.providerName} · ${provider.modelId}`).join(", ")}
+        </p>
+      )}
       <DictationControl key={user?.id || "signed-out"} onInsert={insertDictation} disabled={disabled} />
       <div className="hey-chat-input-shell">
         <textarea

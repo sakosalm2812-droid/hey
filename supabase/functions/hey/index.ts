@@ -2,6 +2,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
+import {
+  filterEntitledProviderAttempts,
+  listConfiguredProviders,
+  normalizeProviderEntitlements,
+  orderProviderAttemptsForProfile,
+  parseRoutingProfile,
+  routingPricesFromFusionConfig,
+} from "./providerCatalog.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
@@ -88,12 +96,8 @@ function getProviderAttempts() {
     : configured;
 }
 
-async function callProvider(messages: Array<Record<string, string>>, maxTokens: number, preferredProvider?: string) {
+async function callProvider(messages: Array<Record<string, string>>, maxTokens: number, orderedAttempts = getProviderAttempts()) {
   let lastError = "No AI provider is configured";
-  const attempts = getProviderAttempts();
-  const orderedAttempts = preferredProvider
-    ? [...attempts.filter((provider) => provider.id === preferredProvider), ...attempts.filter((provider) => provider.id !== preferredProvider)]
-    : attempts;
 
   const deadline = Date.now() + 35_000;
   for (const provider of orderedAttempts) {
@@ -256,6 +260,48 @@ Deno.serve(async (request) => {
     return jsonResponse({ status: ready ? "ready" : "not_ready" }, ready ? 200 : 503);
   }
 
+  const modelsPath = new URL(request.url).pathname.endsWith("/models");
+  if (request.method === "GET" && modelsPath) {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return jsonResponse({ error: "Provider discovery is not configured", code: "backend_unavailable" }, 503);
+    }
+    const token = getAuthToken(request);
+    if (!token) return jsonResponse({ error: "Authentication required" }, 401);
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { data: { user }, error: userError } = await authClient.auth.getUser(token);
+    if (userError || !user) return jsonResponse({ error: "Authentication required" }, 401);
+    const { data: profile, error: profileError } = await authClient
+      .from("profiles")
+      .select("entitlements")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileError || !profile) {
+      return jsonResponse({ error: "Your account permissions could not be verified", code: "account_permissions_unavailable" }, 503);
+    }
+    const entitlements = normalizeProviderEntitlements(profile.entitlements);
+    if (!entitlements) {
+      return jsonResponse({ error: "Your account permissions could not be verified", code: "account_permissions_unavailable" }, 503);
+    }
+    const pricing = routingPricesFromFusionConfig(parseFusionPricingConfig(Deno.env.get("HEY_FUSION_PRICING_JSON") || ""));
+    const entitledAttempts = filterEntitledProviderAttempts(getProviderAttempts(), entitlements);
+    const providers = listConfiguredProviders(entitledAttempts, pricing);
+    const remoteAllowed = entitlements.includes("provider.remote");
+    const profiles = [{ id: "automatic", label: "Automatic" }];
+    if (providers.length) profiles.push({ id: "lower_cost", label: "Lower cost" });
+    return jsonResponse({
+      providers,
+      profiles,
+      state: !remoteAllowed ? "permission_required" : providers.length ? "configured" : "unavailable",
+      defaultProvider: providers.some((provider) => provider.providerId === Deno.env.get("HEY_PROVIDER"))
+        ? Deno.env.get("HEY_PROVIDER")
+        : null,
+    });
+  }
+
   if (request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
@@ -335,11 +381,14 @@ Deno.serve(async (request) => {
     if (accountPlan === "free") {
       return jsonResponse({ error: "HEY Vision is available on the Pro and Elite plans." }, 403);
     }
+    const visionAttempts = filterEntitledProviderAttempts(getProviderAttempts(), profile.entitlements);
+    if (!visionAttempts.length) {
+      return jsonResponse({ error: "Your account is not permitted to use a remote AI provider", code: "provider_entitlement_required" }, 403);
+    }
 
     let visionData: Record<string, unknown> | null = null;
     let visionProvider: { providerId: string; model: string };
     let lastVisionError = "No AI provider is configured";
-    const visionAttempts = getProviderAttempts();
 
     for (const attempt of visionAttempts.slice(0, 3)) {
       if (request.signal.aborted) return jsonResponse({ error: "The vision request was cancelled", code: "request_cancelled" }, 499);
@@ -437,6 +486,10 @@ Deno.serve(async (request) => {
     if (accountPlan !== "elite") {
       return jsonResponse({ error: "HEY Forge is available on the Elite plan." }, 403);
     }
+    const forgeAttempts = filterEntitledProviderAttempts(getProviderAttempts(), profile.entitlements);
+    if (!forgeAttempts.length) {
+      return jsonResponse({ error: "Your account is not permitted to use a remote AI provider", code: "provider_entitlement_required" }, 403);
+    }
     const description = (normaliseContent(payload.description) || message).slice(0, 2000);
     const category = (normaliseContent(payload.category) || "Custom creation").slice(0, 120);
     const { data: forgeRun, error: forgeClaimError } = await serviceSupabase
@@ -480,7 +533,7 @@ Deno.serve(async (request) => {
       const result = await callProvider([
         { role: "system", content: "You are HEY Forge, a careful production artifact generator. Return strict JSON and never claim files were tested unless they were." },
         { role: "user", content: forgePrompt },
-      ], 5000);
+      ], 5000, forgeAttempts);
       forgeData = result.data;
       forgeProvider = result;
     } catch (error) {
@@ -627,6 +680,34 @@ Deno.serve(async (request) => {
   ];
 
   const fusionRequested = payload.fusion === true || payload.modelMode === "fusion" || payload.mode === "fusion";
+  const requestedProfile = fusionRequested ? { status: "valid", profile: "automatic" } : parseRoutingProfile(payload.routingProfile);
+  if (requestedProfile.status === "invalid") {
+    return jsonResponse({ error: "The selected provider profile is invalid", code: "provider_profile_invalid" }, 400);
+  }
+  let chatProviderAttempts = getProviderAttempts();
+  if (!fusionRequested) {
+    const entitlements = normalizeProviderEntitlements(profile.entitlements);
+    if (!entitlements) {
+      return jsonResponse({ error: "Your account permissions could not be verified", code: "account_permissions_unavailable" }, 503);
+    }
+    if (!entitlements.includes("provider.remote")) {
+      return jsonResponse({ error: "Your account is not permitted to use a remote AI provider", code: "provider_entitlement_required" }, 403);
+    }
+    chatProviderAttempts = filterEntitledProviderAttempts(chatProviderAttempts, entitlements);
+    if (!chatProviderAttempts.length) {
+      return jsonResponse({ error: "Your account has no enabled remote AI provider", code: "provider_entitlement_required" }, 403);
+    }
+    if (requestedProfile.profile === "lower_cost") {
+      const routingPricing = routingPricesFromFusionConfig(parseFusionPricingConfig(Deno.env.get("HEY_FUSION_PRICING_JSON") || ""));
+      if (!routingPricing) {
+        return jsonResponse({ error: "Cost-ranked provider routing is not configured", code: "provider_pricing_unavailable" }, 503);
+      }
+      chatProviderAttempts = orderProviderAttemptsForProfile(chatProviderAttempts, routingPricing, "lower_cost");
+      if (!chatProviderAttempts.length) {
+        return jsonResponse({ error: "No entitled provider model has verified pricing", code: "provider_pricing_unavailable" }, 503);
+      }
+    }
+  }
   let providerMetadata: Record<string, unknown>;
   let response: string;
   if (fusionRequested) {
@@ -697,7 +778,7 @@ Deno.serve(async (request) => {
   } else {
     let providerResult;
     try {
-      providerResult = await callProvider(messages, 1200);
+      providerResult = await callProvider(messages, 1200, chatProviderAttempts);
     } catch (error) {
       console.error("HEY provider error", error);
       return jsonResponse({ error: "HEY could not reach an AI provider" }, 502);

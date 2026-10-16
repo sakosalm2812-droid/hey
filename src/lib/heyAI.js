@@ -114,6 +114,10 @@ export async function parseFusionVerificationMetadata(value, options = {}) {
 
 export function getHEYChatError(response, details = {}, fusion = false) {
   if (response.status === 401) return "Your session expired. Please sign in again.";
+  if (details.code === "provider_entitlement_required") return "Your account does not have access to a remote AI provider.";
+  if (details.code === "account_permissions_unavailable") return "HEY could not verify your provider access. Try again shortly.";
+  if (details.code === "provider_profile_invalid") return "That routing profile is unavailable. Refresh the model list and try again.";
+  if (details.code === "provider_pricing_unavailable") return "Cost-ranked routing is unavailable because verified model prices are missing.";
   if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
   if (fusion && response.status === 409) return "The providers could not independently confirm an answer. No answer was delivered.";
   if (fusion && response.status === 503) return "Model fusion is unavailable because its provider permissions or pricing are not configured.";
@@ -148,6 +152,28 @@ export async function checkHEYAIReadiness({ signal, timeoutMs = 8_000 } = {}) {
     return { status: "not_configured", message: "Required Supabase or AI provider configuration is missing." };
   }
   return { status: "unavailable", message: "HEY AI health could not be confirmed." };
+}
+
+export async function getHEYProviderCatalog({ signal, timeoutMs = 8_000 } = {}) {
+  const session = await getHEYSession();
+  if (!session?.access_token) throw new Error("Sign in to view available AI models.");
+  const catalogUrl = `${getHEYApiUrl().replace(/\/+$/, "")}/models`;
+  const response = await fetchWithTimeout(catalogUrl, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  }, timeoutMs, signal);
+  const details = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(details.error || "Available AI models could not be loaded.");
+  if (!Array.isArray(details.providers) || !details.providers.every((provider) =>
+    provider && typeof provider.providerId === "string" && typeof provider.providerName === "string" &&
+    typeof provider.modelId === "string" && provider.state === "configured"
+  )) throw new Error("The available model catalog is invalid.");
+  if (!Array.isArray(details.profiles) || !details.profiles.every((profile) =>
+    profile && ["automatic", "lower_cost"].includes(profile.id) && typeof profile.label === "string"
+  ) || !details.profiles.some((profile) => profile.id === "automatic")) {
+    throw new Error("The routing profile catalog is invalid.");
+  }
+  return details;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
@@ -209,7 +235,7 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onFusionVerification, confirmed = false, fusion = false, signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onFusionVerification, confirmed = false, fusion = false, providerProfile = "automatic", signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
@@ -258,6 +284,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         primaryTools: brainResult.primaryTools,
         responseStyle: brainResult.responseStyle,
         conversationId,
+        routingProfile: !fusion && providerProfile === "lower_cost" ? "lower_cost" : undefined,
       }, fusion))
       }, { signal });
     } catch (error) {
