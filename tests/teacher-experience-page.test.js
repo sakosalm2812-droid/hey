@@ -114,6 +114,30 @@ test("recovery hints are account-keyed metadata only and malformed or foreign hi
   assert.equal(readTeacherJourneyRecoveryHint(storage, "teacher-1"), null);
 });
 
+test("Teacher recovery hint helpers reject accessor and symbol properties without invoking getters", () => {
+  const values = new Map();
+  const storage = {
+    setItem(key, value) { values.set(key, value); },
+    getItem(key) { return values.get(key) || null; },
+  };
+  let getterCalls = 0;
+  const hint = {
+    accountScope: "account:teacher-1", classId: "class-1", journeyId: "e0e5c6a1-29a6-4ccb-9ca8-f57a7073fe93",
+    userId: "teacher-1", workspaceId: "project-1",
+  };
+  Object.defineProperty(hint, "classId", { enumerable: true, get() { getterCalls += 1; return "class-1"; } });
+  assert.equal(writeTeacherJourneyRecoveryHint(storage, hint), false);
+  assert.equal(getterCalls, 0);
+  assert.equal(values.size, 0);
+
+  const symbolHint = {
+    accountScope: "account:teacher-1", classId: "class-1", journeyId: "e0e5c6a1-29a6-4ccb-9ca8-f57a7073fe93",
+    userId: "teacher-1", workspaceId: "project-1", [Symbol("unexpected")]: "ignored",
+  };
+  assert.equal(writeTeacherJourneyRecoveryHint(storage, symbolHint), false);
+  assert.equal(values.size, 0);
+});
+
 test("Teacher recovery rechecks access and reloads persisted data through Forge", () => {
   assert.match(page, /HEY\.teacher\.getLessonWorksheetJourney\(/);
   assert.match(page, /readCurrentTeacherAccess\(operationAccountId\)/);
