@@ -396,6 +396,7 @@ test("low-confidence detector frames cannot be saved as custom calibration sampl
         pose: Array(63).fill(0),
         handedness: "right",
         handConfidence: MIN_GESTURE_CALIBRATION_CONFIDENCE - 0.01,
+        calibrationConditions: { lighting: "good", handDistance: "good", framing: "good" },
         timestamp: Date.now(),
       };
     },
@@ -417,6 +418,40 @@ test("low-confidence detector frames cannot be saved as custom calibration sampl
     else globalThis.document = previousDocument;
     if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
     else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
+});
+
+test("poor lighting, apparent hand distance, or off-center framing cannot be saved as calibration", () => {
+  for (const [field, value, expectedStatus] of [
+    ["lighting", "dim", "lighting_adjustment"],
+    ["handDistance", "far", "distance_adjustment"],
+    ["framing", "off_center", "framing_adjustment"],
+  ]) {
+    const { engine, profile } = makeEngine();
+    const custom = engine.createCustomGesture({ name: "Calibration gate", gestureId: "G01", action: "summon", actionType: "ui" });
+    const calibrationConditions = { lighting: "good", handDistance: "good", framing: "good", [field]: value };
+    engine.setRecognitionAdapter({
+      kind: "mediapipe-hands-bundled",
+      detect() { return null; },
+      getLatestObservation() { return null; },
+    });
+    engine.recognitionState = GESTURE_STATES.ACTIVE;
+    engine.recognitionMode = "test";
+    engine.activeProfileId = profile.id;
+    engine.latestDetectorObservation = {
+      accountScope: getAccountScope(),
+      profileId: profile.id,
+      timestamp: Date.now(),
+      pose: Array(63).fill(0),
+      handedness: "right",
+      handConfidence: 0.99,
+      calibrationConditions,
+    };
+
+    const result = engine.captureCustomGestureSample(custom.id);
+
+    assert.equal(result.status, expectedStatus);
+    assert.equal(engine.getCustomGesture(custom.id).templates.length, 0);
   }
 });
 
@@ -1102,7 +1137,10 @@ test("hiding the page stops active gesture capture and rejects the in-flight det
       return new Promise((resolve) => { resolveDetection = resolve; });
     },
     getLatestObservation() {
-      return { pose: Array(63).fill(0), handedness: "right", handConfidence: 0.99, timestamp: Date.now() };
+      return {
+        pose: Array(63).fill(0), handedness: "right", handConfidence: 0.99,
+        calibrationConditions: { lighting: "good", handDistance: "good", framing: "good" }, timestamp: Date.now(),
+      };
     },
     stop() { adapterStops += 1; },
   });
@@ -1229,7 +1267,10 @@ test("active camera track loss releases capture and suppresses the in-flight det
       return new Promise((resolve) => { resolveDetection = resolve; });
     },
     getLatestObservation() {
-      return { pose: Array(63).fill(0), handedness: "right", handConfidence: 0.99, timestamp: Date.now() };
+      return {
+        pose: Array(63).fill(0), handedness: "right", handConfidence: 0.99,
+        calibrationConditions: { lighting: "good", handDistance: "good", framing: "good" }, timestamp: Date.now(),
+      };
     },
     stop() { adapterStops += 1; },
   });

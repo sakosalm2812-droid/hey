@@ -24,6 +24,46 @@ function normalizeLandmarks(landmarks) {
   return points.flatMap((point) => point.map((value) => Math.max(-1, Math.min(1, value / scale))));
 }
 
+export function assessCalibrationConditions(frame, landmarks) {
+  const pixelData = frame?.data;
+  const width = frame?.width;
+  const height = frame?.height;
+  let brightness = null;
+  if (Number.isSafeInteger(width) && width > 0 && Number.isSafeInteger(height) && height > 0
+    && pixelData && pixelData.length >= width * height * 4) {
+    let luminanceTotal = 0;
+    let samples = 0;
+    for (let row = 0; row < 6; row += 1) {
+      for (let column = 0; column < 8; column += 1) {
+        const x = Math.min(width - 1, Math.floor((column + 0.5) * width / 8));
+        const y = Math.min(height - 1, Math.floor((row + 0.5) * height / 6));
+        const offset = (y * width + x) * 4;
+        luminanceTotal += (0.2126 * pixelData[offset] + 0.7152 * pixelData[offset + 1] + 0.0722 * pixelData[offset + 2]) / 255;
+        samples += 1;
+      }
+    }
+    if (samples) brightness = luminanceTotal / samples;
+  }
+
+  const lighting = brightness === null ? "unknown" : brightness < 0.18 ? "dim" : brightness > 0.92 ? "bright" : "good";
+  if (!Array.isArray(landmarks) || landmarks.length < 21
+    || landmarks.slice(0, 21).some((point) => !Number.isFinite(point?.x) || !Number.isFinite(point?.y))) {
+    return { lighting, handDistance: "unknown", framing: "unknown" };
+  }
+  const xs = landmarks.slice(0, 21).map((point) => point.x);
+  const ys = landmarks.slice(0, 21).map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const extent = Math.max(maxX - minX, maxY - minY);
+  const handDistance = extent < 0.18 ? "far" : extent > 0.75 ? "close" : "good";
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const framing = Math.abs(centerX - 0.5) > 0.22 || Math.abs(centerY - 0.5) > 0.28 ? "off_center" : "good";
+  return { lighting, handDistance, framing };
+}
+
 function classifyLandmarks(landmarks, handScore, previousGesture, sensitivity = 0.8) {
   if (!Array.isArray(landmarks) || landmarks.length < 21) return { gesture: null, previousGesture: null };
   const extensionThreshold = 0.78 + (0.8 - sensitivity) * 0.1;
@@ -169,6 +209,7 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
         pose,
         handedness,
         handConfidence: Number.isFinite(score) ? Math.max(0, Math.min(1, score)) : 0,
+        calibrationConditions: assessCalibrationConditions(frame, landmarks),
         timestamp: Date.now(),
       };
 

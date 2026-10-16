@@ -1119,12 +1119,18 @@ export class GestureEngine {
       catch { return null; }
     })();
     this.latestDetectorObservation = null;
+    const calibrationConditions = observation?.calibrationConditions;
+    const validCalibrationConditions = calibrationConditions && typeof calibrationConditions === "object"
+      && ["unknown", "dim", "good", "bright"].includes(calibrationConditions.lighting)
+      && ["unknown", "far", "good", "close"].includes(calibrationConditions.handDistance)
+      && ["unknown", "good", "off_center"].includes(calibrationConditions.framing);
     if (this.recognitionAdapter.kind === "mediapipe-hands-bundled" && observation && typeof observation === "object"
       && Array.isArray(observation.pose) && observation.pose.length === 63
       && observation.pose.every((number) => Number.isFinite(number) && number >= -1 && number <= 1)
       && ["left", "right", "unknown"].includes(observation.handedness)
       && Number.isFinite(observation.handConfidence) && observation.handConfidence >= 0 && observation.handConfidence <= 1
-      && Number.isSafeInteger(observation.timestamp) && Date.now() - observation.timestamp <= 1000) {
+      && Number.isSafeInteger(observation.timestamp) && Date.now() - observation.timestamp <= 1000
+      && validCalibrationConditions) {
       this.latestDetectorObservation = {
         accountScope: getAccountScope(),
         profileId: profile.id,
@@ -1132,6 +1138,11 @@ export class GestureEngine {
         pose: [...observation.pose],
         handedness: observation.handedness,
         handConfidence: observation.handConfidence,
+        calibrationConditions: {
+          lighting: calibrationConditions.lighting,
+          handDistance: calibrationConditions.handDistance,
+          framing: calibrationConditions.framing,
+        },
       };
     }
     if (this.latestDetectorObservation) {
@@ -1139,6 +1150,7 @@ export class GestureEngine {
         profileId: profile.id,
         handedness: this.latestDetectorObservation.handedness,
         handConfidence: this.latestDetectorObservation.handConfidence,
+        calibrationConditions: this.latestDetectorObservation.calibrationConditions,
       });
     }
     if (!result || typeof result !== "object" || Array.isArray(result)) return null;
@@ -1450,6 +1462,28 @@ export class GestureEngine {
     }
     if (!Number.isFinite(observation.handConfidence) || observation.handConfidence < MIN_GESTURE_CALIBRATION_CONFIDENCE) {
       return { success: false, status: "low_confidence", error: "Hand tracking confidence is too low. Move into clear view and try again." };
+    }
+    if (observation.calibrationConditions.lighting !== "good") {
+      const error = observation.calibrationConditions.lighting === "dim"
+        ? "The camera image looks dim. Add light before recording this pose."
+        : observation.calibrationConditions.lighting === "bright"
+          ? "The camera image looks washed out. Reduce glare or backlighting before recording this pose."
+          : "Lighting could not be assessed. Hold still for another detector frame before recording.";
+      return { success: false, status: "lighting_adjustment", error };
+    }
+    if (observation.calibrationConditions.handDistance !== "good") {
+      const error = observation.calibrationConditions.handDistance === "far"
+        ? "Your hand appears too small in the frame. Move closer before recording this pose."
+        : observation.calibrationConditions.handDistance === "close"
+          ? "Your hand appears too large in the frame. Move back before recording this pose."
+          : "Hand distance could not be assessed. Hold still for another detector frame before recording.";
+      return { success: false, status: "distance_adjustment", error };
+    }
+    if (observation.calibrationConditions.framing !== "good") {
+      const error = observation.calibrationConditions.framing === "off_center"
+        ? "Move your hand toward the center of the preview before recording this pose."
+        : "Hand framing could not be assessed. Hold still for another detector frame before recording.";
+      return { success: false, status: "framing_adjustment", error };
     }
 
     const sample = {

@@ -32,7 +32,16 @@ test("custom-pose capture explains and blocks detector confidence below the engi
   assert.match(studioSource, /calibrationConfidenceReady/);
   assert.match(studioSource, /Hand tracking is below .*confidence/);
   assert.match(studioSource, /Keep your hand centered, unobstructed, and well lit/);
-  assert.match(studioSource, /disabled=\{!active \|\| mode !== "test" \|\| !calibrationConfidenceReady\}/);
+  assert.match(studioSource, /disabled=\{!active \|\| mode !== "test" \|\| !calibrationReady\}/);
+});
+
+test("custom-pose calibration reports and gates dim, washed-out, distant, and off-center hands", () => {
+  assert.match(studioSource, /calibrationConditionsReady/);
+  assert.match(studioSource, /The camera image looks dim/);
+  assert.match(studioSource, /The camera image looks washed out/);
+  assert.match(studioSource, /Your hand appears too small in the frame/);
+  assert.match(studioSource, /Move your hand toward the center of the preview/);
+  assert.match(studioSource, /Capture unlocks when tracking and framing are ready/);
 });
 
 test("Gesture Studio discloses local camera processing and separate MediaPipe metrics before consent", () => {

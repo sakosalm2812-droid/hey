@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBundledHandGestureAdapter, classifyLandmarks } from "../src/lib/bundledHandGestureAdapter.js";
+import { assessCalibrationConditions, createBundledHandGestureAdapter, classifyLandmarks } from "../src/lib/bundledHandGestureAdapter.js";
 
 function makeLandmarks(extended) {
   const landmarks = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
@@ -14,6 +14,35 @@ function makeLandmarks(extended) {
   }
   return landmarks;
 }
+
+function makeCalibrationLandmarks(min = 0.3, max = 0.7) {
+  return Array.from({ length: 21 }, (_, index) => ({
+    x: min + (index % 5) / 4 * (max - min),
+    y: min + Math.floor(index / 5) / 4 * (max - min),
+    z: 0,
+  }));
+}
+
+test("calibration estimates lighting, apparent hand distance, and centering from bounded frame data", () => {
+  const frame = (brightness) => ({ width: 64, height: 48, data: new Uint8Array(64 * 48 * 4).fill(brightness) });
+
+  assert.deepEqual(
+    assessCalibrationConditions(frame(128), makeCalibrationLandmarks()),
+    { lighting: "good", handDistance: "good", framing: "good" },
+  );
+  assert.deepEqual(
+    assessCalibrationConditions(frame(0), makeCalibrationLandmarks(0.05, 0.2)),
+    { lighting: "dim", handDistance: "far", framing: "off_center" },
+  );
+  assert.deepEqual(
+    assessCalibrationConditions(frame(255), makeCalibrationLandmarks(0.05, 0.95)),
+    { lighting: "bright", handDistance: "close", framing: "good" },
+  );
+  assert.deepEqual(
+    assessCalibrationConditions({ width: 64, height: 48, data: new Uint8Array(4) }, makeCalibrationLandmarks()),
+    { lighting: "unknown", handDistance: "good", framing: "good" },
+  );
+});
 
 test("bundled landmark classifier maps only the supported low-risk gesture IDs", () => {
   const openPalm = classifyLandmarks(makeLandmarks([true, true, true, true, true]), 0.98, null);
@@ -77,6 +106,11 @@ test("bundled adapter initializes local MediaPipe assets, emits hand detections,
   const detection = await adapter.detect(imageData, {}, { signal: new AbortController().signal });
   assert.equal(detectedImage.width, 640);
   assert.deepEqual(detection, { id: "G01", confidence: 0.98, handedness: "left" });
+  assert.deepEqual(adapter.getLatestObservation().calibrationConditions, {
+    lighting: "dim",
+    handDistance: "close",
+    framing: "off_center",
+  });
 
   adapter.stop("user_stop");
   await new Promise((resolve) => setTimeout(resolve, 0));

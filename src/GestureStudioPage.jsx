@@ -119,6 +119,24 @@ export default function GestureStudioPage() {
   const canUseActiveMode = enabledProfileMappings.length > 0;
   const calibrationConfidenceReady = Number.isFinite(latestObservation?.handConfidence)
     && latestObservation.handConfidence >= MIN_GESTURE_CALIBRATION_CONFIDENCE;
+  const calibrationConditions = latestObservation?.calibrationConditions;
+  const calibrationConditionsReady = calibrationConditions?.lighting === "good"
+    && calibrationConditions?.handDistance === "good"
+    && calibrationConditions?.framing === "good";
+  const calibrationReady = calibrationConfidenceReady && calibrationConditionsReady;
+  const calibrationGuidance = !calibrationConfidenceReady
+    ? `Hand tracking is below ${Math.round(MIN_GESTURE_CALIBRATION_CONFIDENCE * 100)}% confidence. Keep your hand centered, unobstructed, and well lit.`
+    : calibrationConditions?.lighting === "dim"
+      ? "The camera image looks dim. Add light before recording this pose."
+      : calibrationConditions?.lighting === "bright"
+        ? "The camera image looks washed out. Reduce glare or backlighting before recording this pose."
+        : calibrationConditions?.handDistance === "far"
+          ? "Your hand appears too small in the frame. Move closer before recording this pose."
+          : calibrationConditions?.handDistance === "close"
+            ? "Your hand appears too large in the frame. Move back before recording this pose."
+            : calibrationConditions?.framing === "off_center"
+              ? "Move your hand toward the center of the preview before recording this pose."
+              : "Hold still for another frame so Gesture can assess lighting, distance, and framing.";
 
   async function createProfile(event) {
     event.preventDefault(); setError(""); setMessage("");
@@ -291,8 +309,8 @@ export default function GestureStudioPage() {
           <form className="hey-gesture-studio__inline-form" onSubmit={createCustom}><label>Custom gesture name<input maxLength={80} value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="For example, my quiet signal"/></label><button type="submit" disabled={!profileId || customGestures.length >= 32}><Plus size={16}/> Create</button></form>
           {customGestures.length > 0 && <label className="hey-gesture-studio__field">Custom gesture<select value={customGestureId} onChange={(event) => setCustomGestureId(event.target.value)}>{customGestures.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.templates.length} samples</option>)}</select></label>}
           {custom && <><p className="hey-gesture-studio__sample-count">{custom.templates.length} / 64 detector samples · {custom.templates.length >= 3 ? customConflicts.status === "clear" ? "No similar trained pose found" : "Similar pose conflict found" : "Three samples required"}</p>{customConflicts.conflicts.map((conflict) => <p key={conflict.gestureId} className="hey-gesture-studio__warning">This pose is similar to “{conflict.name}” ({Math.round(conflict.similarity * 100)}%). Add clearer samples or remove the conflicting profile before mapping.</p>)}
-            {active && mode === "test" && latestObservation && !calibrationConfidenceReady && <p className="hey-gesture-studio__status" role="status" aria-live="polite">Hand tracking is below {Math.round(MIN_GESTURE_CALIBRATION_CONFIDENCE * 100)}% confidence. Keep your hand centered, unobstructed, and well lit; capture will unlock when tracking reaches the threshold.</p>}
-            <div className="hey-gesture-studio__session-controls"><button type="button" onClick={captureSample} disabled={!active || mode !== "test" || !calibrationConfidenceReady}>Capture current pose</button><button type="button" className="secondary" onClick={testCustom} disabled={custom.templates.length < 3 || !active || mode !== "test"}>Test this pose live</button><button type="button" onClick={mapCustom} disabled={!profileId || custom.templates.length < 3 || customConflicts.status !== "clear" || active || paused}>Map to Dashboard</button><button type="button" className="secondary" disabled={active || paused} onClick={() => { gestureEngine.deleteCustomGesture(custom.id); setCustomGestureId(""); refresh(); }}>Delete custom pose</button></div>
+            {active && mode === "test" && latestObservation && !calibrationReady && <p className="hey-gesture-studio__status" role="status" aria-live="polite">{calibrationGuidance} Capture unlocks when tracking and framing are ready.</p>}
+            <div className="hey-gesture-studio__session-controls"><button type="button" onClick={captureSample} disabled={!active || mode !== "test" || !calibrationReady}>Capture current pose</button><button type="button" className="secondary" onClick={testCustom} disabled={custom.templates.length < 3 || !active || mode !== "test"}>Test this pose live</button><button type="button" onClick={mapCustom} disabled={!profileId || custom.templates.length < 3 || customConflicts.status !== "clear" || active || paused}>Map to Dashboard</button><button type="button" className="secondary" disabled={active || paused} onClick={() => { gestureEngine.deleteCustomGesture(custom.id); setCustomGestureId(""); refresh(); }}>Delete custom pose</button></div>
           </>}
         </section>
       </>}
