@@ -113,6 +113,21 @@ function invalidateAction(action, reason) {
   publish("action.updated", action);
 }
 
+function cancelPendingAction(action, reason = "Action was cancelled before dispatch.", { allowRunning = false } = {}) {
+  const pending = action?.status === "queued" || action?.status === "approved";
+  const running = allowRunning && action?.status === "running";
+  if (actions.get(action?.id) === action && (pending || running)) {
+    action.status = "cancelled";
+    action.error = reason;
+    action.result = { success: false, cancelledBeforeDispatch: true };
+    action.updatedAt = new Date();
+    undoReservations.delete(action.id);
+    publish("action.updated", action);
+    recordAudit({ action: "action.executed", tool: action.tool, riskLevel: action.riskLevel, status: "cancelled", metadata: { actionId: action.id } });
+  }
+  return { success: false, status: "cancelled", error: reason, action };
+}
+
 function validateIndependentObservation(value, expected, requestedAt = Date.now()) {
   let snapshot;
   try {
@@ -303,6 +318,7 @@ export async function executeAction(actionId, handler, options = {}) {
   if (action.status !== "queued" && action.status !== "approved") {
     return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
   }
+  const cancelledBeforeDispatch = () => cancelPendingAction(action);
   const authorization = authorizeExecution({
     user: options.user,
     capability: action.tool || action.permission,
@@ -313,6 +329,7 @@ export async function executeAction(actionId, handler, options = {}) {
   });
   if (!authorization.authorized) return { success: false, requiresConfirmation: authorization.requiresConfirmation, error: authorization.reason, action, authorization };
   if (typeof handler !== "function") return { success: false, error: "No action handler registered." };
+  if (options.signal?.aborted) return cancelledBeforeDispatch();
   const requiresIndependentVerification = options.requireIndependentVerification === true || isSensitiveComputerAction(action);
   const accountId = authenticatedAccountId(options.user);
   const lifecycleIsCurrent = () => {
@@ -343,6 +360,7 @@ export async function executeAction(actionId, handler, options = {}) {
     if (actions.get(actionId) !== action || (action.status !== "queued" && action.status !== "approved")) {
       return { success: false, error: "Action is no longer available for execution.", action };
     }
+    if (options.signal?.aborted) return cancelledBeforeDispatch();
     if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
   }
   const strictAction = requiresIndependentVerification
@@ -360,6 +378,7 @@ export async function executeAction(actionId, handler, options = {}) {
     ? Object.freeze({ ...strictAction, resource: strictResource, input: executionInput })
     : action;
   if (requiresIndependentVerification) {
+    if (options.signal?.aborted) return cancelledBeforeDispatch();
     let binding;
     const bindingContext = {
       actionId: executionContext.id,
@@ -379,8 +398,10 @@ export async function executeAction(actionId, handler, options = {}) {
     try {
       binding = await verifyTargetBinding(bindingContext);
     } catch {
+      if (options.signal?.aborted) return cancelledBeforeDispatch();
       return { success: false, error: "The exact computer-control target could not be independently bound.", action };
     }
+    if (options.signal?.aborted) return cancelledBeforeDispatch();
     const boundTarget = validateIndependentObservation(binding, bindingContext, bindingRequestedAt);
     if (actions.get(actionId) !== action || (action.status !== "queued" && action.status !== "approved") || authenticatedAccountId(options.user) !== accountId || !lifecycleIsCurrent()) {
       return { success: false, error: "Action or account is no longer available for execution.", action };
@@ -392,8 +413,15 @@ export async function executeAction(actionId, handler, options = {}) {
   if (action.status !== "queued" && action.status !== "approved") {
     return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
   }
+  if (options.signal?.aborted) return cancelledBeforeDispatch();
   const mandate = await authorizeActionMandate(strictAction, strictOptions);
   if (!lifecycleIsCurrent()) return { success: false, error: action.error, action };
+  if (action.status !== "queued" && action.status !== "approved") {
+    return { success: false, error: `Action cannot execute from ${action.status} state.`, action };
+  }
+  // The mandate service may have consumed one-use authority while its reply was
+  // pending. Cancel the preview locally so this action ID cannot be replayed.
+  if (options.signal?.aborted) return cancelledBeforeDispatch();
   if (!mandate.authorized) return { success: false, error: mandate.reason, action, mandate };
   // Mandate verification is asynchronous; reserve the action only after it
   // completes, then re-check admission to prevent concurrent double dispatch.
@@ -407,6 +435,9 @@ export async function executeAction(actionId, handler, options = {}) {
   action.status = "running";
   action.updatedAt = new Date();
   publish("action.updated", action);
+  if (options.signal?.aborted) {
+    return cancelPendingAction(action, "Action was cancelled before dispatch.", { allowRunning: true });
+  }
   try {
     action.result = await handler(executionInput, executionContext);
     if (requiresIndependentVerification) {

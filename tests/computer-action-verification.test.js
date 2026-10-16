@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { webcrypto } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-import { createAction, executeAction, undoAction, clearActions, invalidateActionPreviews } from "../src/core/actionEngine.js";
+import { createAction, approveAction, executeAction, undoAction, clearActions, invalidateActionPreviews } from "../src/core/actionEngine.js";
 import { listAuditEntries } from "../src/core/auditLog.js";
 import { getAccountScope, setAccountScope } from "../src/core/accountScope.js";
 import supabaseClient from "../src/lib/supabase.js";
@@ -221,6 +221,105 @@ test("concurrent forward calls get distinct operation ids but dispatch only one 
   assert.equal(handlerOperationIds.length, 1);
   assert.equal(handlerOperationIds[0], action.verification.operationId);
   assert.equal(action.verification.accountId, user.id);
+});
+
+test("cancellation during target binding prevents mandate use and adapter dispatch", async (t) => {
+  clearActions();
+  let mandateCalls = 0;
+  const previous = supabaseClient.functions;
+  supabaseClient.functions = {
+    async invoke() {
+      mandateCalls += 1;
+      return { data: { authorized: true, mandateId: "mandate-voiceos-1", remainingUses: 0 }, error: null };
+    },
+  };
+  t.after(() => {
+    if (previous === undefined) delete supabaseClient.functions;
+    else supabaseClient.functions = previous;
+    clearActions();
+  });
+
+  const action = createComputerAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+  approveAction(action.id);
+  let releaseBinding;
+  let signalBinding;
+  const bindingStarted = new Promise((resolve) => { signalBinding = resolve; });
+  const controller = new AbortController();
+  const options = strictOptions(async () => ({ verified: true, evidence: { opened: true } }));
+  options.signal = controller.signal;
+  options.verifyTargetBinding = (request) => new Promise((resolve) => {
+    releaseBinding = () => resolve(independentObservation(request));
+    signalBinding();
+  });
+  let dispatchCalls = 0;
+  const execution = executeAction(action.id, async () => {
+    dispatchCalls += 1;
+    return { success: true, verified: true };
+  }, options);
+  await bindingStarted;
+  controller.abort(new Error("user cancelled"));
+  releaseBinding();
+
+  const result = await execution;
+  assert.equal(result.status, "cancelled");
+  assert.equal(action.status, "cancelled");
+  assert.equal(action.result.cancelledBeforeDispatch, true);
+  assert.equal(mandateCalls, 0);
+  assert.equal(dispatchCalls, 0);
+});
+
+test("cancellation during mandate verification blocks dispatch and the consumed authority cannot replay", async (t) => {
+  clearActions();
+  let mandateCalls = 0;
+  let resolveMandate;
+  let signalMandate;
+  const mandateStarted = new Promise((resolve) => { signalMandate = resolve; });
+  const mandateResponse = new Promise((resolve) => { resolveMandate = resolve; });
+  const previous = supabaseClient.functions;
+  supabaseClient.functions = {
+    async invoke(name, { body }) {
+      assert.equal(name, "hey-mandate");
+      assert.equal(body.resource, "app://calculator");
+      mandateCalls += 1;
+      if (mandateCalls === 1) {
+        signalMandate();
+        return mandateResponse;
+      }
+      return { data: { authorized: false, reason: "mandate_replay" }, error: null };
+    },
+  };
+  t.after(() => {
+    if (previous === undefined) delete supabaseClient.functions;
+    else supabaseClient.functions = previous;
+    clearActions();
+  });
+
+  const action = createComputerAction({ title: "Open Calculator", tool: "computer.app.open", permission: "app.open", riskLevel: "low", input: { appId: "calculator" } });
+  approveAction(action.id);
+  const controller = new AbortController();
+  const options = strictOptions(async () => ({ verified: true, evidence: { opened: true } }));
+  options.signal = controller.signal;
+  let dispatchCalls = 0;
+  const handler = async () => {
+    dispatchCalls += 1;
+    return { success: true, verified: true };
+  };
+  const execution = executeAction(action.id, handler, options);
+  await mandateStarted;
+  controller.abort(new Error("user cancelled"));
+  resolveMandate({ data: { authorized: true, mandateId: "mandate-voiceos-1", remainingUses: 0 }, error: null });
+
+  const result = await execution;
+  assert.equal(result.status, "cancelled");
+  assert.equal(action.status, "cancelled");
+  assert.equal(action.result.cancelledBeforeDispatch, true);
+  assert.equal(dispatchCalls, 0);
+
+  const replay = await executeAction(action.id, handler, { ...options, signal: undefined });
+  assert.equal(replay.success, false);
+  assert.match(replay.error, /cannot execute from cancelled/i);
+  assert.equal(mandateCalls, 1);
+  assert.equal(dispatchCalls, 0);
 });
 
 test("account changes during independent observation fail the running action closed", async (t) => {
