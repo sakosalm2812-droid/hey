@@ -1,35 +1,42 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SupabaseDeviceCommandQueueStore } from "../../../src/core/supabaseDeviceCommandQueueStore.js";
 import { readBoundedJson } from "../hey/requestSafety.js";
-import { createDeviceTransportRequestScope, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, revokeOwnedDeviceTransport } from "./dispatch.js";
+import { createDeviceTransportRequestScope, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "./dispatch.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
-const corsHeaders = {
-  "Access-Control-Allow-Origin": allowedOrigin,
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json",
-  "Vary": "Origin",
-};
+function corsHeaders(origin: string | null) {
+  return {
+    "Access-Control-Allow-Origin": resolveDeviceTransportCorsOrigin(origin, allowedOrigin) ?? allowedOrigin,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json",
+    "Vary": "Origin",
+  };
+}
 
-function json(status: number, body: Record<string, unknown>) {
-  return new Response(JSON.stringify(body), { status, headers: corsHeaders });
+function json(status: number, body: Record<string, unknown>, origin: string | null = null) {
+  return new Response(JSON.stringify(body), { status, headers: corsHeaders(origin) });
 }
 
 Deno.serve(async (request: Request) => {
-  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
-  if (request.method !== "POST") return json(405, { ok: false, reason: "POST is required." });
-  if (request.headers.get("origin") && request.headers.get("origin") !== allowedOrigin) return json(403, { ok: false, reason: "Origin is not allowed." });
+  const origin = request.headers.get("origin");
+  const responseOrigin = resolveDeviceTransportCorsOrigin(origin, allowedOrigin);
+  if (origin && !responseOrigin) return json(403, { ok: false, reason: "Origin is not allowed." });
+  const reply = (status: number, body: Record<string, unknown>) => json(status, body, origin);
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  if (request.method !== "POST") return reply(405, { ok: false, reason: "POST is required." });
   const authorization = request.headers.get("authorization");
   const url = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!authorization || !url || !anonKey || !serviceKey) return json(503, { ok: false, reason: "Device transport is not configured." });
-  const parsed = await readBoundedJson(request, 8 * 1024);
-  if (!parsed.ok) return json(parsed.tooLarge ? 413 : 400, { ok: false, reason: "Device transport request is invalid or too large." });
-
+  if (!authorization || !url || !anonKey || !serviceKey) return reply(503, { ok: false, reason: "Device transport is not configured." });
   const scope = createDeviceTransportRequestScope({ signal: request.signal });
   try {
+    const parsed = await scope.race(readBoundedJson(request, 8 * 1024, scope.signal));
+    if (!parsed.ok) {
+      if (scope.signal.aborted) throw scope.signal.reason;
+      return reply(parsed.tooLarge ? 413 : 400, { ok: false, reason: "Device transport request is invalid or too large." });
+    }
     const scopedFetch: typeof fetch = (input, init = {}) => fetch(input, { ...init, signal: scope.signal });
     const userClient = createClient(url, anonKey, {
       global: { headers: { Authorization: authorization }, fetch: scopedFetch },
@@ -44,7 +51,7 @@ Deno.serve(async (request: Request) => {
 
     const accountRequest = normalizeAccountDeviceRequest(parsed.value);
     if (accountRequest?.operation === "revoke") {
-      if (authError || !accountId) return json(401, { ok: false, reason: "An authenticated account is required." });
+      if (authError || !accountId) return reply(401, { ok: false, reason: "An authenticated account is required." });
       const result = await scope.race(revokeOwnedDeviceTransport({
         authenticatedAccountId: accountId,
         deviceId: accountRequest.deviceId,
@@ -54,7 +61,7 @@ Deno.serve(async (request: Request) => {
           return data === true;
         },
       }));
-      return json(result.status, result);
+      return reply(result.status, result);
     }
 
     const queue = new SupabaseDeviceCommandQueueStore(serviceClient, { trustedServer: true });
@@ -73,17 +80,17 @@ Deno.serve(async (request: Request) => {
     };
 
     if (accountRequest?.operation === "rotate") {
-      if (authError || !accountId) return json(401, { ok: false, reason: "An authenticated account is required." });
+      if (authError || !accountId) return reply(401, { ok: false, reason: "An authenticated account is required." });
       const { data: device, error } = await scope.race(serviceClient.from("hey_devices").select("id,user_id,status").eq("id", accountRequest.deviceId).maybeSingle());
-      if (error) return json(503, { ok: false, reason: "Device ownership lookup is unavailable." });
+      if (error) return reply(503, { ok: false, reason: "Device ownership lookup is unavailable." });
       const result = await scope.race(issueDeviceCredential({ authenticatedAccountId: accountId, deviceId: accountRequest.deviceId, loadDevice: async () => device, credentialStore: deviceCredentials }));
-      return json(result.ok ? 200 : result.reason.includes("unavailable for this account") ? 403 : 503, result);
+      return reply(result.ok ? 200 : result.reason.includes("unavailable for this account") ? 403 : 503, result);
     }
 
     const result = await scope.race(handleDeviceTransport({ authorization, body: parsed.value, credentialStore: deviceCredentials, queue }));
-    return json(result.status, result);
+    return reply(result.status, result);
   } catch {
-    return json(scope.callerAborted() ? 499 : 503, { ok: false, reason: scope.timedOut() ? "Device transport timed out." : "Device transport is unavailable." });
+    return reply(scope.callerAborted() ? 499 : 503, { ok: false, reason: scope.timedOut() ? "Device transport timed out." : "Device transport is unavailable." });
   } finally {
     scope.dispose();
   }

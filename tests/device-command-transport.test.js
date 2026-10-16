@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createDeviceTransportRequestScope, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
+import { createDeviceTransportRequestScope, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
 
 const accountId = "2e4a81a4-2da8-4ae0-bfd6-719484a37795";
 const otherAccountId = "10e7b9e4-765b-4e88-b5d4-5eafc0f39f40";
@@ -49,10 +49,32 @@ test("Edge request scope aborts stalled work at its deadline and on client cance
 test("Edge handler binds Supabase fetches and request work to one deadline scope", async () => {
   const source = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
   assert.match(source, /createDeviceTransportRequestScope\(\{ signal: request\.signal \}\)/);
+  assert.match(source, /readBoundedJson\(request, 8 \* 1024, scope\.signal\)/);
   assert.match(source, /fetch\(input, \{ \.\.\.init, signal: scope\.signal \}\)/);
   assert.match(source, /scope\.race\(userClient\.auth\.getUser\(\)\)/);
   assert.match(source, /scope\.race\(handleDeviceTransport\(/);
   assert.match(source, /finally \{\s*scope\.dispose\(\)/);
+});
+
+test("transport CORS accepts configured and verified Tauri origins but rejects other origins", async () => {
+  const appOrigin = "https://hey.example";
+  assert.equal(resolveDeviceTransportCorsOrigin(null, appOrigin), appOrigin);
+  assert.equal(resolveDeviceTransportCorsOrigin(appOrigin, appOrigin), appOrigin);
+  assert.equal(resolveDeviceTransportCorsOrigin("http://tauri.localhost", appOrigin), "http://tauri.localhost");
+  assert.equal(resolveDeviceTransportCorsOrigin("tauri://localhost", appOrigin), "tauri://localhost");
+  assert.equal(resolveDeviceTransportCorsOrigin("https://attacker.example", appOrigin), null);
+  const source = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
+  assert.match(source, /resolveDeviceTransportCorsOrigin\(origin, allowedOrigin\)/);
+  assert.match(source, /const reply = \(status: number, body: Record<string, unknown>\) => json\(status, body, origin\)/);
+});
+
+test("transport request contract remains claim, renew, ack and fail", () => {
+  assert.ok(normalizeTransportRequest({ operation: "claim", deviceId, leaseMs: 1000 }));
+  assert.ok(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew", leaseMs: 1000 }));
+  assert.ok(normalizeTransportRequest({ operation: "ack", deviceId, commandId, leaseToken }));
+  assert.ok(normalizeTransportRequest({ operation: "fail", deviceId, commandId, leaseToken }));
+  assert.equal(normalizeTransportRequest({ operation: "begin", deviceId, commandId, leaseToken }), null);
+  assert.equal(normalizeTransportRequest({ operation: "complete", deviceId, commandId, leaseToken }), null);
 });
 
 test("credential rotation is owner-bound, one-time, random and persists only a digest", async () => {

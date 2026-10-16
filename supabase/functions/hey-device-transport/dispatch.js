@@ -3,9 +3,16 @@ const TOKEN = /^heydev1\.[A-Za-z0-9_-]{43}$/;
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_LEASE_MS = 300_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const TAURI_DEVICE_ORIGINS = new Set(["http://tauri.localhost", "tauri://localhost"]);
 
 function result(ok, body = {}) { return { ok, ...body }; }
 function validUuid(value) { return typeof value === "string" && UUID.test(value); }
+
+export function resolveDeviceTransportCorsOrigin(origin, configuredOrigin) {
+  if (typeof configuredOrigin !== "string" || !configuredOrigin) throw new TypeError("A configured device transport origin is required.");
+  if (origin === null || origin === undefined) return configuredOrigin;
+  return origin === configuredOrigin || TAURI_DEVICE_ORIGINS.has(origin) ? origin : null;
+}
 
 export function createDeviceTransportRequestScope({ signal: callerSignal, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {

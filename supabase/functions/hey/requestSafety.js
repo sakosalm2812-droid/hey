@@ -1,6 +1,6 @@
 const DEFAULT_MAX_REQUEST_BYTES = 12 * 1024 * 1024;
 
-export async function readBoundedJson(request, maxBytes = DEFAULT_MAX_REQUEST_BYTES) {
+export async function readBoundedJson(request, maxBytes = DEFAULT_MAX_REQUEST_BYTES, signal) {
   const declaredLength = request.headers.get("content-length");
   if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
     return { ok: false, tooLarge: true };
@@ -11,6 +11,11 @@ export async function readBoundedJson(request, maxBytes = DEFAULT_MAX_REQUEST_BY
 
   const chunks = [];
   let totalBytes = 0;
+  const cancelReader = () => {
+    try { void Promise.resolve(reader.cancel()).catch(() => {}); } catch { /* The request body may already be closed. */ }
+  };
+  if (signal?.aborted) cancelReader();
+  else signal?.addEventListener("abort", cancelReader, { once: true });
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -25,6 +30,7 @@ export async function readBoundedJson(request, maxBytes = DEFAULT_MAX_REQUEST_BY
   } catch {
     return { ok: false };
   } finally {
+    signal?.removeEventListener("abort", cancelReader);
     reader.releaseLock();
   }
 
