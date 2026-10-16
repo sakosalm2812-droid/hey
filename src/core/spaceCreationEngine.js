@@ -25,14 +25,20 @@ const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, SPACE_STORAGE_CONTRACT_VERS
 const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
 const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
 const activeLayoutPreferenceWrites = new Set();
-const ONBOARDING_SPACE_STARTERS = Object.freeze({
-  personal: Object.freeze({ name: "Personal" }),
-  work: Object.freeze({ name: "Work" }),
-  learning: Object.freeze({ name: "Learning" }),
-});
 const CREATE_SPACE_PROMPT = /^(?:please\s+)?create\s+(?:a\s+)?(?:private\s+)?space\s+(?:called|named)\s+(.+)$/i;
 const FORBIDDEN_INTENT = /\b(?:public|share|shared|sharing|invite|invites|members?|permissions?|access|roles?|admin|administrator|owner|grant|escalat(?:e|ion))\b/i;
 const SPACE_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'’()-]{0,79}$/u;
+const SPACE_STARTERS = Object.freeze({
+  empty: { label: "Empty Space", description: "" },
+  planning: { label: "Planning template", description: "Goals, tasks, and next steps." },
+  research: { label: "Research template", description: "Questions, sources, and findings." },
+  custom: { label: "Custom Space", description: "" },
+});
+const ONBOARDING_SPACE_STARTERS = Object.freeze({
+  personal: Object.freeze({ name: "Personal", templateId: "empty" }),
+  work: Object.freeze({ name: "Work", templateId: "planning" }),
+  learning: Object.freeze({ name: "Learning", templateId: "research" }),
+});
 
 function containsControlChars(value) {
   return [...value].some((character) => {
@@ -382,9 +388,11 @@ export class SpaceCreationEngine {
           id,
           label,
           score,
+          templateId: starter.templateId,
           previewRequest: {
             accountScope: scope,
             prompt: `Create a private Space called ${starter.name}`,
+            templateId: starter.templateId,
           },
           permissionsChanged: false,
           requiresConfirmation: true,
@@ -606,7 +614,7 @@ export class SpaceCreationEngine {
   }
 
   previewNaturalLanguageRequest(request) {
-    const safeRequest = readDataRecord(request, ["accountScope", "prompt"]);
+    const safeRequest = readDataRecord(request, ["accountScope", "prompt", "templateId"]);
     if (safeRequest.error) return safeRequest;
     if (this.accountScope === "anonymous") return { error: "An account scope is required to create a Space" };
     if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; retry the request" };
@@ -615,6 +623,8 @@ export class SpaceCreationEngine {
     const parsed = parseSpacePrompt(safeRequest.value.prompt);
     if (parsed.error) return parsed;
     if (this.spaces.size >= SPACE_CREATION_LIMITS.maxSpacesPerAccount) return { error: "Space limit reached" };
+    const templateId = safeRequest.value.templateId === undefined ? "empty" : safeRequest.value.templateId;
+    if (typeof templateId !== "string" || !Object.hasOwn(SPACE_STARTERS, templateId)) return { error: "Choose a supported Space starting point" };
 
     const previewId = createId();
     const expiresAt = Date.now() + SPACE_CREATION_LIMITS.previewLifetimeMs;
@@ -624,12 +634,13 @@ export class SpaceCreationEngine {
       accountScope: this.accountScope,
       expiresAt: new Date(expiresAt).toISOString(),
       action: "create_private_space",
-      space: { ...parsed.value, visibility: "private", sharing: "off" },
-      effects: ["Create one private Space in this account"],
+      space: { ...parsed.value, description: SPACE_STARTERS[templateId].description, templateId, visibility: "private", sharing: "off" },
+      template: { id: templateId, label: SPACE_STARTERS[templateId].label },
+      effects: [`Create one private Space from the ${SPACE_STARTERS[templateId].label.toLocaleLowerCase()}`],
       permissionsChanged: false,
       requiresConfirmation: true,
     };
-    this.previews.set(previewId, { accountScope: this.accountScope, expiresAt, name: parsed.value.name });
+    this.previews.set(previewId, { accountScope: this.accountScope, expiresAt, name: parsed.value.name, templateId });
     return preview;
   }
 
@@ -671,7 +682,8 @@ export class SpaceCreationEngine {
       id: createId(),
       accountScope: this.accountScope,
       name: pending.name,
-      description: "",
+      description: SPACE_STARTERS[pending.templateId || "empty"].description,
+      templateId: pending.templateId || "empty",
       visibility: "private",
       sharing: "off",
       createdAt: new Date().toISOString(),
@@ -731,7 +743,6 @@ export function previewPrivateSpaceDeletion(request) {
 export function confirmPrivateSpaceDeletion(request) {
   return spaceCreationEngine.confirmDeleteSpace(request);
 }
-
 export function getSpaceLayoutPreferences(spaceId) {
   return spaceCreationEngine.getLayoutPreferences(spaceId);
 }

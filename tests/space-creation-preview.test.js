@@ -139,6 +139,39 @@ test("Space deletion is reviewed, account scoped, stale safe, and durable across
   } finally { setAccountScope(previousScope); }
 }));
 
+test("onboarding motivation suggestions connect to private Space previews for the active account", () => withStorage(() => {
+  const previousScope = "spaces-suggestion-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("spaces-suggestion-owner-a");
+    HEY.onboarding.setMotivations(["organize_work", "learn"]);
+    const suggestions = spacesApi.getOnboardingSuggestions();
+    assert.equal(suggestions.accountScope, "account:spaces-suggestion-owner-a");
+    assert.deepEqual(suggestions.motivationSelections, ["organize_work", "learn"]);
+    assert.deepEqual(suggestions.suggestions.map(({ id }) => id), ["work", "learning", "personal"]);
+    assert.equal(suggestions.suggestions[0].templateId, "planning");
+    assert.equal(suggestions.suggestions[1].templateId, "research");
+    assert.equal(suggestions.suggestions.every(({ requiresConfirmation, permissionsChanged }) => requiresConfirmation && !permissionsChanged), true);
+    assert.deepEqual(spacesApi.getPrivateSpaces(), []);
+
+    const staleSuggestion = suggestions.suggestions[1];
+    const chosen = staleSuggestion;
+    const preview = spacesApi.previewNaturalLanguageCreation(chosen.previewRequest);
+    assert.equal(preview.space.name, "Learning");
+    assert.equal(preview.space.templateId, "research");
+    assert.equal(preview.permissionsChanged, false);
+    assert.equal(spacesApi.getPrivateSpaces().length, 0);
+    const created = spacesApi.confirmNaturalLanguageCreation({ previewId: preview.previewId, confirm: true });
+    assert.equal(created.success, true);
+    assert.equal(spacesApi.getPrivateSpaces().length, 1);
+
+    setAccountScope("spaces-suggestion-owner-b");
+    assert.deepEqual(spacesApi.getOnboardingSuggestions().motivationSelections, []);
+    assert.deepEqual(spacesApi.getPrivateSpaces(), []);
+    assert.match(spacesApi.previewNaturalLanguageCreation(staleSuggestion.previewRequest).error, /Account scope changed/);
+  } finally { setAccountScope(previousScope); }
+}));
+
 test("saved Space layout preferences persist by account, merge partial edits, and keep onboarding starters as suggestions", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);
