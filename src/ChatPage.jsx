@@ -342,6 +342,14 @@ function ChatWorkspace() {
     setPendingComputerPreview(nextPreview);
   }, []);
 
+  const replaceComputerPreview = useCallback((nextPreview) => {
+    const current = pendingComputerPreviewRef.current;
+    if (current && !current.reviewed && current.preview.previewId !== nextPreview?.preview?.previewId) {
+      cancelVoiceCommandPreview(current.preview.previewId);
+    }
+    storeComputerPreview(nextPreview);
+  }, [storeComputerPreview]);
+
   const cancelPendingComputerPreviewFromCommand = useCallback(() => {
     const hadInFlightPreview = Boolean(previewRequestControllerRef.current);
     previewRequestControllerRef.current?.abort();
@@ -409,7 +417,7 @@ function ChatWorkspace() {
     if (signal?.aborted) return t("chat.voiceOS.cancelled", "Computer preview cancelled. Nothing was sent or opened.");
     if (nextPreview?.blocked) return t("chat.voiceOS.accountRequiredVoice", "Sign in to the current account before reviewing a computer action. Nothing was run.");
     if (nextPreview) {
-      storeComputerPreview({ ...nextPreview, source: "voice" });
+      replaceComputerPreview({ ...nextPreview, source: "voice" });
       setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
       const action = translatedPreviewAction(nextPreview.summary.label, t);
       return t("chat.voiceOS.voicePrepared", "I prepared a preview: {action}, {target}. Review it in the chat. Nothing was opened.")
@@ -417,7 +425,7 @@ function ChatWorkspace() {
         .replace("{target}", nextPreview.summary.target);
     }
     return askHEY(text, { signal, conversationId: activeConversationId, onConversationId });
-  }, [cancelPendingComputerPreviewFromCommand, createSafeComputerPreview, storeComputerPreview, t]);
+  }, [cancelPendingComputerPreviewFromCommand, createSafeComputerPreview, replaceComputerPreview, t]);
 
   useEffect(() => {
     askFromVoiceRef.current = askFromVoice;
@@ -453,9 +461,7 @@ function ChatWorkspace() {
       return;
     }
     if (nextPreview) {
-      const previous = pendingComputerPreviewRef.current;
-      if (previous && !previous.reviewed) cancelVoiceCommandPreview(previous.preview.previewId);
-      storeComputerPreview(nextPreview);
+      replaceComputerPreview(nextPreview);
       setMessage("");
       setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
       return;

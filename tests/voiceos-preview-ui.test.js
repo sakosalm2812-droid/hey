@@ -138,6 +138,27 @@ test("spoken or typed cancellation revokes a pending preview and aborts in-fligh
   assert.ok(cancelGuard >= 0 && previewGuard > cancelGuard, "cancellation is handled before the in-flight preview guard");
 });
 
+test("replacing a pending preview revokes its old capability for both typed and spoken requests", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const replacementStart = source.indexOf("const replaceComputerPreview = useCallback(");
+  const replacementEnd = source.indexOf("const cancelPendingComputerPreviewFromCommand", replacementStart);
+  assert.ok(replacementStart >= 0 && replacementEnd > replacementStart);
+  const replacement = source.slice(replacementStart, replacementEnd);
+  assert.match(replacement, /current && !current\.reviewed/);
+  assert.match(replacement, /current\.preview\.previewId !== nextPreview\?\.preview\?\.previewId/);
+  assert.match(replacement, /cancelVoiceCommandPreview\(current\.preview\.previewId\)/);
+  assert.match(replacement, /storeComputerPreview\(nextPreview\)/);
+
+  const voiceStart = source.indexOf("const askFromVoice = useCallback(");
+  const voiceEnd = source.indexOf("async function sendUserMessage(userMessage)", voiceStart);
+  assert.ok(voiceStart >= 0 && voiceEnd > voiceStart);
+  assert.match(source.slice(voiceStart, voiceEnd), /replaceComputerPreview\(\{ \.\.\.nextPreview, source: "voice" \}\)/);
+  const typedStart = source.indexOf("async function sendUserMessage(userMessage)");
+  const typedEnd = source.indexOf("function reviewComputerPreview()", typedStart);
+  assert.ok(typedStart >= 0 && typedEnd > typedStart);
+  assert.match(source.slice(typedStart, typedEnd), /replaceComputerPreview\(nextPreview\)/);
+});
+
 test("the preview remains cancellable while refresh is pending and discards any late result", async () => {
   const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
   const renderStart = source.indexOf("function renderComputerPreview()");
