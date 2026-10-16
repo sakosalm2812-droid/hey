@@ -8,6 +8,7 @@
     "build": "node scripts/generate-sitemap.mjs && node scripts/prepare-gesture-assets.mjs && vite build",
     "lint": "eslint .",
     "test": "node --test tests/*.test.js",
+    "drill:backup-restore": "node scripts/local-backup-restore-drill.mjs",
     "environment": "node scripts/hey-environment.mjs",
     "secret-scan": "gitleaks git --redact --exit-code 1",
     "tauri": "tauri",
