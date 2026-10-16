@@ -659,6 +659,9 @@ export default function SpacesPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteErrorSpaceId, setDeleteErrorSpaceId] = useState("");
   const [deletingSpaceId, setDeletingSpaceId] = useState("");
+  const [recoveryPreview, setRecoveryPreview] = useState(null);
+  const [recoveryError, setRecoveryError] = useState("");
+  const [recovering, setRecovering] = useState(false);
 
   const refreshSpaces = useCallback(() => {
     if (accountRef.current !== accountId) return false;
@@ -749,6 +752,41 @@ export default function SpacesPage() {
     setLoading(false);
   }, [accountId, refreshSpaces]);
 
+  function previewSpaceRecovery() {
+    if (!accountId || !accountIsCurrent || recovering) return;
+    setRecoveryError("");
+    setRecoveryPreview(null);
+    const requestedScope = `account:${accountId}`;
+    const result = HEY.spaces.previewRecovery({ accountScope: requestedScope });
+    if (accountRef.current !== accountId || getAccountScope() !== requestedScope) return;
+    const safeSpaces = Array.isArray(result?.spaces) ? result.spaces.filter((space) =>
+      space && typeof space.id === "string" && typeof space.name === "string"
+      && (space.status === "active" || space.status === "archived")
+    ) : null;
+    if (result?.accountScope !== requestedScope || typeof result?.previewId !== "string" || result.requiresConfirmation !== true || !safeSpaces || safeSpaces.length !== result.spaceCount) {
+      setRecoveryError(result?.error || "A valid Space recovery preview could not be prepared.");
+      return;
+    }
+    setRecoveryPreview({ accountId, previewId: result.previewId, spaces: safeSpaces });
+  }
+
+  function confirmSpaceRecovery() {
+    if (!recoveryPreview || recoveryPreview.accountId !== accountId || !accountIsCurrent || recovering) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setRecovering(true);
+    setRecoveryError("");
+    const result = HEY.spaces.confirmRecovery({ previewId: recoveryPreview.previewId, confirm: true });
+    if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+    setRecovering(false);
+    setRecoveryPreview(null);
+    if (result?.success !== true || result.accountScope !== requestedScope) {
+      setRecoveryError(result?.error || "Space recovery could not be completed. Review again and retry.");
+      return;
+    }
+    if (refreshSpaces()) setNotice(`Recovered ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"} from the last valid snapshot.`);
+  }
+
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -771,6 +809,9 @@ export default function SpacesPage() {
     setDeleteError("");
     setDeleteErrorSpaceId("");
     setDeletingSpaceId("");
+    setRecoveryPreview(null);
+    setRecoveryError("");
+    setRecovering(false);
 
     const refreshCurrentAccount = () => {
       if (active) refreshSpaces();
@@ -1046,7 +1087,20 @@ export default function SpacesPage() {
           {!accountDataLoading && !loadError && <span className="spaces-page__count" aria-live="polite">{currentSpaces.length} {currentSpaces.length === 1 ? "Space" : "Spaces"}</span>}
         </div>
         {accountDataLoading && <p className="spaces-page__status" role="status" aria-live="polite"><LoaderCircle size={18} className="spaces-page__spin" aria-hidden="true" /> Loading your Spaces…</p>}
-        {!accountDataLoading && loadError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={19} aria-hidden="true" /><p>{loadError}</p><button type="button" className="spaces-page__secondary" onClick={loadSpaces}><RotateCw size={15} aria-hidden="true" /> Try again</button></div>}
+        {!accountDataLoading && loadError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={19} aria-hidden="true" /><p>{loadError}</p><button type="button" className="spaces-page__secondary" onClick={loadSpaces}><RotateCw size={15} aria-hidden="true" /> Try again</button><button type="button" className="spaces-page__secondary" onClick={previewSpaceRecovery} disabled={!accountIsCurrent || recovering}><RotateCw size={15} aria-hidden="true" /> Review recovery</button></div>}
+        {recoveryError && !accountDataLoading && <p className="spaces-page__membership-error" role="alert">{recoveryError}</p>}
+        {!accountDataLoading && recoveryPreview?.accountId === accountId && loadError && <section className="spaces-page__recovery-review" aria-labelledby="space-recovery-review-title">
+          <h3 id="space-recovery-review-title">Review Space recovery</h3>
+          <p>Restore {recoveryPreview.spaces.length} private {recoveryPreview.spaces.length === 1 ? "Space" : "Spaces"} from this account&apos;s last valid snapshot. This replaces the unreadable saved Space data.</p>
+          {recoveryPreview.spaces.length > 0 && <ul>{recoveryPreview.spaces.map((space) => <li key={space.id}><strong>{space.name}</strong><span>{space.status === "archived" ? "Archived" : "Active"}</span></li>)}</ul>}
+          {recoveryPreview.spaces.length === 0 && <p>The snapshot contains no Spaces. Confirming will restore an empty Space list.</p>}
+          <div className="spaces-page__actions">
+            <button type="button" className="spaces-page__secondary" onClick={() => { setRecoveryPreview(null); setRecoveryError(""); }} disabled={recovering}>Cancel</button>
+            <button type="button" className="spaces-page__secondary" onClick={confirmSpaceRecovery} disabled={recovering || !accountIsCurrent}>
+              {recovering ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <RotateCw size={15} aria-hidden="true" />} Restore reviewed snapshot
+            </button>
+          </div>
+        </section>}
         {!accountDataLoading && !loadError && currentSpaces.length === 0 && <div className="spaces-page__empty" role="status"><Layers3 size={23} aria-hidden="true" /><div><h3>No Spaces yet</h3><p>Describe a Space above to see a preview before you create it.</p></div></div>}
         {!accountDataLoading && !loadError && currentSpaces.length > 0 && <ul className="spaces-page__list">{currentSpaces.map((space) => <li className="spaces-page__card" key={space.id}>
           <div className="spaces-page__card-icon" aria-hidden="true"><Layers3 size={18} /></div>

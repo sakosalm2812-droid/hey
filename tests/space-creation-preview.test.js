@@ -11,13 +11,14 @@ class MemoryStorage {
   values = new Map();
   failReads = false;
   failWrites = false;
+  failWriteKeys = new Set();
   onSet = null;
   getItem(key) {
     if (this.failReads) throw new Error("storage unavailable");
     return this.values.get(key) ?? null;
   }
   setItem(key, value) {
-    if (this.failWrites) throw new Error("storage unavailable");
+    if (this.failWrites || this.failWriteKeys.has(key)) throw new Error("storage unavailable");
     this.onSet?.(key, String(value));
     this.values.set(key, String(value));
   }
@@ -67,6 +68,8 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(spacesApi.layoutPreferencesContractVersion, 1);
   assert.equal(spacesApi.storageContractVersion, 5);
   assert.equal(typeof spacesApi.getLayoutPreferences, "function");
+  assert.equal(typeof spacesApi.previewRecovery, "function");
+  assert.equal(typeof spacesApi.confirmRecovery, "function");
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
   assert.equal(typeof spacesApi.updateDetails, "function");
   assert.equal(typeof spacesApi.previewArchive, "function");
@@ -1086,4 +1089,155 @@ test("corrupt or unsupported stored Space data blocks creation instead of being 
   } finally {
     setAccountScope(previousScope);
   }
+}));
+
+test("private Space recovery restores the latest verified account snapshot after corruption", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-owner");
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a private space called Recovery notes", templateId: "research" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true });
+    assert.equal(created.success, true);
+    assert.equal(engine.updateDetails({
+      accountScope: "account:space-recovery-owner",
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      description: "Latest verified description",
+    }).success, true);
+    assert.equal(engine.updateLayoutPreferences({
+      accountScope: "account:space-recovery-owner",
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      preferences: { widgetIds: ["notes"] },
+    }).success, true);
+    const archive = engine.previewArchiveSpace({
+      accountScope: "account:space-recovery-owner",
+      spaceId: created.space.id,
+      expectedLifecycleRevision: 0,
+    });
+    assert.equal(engine.confirmArchiveSpace({ previewId: archive.previewId, confirm: true }).success, true);
+    const secondCreate = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Intentionally deleted" });
+    const secondSpace = engine.confirmNaturalLanguagePreview({ previewId: secondCreate.previewId, confirm: true }).space;
+    const deletion = engine.previewDeleteSpace({
+      accountScope: "account:space-recovery-owner",
+      spaceId: secondSpace.id,
+      expectedLayoutRevision: 0,
+    });
+    assert.equal(engine.confirmDeleteSpace({ previewId: deletion.previewId, confirm: true }).success, true);
+
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    assert.equal(JSON.parse(storage.getItem(recoveryKey)).spaces[created.space.id].description, "Latest verified description");
+    storage.setItem(primaryKey, "{corrupt primary");
+    const unreadable = new SpaceCreationEngine();
+    assert.throws(() => unreadable.getSpaces(), /storage could not be read/);
+    const preview = unreadable.previewRecovery({ accountScope: "account:space-recovery-owner" });
+    assert.equal(preview.requiresConfirmation, true);
+    assert.equal(preview.spaceCount, 1);
+    assert.deepEqual(preview.spaces, [{ id: created.space.id, name: "Recovery notes", status: "archived" }]);
+    assert.match(unreadable.confirmRecovery({ previewId: preview.previewId, confirm: false }).error, /Explicit confirmation/);
+    const recovered = unreadable.confirmRecovery({ previewId: preview.previewId, confirm: true });
+    assert.equal(recovered.success, true);
+    assert.equal(recovered.spaceCount, 1);
+    assert.equal(unreadable.getSpaces()[0].description, "Latest verified description");
+    assert.equal(unreadable.getSpaces()[0].templateId, "research");
+    assert.equal(unreadable.getSpaces()[0].status, "archived");
+    assert.equal(unreadable.getSpaces().some((space) => space.id === secondSpace.id), false);
+    assert.deepEqual(unreadable.getLayoutPreferences(created.space.id).widgetIds, ["notes"]);
+    assert.doesNotThrow(() => JSON.parse(storage.getItem(primaryKey)));
+    assert.match(unreadable.confirmRecovery({ previewId: preview.previewId, confirm: true }).error, /not found or already used/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space recovery preview is fenced by account scope and backup ownership", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-account-a");
+    const accountA = new SpaceCreationEngine();
+    const create = accountA.previewNaturalLanguageRequest({ prompt: "Create a space called Private A" });
+    const created = accountA.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true });
+    assert.equal(created.success, true);
+    storage.setItem(getAccountStorageKey("hey_spaces"), "not valid JSON");
+    const preview = accountA.previewRecovery({ accountScope: "account:space-recovery-account-a" });
+    assert.equal(preview.requiresConfirmation, true);
+    storage.setItem(getAccountStorageKey("hey_spaces"), "a different corrupt value");
+    assert.equal(accountA.confirmRecovery({ previewId: preview.previewId, confirm: true }).code, "stale_snapshot");
+    storage.setItem(getAccountStorageKey("hey_spaces"), "not valid JSON");
+    const accountSwitchPreview = accountA.previewRecovery({ accountScope: "account:space-recovery-account-a" });
+
+    setAccountScope("space-recovery-account-b");
+    assert.match(accountA.confirmRecovery({ previewId: accountSwitchPreview.previewId, confirm: true }).error, /Account scope changed|not found or already used/);
+    assert.deepEqual(new SpaceCreationEngine().getSpaces(), []);
+    const accountBRecovery = JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces_recovery")));
+    assert.equal(accountBRecovery.accountScope, "account:space-recovery-account-b");
+    assert.deepEqual(accountBRecovery.spaces, {});
+
+    storage.setItem(getAccountStorageKey("hey_spaces"), "corrupt B primary");
+    storage.setItem(getAccountStorageKey("hey_spaces_recovery"), JSON.stringify({
+      contractVersion: 5,
+      accountScope: "account:space-recovery-account-a",
+      spaces: {},
+    }));
+    assert.match(new SpaceCreationEngine().previewRecovery({ accountScope: "account:space-recovery-account-b" }).error, /unavailable/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space recovery leaves corrupt data untouched when restoration writes fail", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-write-failure");
+    const owner = new SpaceCreationEngine();
+    const create = owner.previewNaturalLanguageRequest({ prompt: "Create a space called Still recoverable" });
+    assert.equal(owner.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).success, true);
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    storage.setItem(primaryKey, "corrupt");
+    const engine = new SpaceCreationEngine();
+    const originalCorruptValue = storage.getItem(primaryKey);
+    const preview = engine.previewRecovery({ accountScope: "account:space-recovery-write-failure" });
+    assert.equal(preview.requiresConfirmation, true);
+    storage.failWrites = true;
+    assert.equal(engine.confirmRecovery({ previewId: preview.previewId, confirm: true }).code, "write_failed");
+    assert.equal(storage.getItem(primaryKey), originalCorruptValue);
+    assert.throws(() => engine.getSpaces(), /storage could not be read/);
+    assert.match(engine.confirmRecovery({ previewId: preview.previewId, confirm: true }).error, /not found or already used/);
+
+    storage.failWrites = false;
+    const retry = engine.previewRecovery({ accountScope: "account:space-recovery-write-failure" });
+    assert.equal(engine.confirmRecovery({ previewId: retry.previewId, confirm: true }).success, true);
+    assert.equal(engine.getSpaces()[0].name, "Still recoverable");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space recovery invalidates an unverifiable stale snapshot after a committed update", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-snapshot-failure");
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Snapshot user" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true });
+    assert.equal(created.success, true, JSON.stringify({ create, created }));
+    const backupKey = getAccountStorageKey("hey_spaces_recovery");
+    assert.ok(storage.getItem(backupKey));
+
+    storage.failWriteKeys.add(backupKey);
+    const updated = engine.updateDetails({
+      accountScope: "account:space-recovery-snapshot-failure",
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      description: "Committed primary, unavailable backup write",
+    });
+    assert.equal(updated.success, true);
+    assert.equal(storage.getItem(getAccountStorageKey("hey_spaces")) !== null, true);
+    assert.equal(storage.getItem(backupKey), null);
+
+    storage.failWriteKeys.delete(backupKey);
+    storage.setItem(getAccountStorageKey("hey_spaces"), "damaged");
+    const unreadable = new SpaceCreationEngine();
+    assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-snapshot-failure" }).error, /unavailable/);
+  } finally { setAccountScope(previousScope); }
 }));
