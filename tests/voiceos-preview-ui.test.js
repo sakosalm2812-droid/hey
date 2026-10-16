@@ -61,7 +61,7 @@ test("VoiceOS preview labels and status copy are accessible and translated for e
   const required = [
     "checking", "sectionLabel", "title", "reviewedTitle", "risk", "action", "target", "capability",
     "highRisk", "mediumRisk", "openApp", "navigateBrowser", "openWebsite", "noAuthority",
-    "reviewedStatus", "dismiss", "reviewedAction", "cancelAction", "accountChanged",
+    "reviewedStatus", "dismiss", "reviewedAction", "cancelAction", "accountChanged", "conversationChanged",
     "accountRequiredVoice", "accountRequired", "differentAccount", "expired",
     "expiredRefresh", "expiredNotice", "refreshPreview", "cancelRefresh", "previewRefreshCancelled", "previewRefreshFailed", "previewFreshReady",
     "cancelledByCommand", "preparationCancelled", "noPendingPreview", "cancelPreparationAction",
@@ -157,6 +157,28 @@ test("replacing a pending preview revokes its old capability for both typed and 
   const typedEnd = source.indexOf("function reviewComputerPreview()", typedStart);
   assert.ok(typedStart >= 0 && typedEnd > typedStart);
   assert.match(source.slice(typedStart, typedEnd), /replaceComputerPreview\(nextPreview\)/);
+});
+
+test("computer previews are fenced to the conversation where the request began", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const creationStart = source.indexOf("const createSafeComputerPreview = useCallback(");
+  const creationEnd = source.indexOf("const storeComputerPreview", creationStart);
+  assert.ok(creationStart >= 0 && creationEnd > creationStart);
+  const creation = source.slice(creationStart, creationEnd);
+  assert.match(creation, /const expectedConversationId = conversationIdRef\.current/);
+  assert.match(creation, /conversationIdRef\.current !== expectedConversationId/);
+  assert.match(creation, /cancelVoiceCommandPreview\(preview\.previewId\)/);
+  assert.match(creation, /conversationId: expectedConversationId/);
+
+  const fenceCondition = source.indexOf("if (!pending || pending.conversationId === conversationId)");
+  const fenceStart = source.lastIndexOf("useEffect(() => {", fenceCondition);
+  const fenceEnd = source.indexOf("const replaceComputerPreview", fenceStart);
+  assert.ok(fenceStart >= 0 && fenceEnd > fenceStart);
+  const fence = source.slice(fenceStart, fenceEnd);
+  assert.match(fence, /previewRequestControllerRef\.current\?\.abort\(\)/);
+  assert.match(fence, /cancelVoiceCommandPreview\(pending\.preview\.previewId\)/);
+  assert.match(fence, /storeComputerPreview\(null\)/);
+  assert.match(fence, /conversationChanged/);
 });
 
 test("the preview remains cancellable while refresh is pending and discards any late result", async () => {

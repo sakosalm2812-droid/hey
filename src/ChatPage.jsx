@@ -316,6 +316,7 @@ function ChatWorkspace() {
   }
 
   const createSafeComputerPreview = useCallback(async (requestText, signal) => {
+    const expectedConversationId = conversationIdRef.current;
     const preview = await understandVoiceCommand(requestText, signal ? { signal } : {});
     const summary = describeSafeComputerActionPreview(preview);
     if (!summary) {
@@ -323,6 +324,10 @@ function ChatWorkspace() {
       return null;
     }
     const expectedScope = user?.id ? `account:${user.id}` : null;
+    if (conversationIdRef.current !== expectedConversationId) {
+      cancelVoiceCommandPreview(preview.previewId);
+      return { blocked: true, reason: "conversation_changed" };
+    }
     if (!expectedScope || preview.accountScope !== expectedScope || getAccountScope() !== expectedScope || signal?.aborted) {
       cancelVoiceCommandPreview(preview.previewId);
       return { blocked: true };
@@ -332,6 +337,7 @@ function ChatWorkspace() {
       summary,
       message: requestText.trim(),
       accountScope: expectedScope,
+      conversationId: expectedConversationId,
       source: "text",
       reviewed: false,
     };
@@ -341,6 +347,19 @@ function ChatWorkspace() {
     pendingComputerPreviewRef.current = nextPreview;
     setPendingComputerPreview(nextPreview);
   }, []);
+
+  useEffect(() => {
+    const pending = pendingComputerPreviewRef.current;
+    if (!pending || pending.conversationId === conversationId) return;
+    previewRequestControllerRef.current?.abort();
+    previewRequestControllerRef.current = null;
+    previewRequestInFlightRef.current = false;
+    setPreviewChecking(false);
+    setPreviewRefreshActive(false);
+    if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
+    storeComputerPreview(null);
+    setExecutionStatus(t("chat.voiceOS.conversationChanged", "The computer preview was cleared because you changed conversations. Review the request again here; nothing was run."));
+  }, [conversationId, storeComputerPreview, t]);
 
   const replaceComputerPreview = useCallback((nextPreview) => {
     const current = pendingComputerPreviewRef.current;
@@ -415,7 +434,9 @@ function ChatWorkspace() {
     }
     const nextPreview = await createSafeComputerPreview(text, signal);
     if (signal?.aborted) return t("chat.voiceOS.cancelled", "Computer preview cancelled. Nothing was sent or opened.");
-    if (nextPreview?.blocked) return t("chat.voiceOS.accountRequiredVoice", "Sign in to the current account before reviewing a computer action. Nothing was run.");
+    if (nextPreview?.blocked) return nextPreview.reason === "conversation_changed"
+      ? t("chat.voiceOS.conversationChanged", "The computer preview was cleared because you changed conversations. Review the request again here; nothing was run.")
+      : t("chat.voiceOS.accountRequiredVoice", "Sign in to the current account before reviewing a computer action. Nothing was run.");
     if (nextPreview) {
       replaceComputerPreview({ ...nextPreview, source: "voice" });
       setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
@@ -457,7 +478,9 @@ function ChatWorkspace() {
     }
     if (previewController.signal.aborted) return;
     if (nextPreview?.blocked) {
-      setExecutionStatus(t("chat.voiceOS.accountRequired", "A current signed-in account is required to review this computer action. Nothing was sent or run."));
+      setExecutionStatus(nextPreview.reason === "conversation_changed"
+        ? t("chat.voiceOS.conversationChanged", "The computer preview was cleared because you changed conversations. Review the request again here; nothing was run.")
+        : t("chat.voiceOS.accountRequired", "A current signed-in account is required to review this computer action. Nothing was sent or run."));
       return;
     }
     if (nextPreview) {
