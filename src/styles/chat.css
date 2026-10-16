@@ -132,6 +132,7 @@
 .hey-chat-message-actions button { display: grid; place-items: center; width: 27px; height: 27px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; }
 .hey-chat-message-actions button:hover,
 .hey-chat-message-actions button.active { color: var(--accent-hover); background: var(--accent-glow-soft); }
+.hey-chat-action-status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .hey-chat-thinking { display: flex; align-items: center; gap: 5px; margin-left: 44px; color: var(--text-muted); font-size: 11px; }
 .hey-chat-thinking span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-hover); animation: hey-chat-pulse 1s ease-in-out infinite; }
 .hey-chat-thinking span:nth-child(2) { animation-delay: .15s; }

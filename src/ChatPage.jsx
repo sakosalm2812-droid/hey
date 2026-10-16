@@ -38,6 +38,7 @@ import {
   createVoiceSession,
 } from "./lib/voiceProviders.js";
 import { createConversationScopedVoiceAsk } from "./lib/voiceConversationContext.js";
+import { clearCopiedMessageIfCurrent, getChatMessageKey } from "./lib/chatCopyFeedback.js";
 
 const welcomeMessage = {
   role: "hey",
@@ -94,7 +95,8 @@ function ChatWorkspace() {
   const [supabaseStatus, setSupabaseStatus] = useState("checking");
   const [aiReadiness, setAIReadiness] = useState({ status: "checking", message: "Checking the HEY AI endpoint." });
   const [pinnedMessages, setPinnedMessages] = useState([]);
-  const [copiedMessage, setCopiedMessage] = useState("");
+  const [copiedMessage, setCopiedMessage] = useState(null);
+  const copyRequestRef = useRef(0);
   const [executionStatus, setExecutionStatus] = useState("");
   const [pendingComputerPreview, setPendingComputerPreview] = useState(null);
   const [previewChecking, setPreviewChecking] = useState(false);
@@ -295,6 +297,8 @@ function ChatWorkspace() {
       const history = await getHEYConversationMessages(id);
       setConversationId(id);
       setMessages(history.length ? history : [welcomeMessage]);
+      copyRequestRef.current += 1;
+      setCopiedMessage(null);
       setChatError("");
       setHistoryOpen(false);
     } catch {
@@ -308,6 +312,8 @@ function ChatWorkspace() {
     followingRef.current = true;
     setConversationId(null);
     setMessages([welcomeMessage]);
+    copyRequestRef.current += 1;
+    setCopiedMessage(null);
     setMessage("");
     setChatError("");
     setHistoryOpen(false);
@@ -736,13 +742,21 @@ function ChatWorkspace() {
     if (previousUserMessage) await sendUserMessage(previousUserMessage.text);
   }
 
-  async function copyMessage(text) {
+  async function copyMessage(text, messageKey) {
+    if (!messageKey) return;
+    const requestId = ++copyRequestRef.current;
+    setCopiedMessage(null);
     try {
       if (!navigator.clipboard) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(text);
-      setCopiedMessage(text);
-    } catch { setChatError('Could not copy. Select the message text to copy it manually.'); return; }
-    window.setTimeout(() => setCopiedMessage(""), 1400);
+      if (copyRequestRef.current !== requestId) return;
+      const feedback = { messageKey, requestId };
+      setCopiedMessage(feedback);
+      window.setTimeout(() => setCopiedMessage((current) => clearCopiedMessageIfCurrent(current, feedback)), 1400);
+    } catch {
+      if (copyRequestRef.current !== requestId) return;
+      setChatError('Could not copy. Select the message text to copy it manually.');
+    }
   }
 
   async function toggleVoiceCall() {
@@ -952,21 +966,24 @@ function ChatWorkspace() {
 
               <div className="hey-chat-messages">
                 <FirstRunPurposeSetup />
-                {messages.map((item, index) => (
+                {messages.map((item, index) => {
+                  const messageKey = getChatMessageKey(index);
+                  return (
                   <ChatMessage
-                    key={`${item.role}-${item.text}-${index}`}
+                    key={messageKey}
                     role={item.role}
-                    onCopy={() => copyMessage(item.text)}
+                    onCopy={() => copyMessage(item.text, messageKey)}
                     onRetry={() => retryMessage(index)}
                     onPin={() => pinMessage(item.text)}
                     pinned={pinnedMessages.includes(item.text)}
-                    copied={copiedMessage === item.text}
+                    copied={copiedMessage?.messageKey === messageKey}
                     verification={item.verification}
                     providerExecutionReceipt={item.providerExecutionReceipt}
                   >
                     {item.text}
                   </ChatMessage>
-                ))}
+                  );
+                })}
                 {isSending && (
                   <div className="hey-chat-thinking"><span /><span /><span /> {t("chat.thinking")}</div>
                 )}

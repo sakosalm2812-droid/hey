@@ -73,6 +73,13 @@ export const translations = {
       hint: "Message HEY... (or use voice)",
       disclaimer: "HEY can make mistakes. Check important information.",
       thinking: "HEY is thinking",
+      messageActions: {
+        copy: "Copy message",
+        copied: "Message copied",
+        retry: "Retry response",
+        pin: "Pin response",
+        pinned: "Response pinned",
+      },
       firstRunPurposes: {
         title: "Why do you want to use HEY?",
         subtitle: "Choose every area that fits. You can change this later; these choices do not grant device or school access.",
@@ -263,6 +270,13 @@ export const translations = {
       hint: "Peyama HEY... (an jî bi dengî bikar bîne)",
       disclaimer: "HEY dikare xeletî bike. Agahiyên girîng kontrol bike.",
       thinking: "HEY difikire",
+      messageActions: {
+        copy: "Peyamê kopî bike",
+        copied: "Peyam kopî bû",
+        retry: "Bersivê dîsa biceribîne",
+        pin: "Bersivê sabît bike",
+        pinned: "Bersiv hat sabît kirin",
+      },
       firstRunPurposes: {
         title: "Tu dixwazî HEY ji bo çi bikar bînî?",
         subtitle: "Hemû qadên guncaw hilbijêre. Tu dikarî paşê biguherînî; ev hilbijartin destûra amûrê an dibistanê nadin.",
@@ -453,6 +467,13 @@ export const translations = {
       hint: "راسل HEY... (أو استخدم الصوت)",
       disclaimer: "قد يخطئ HEY. تحقّق من المعلومات المهمة.",
       thinking: "HEY يفكّر",
+      messageActions: {
+        copy: "نسخ الرسالة",
+        copied: "تم نسخ الرسالة",
+        retry: "إعادة المحاولة",
+        pin: "تثبيت الرد",
+        pinned: "تم تثبيت الرد",
+      },
       firstRunPurposes: {
         title: "لماذا تريد استخدام HEY؟",
         subtitle: "اختر كل المجالات المناسبة. يمكنك تغييرها لاحقًا؛ هذه الاختيارات لا تمنح صلاحية للجهاز أو المدرسة.",

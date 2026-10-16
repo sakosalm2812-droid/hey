@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { Check, Copy, Pin, RotateCcw, Sparkles } from "lucide-react";
+import { useLocale } from "../../i18n/LocaleContext.jsx";
 import MarkdownResponse from './MarkdownResponse.jsx';
 
 export default function ChatMessage({
@@ -13,6 +14,7 @@ export default function ChatMessage({
   verification,
   providerExecutionReceipt,
 }) {
+  const { t } = useLocale();
   const isUser = role === "user";
   const providerNames = { openai: "OpenAI", openrouter: "OpenRouter", gemini: "Gemini", groq: "Groq" };
   const providerName = (providerId) => providerNames[providerId] || providerId;
@@ -56,15 +58,16 @@ export default function ChatMessage({
           </div>
         )}
         <div className="hey-chat-message-actions">
-          <button type="button" onClick={onCopy} aria-label="Copy message" title="Copy message">
+          <button type="button" onClick={onCopy} aria-label={t(copied ? "chat.messageActions.copied" : "chat.messageActions.copy")} title={t(copied ? "chat.messageActions.copied" : "chat.messageActions.copy")}>
             {copied ? <Check size={14} /> : <Copy size={14} />}
           </button>
+          <span className="hey-chat-action-status" role="status" aria-live="polite">{copied ? t("chat.messageActions.copied") : ""}</span>
           {!isUser && (
             <>
-              <button type="button" onClick={onRetry} aria-label="Retry response" title="Retry response">
+              <button type="button" onClick={onRetry} aria-label={t("chat.messageActions.retry")} title={t("chat.messageActions.retry")}>
                 <RotateCcw size={14} />
               </button>
-              <button type="button" onClick={onPin} aria-label="Pin response" title="Pin response" className={pinned ? "active" : ""}>
+              <button type="button" onClick={onPin} aria-label={t(pinned ? "chat.messageActions.pinned" : "chat.messageActions.pin")} title={t(pinned ? "chat.messageActions.pinned" : "chat.messageActions.pin")} className={pinned ? "active" : ""} disabled={pinned}>
                 <Pin size={14} />
               </button>
             </>
