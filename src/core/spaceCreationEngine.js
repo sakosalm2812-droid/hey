@@ -6,7 +6,7 @@ import { getTool } from "./toolRegistry.js";
 import { getOnboardingMotivations, rankOnboardingStarterSuggestions } from "./onboardingEngine.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
-export const SPACE_STORAGE_CONTRACT_VERSION = 3;
+export const SPACE_STORAGE_CONTRACT_VERSION = 4;
 export const SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION = 1;
 export const SPACE_CREATION_LIMITS = Object.freeze({
   maxPromptLength: 500,
@@ -21,7 +21,8 @@ export const SPACE_CREATION_LIMITS = Object.freeze({
 });
 
 const STORAGE_KEY = "hey_spaces";
-const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, 2, SPACE_STORAGE_CONTRACT_VERSION]);
+const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, 2, 3, SPACE_STORAGE_CONTRACT_VERSION]);
+const SPACE_LIFECYCLE_STATUSES = new Set(["active", "archived"]);
 const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
 const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
 const activeSpaceRecordWrites = new Set();
@@ -88,6 +89,9 @@ function cleanStoredSpace(id, value, scope) {
     if (space.visibility !== "private" || space.sharing !== "off") return null;
     const detailsRevision = space.detailsRevision === undefined ? 0 : space.detailsRevision;
     if (!Number.isSafeInteger(detailsRevision) || detailsRevision < 0) return null;
+    const status = space.status === undefined ? "active" : space.status;
+    const lifecycleRevision = space.lifecycleRevision === undefined ? 0 : space.lifecycleRevision;
+    if (!SPACE_LIFECYCLE_STATUSES.has(status) || !Number.isSafeInteger(lifecycleRevision) || lifecycleRevision < 0) return null;
     const layoutPreferences = space.layoutPreferences === undefined
       ? createDefaultSpaceLayoutPreferences()
       : normalizeSpaceLayoutPreferences(space.layoutPreferences);
@@ -98,6 +102,8 @@ function cleanStoredSpace(id, value, scope) {
       name: space.name,
       description: typeof space.description === "string" ? space.description.slice(0, 240) : "",
       detailsRevision,
+      status,
+      lifecycleRevision,
       visibility: "private",
       sharing: "off",
       createdAt: typeof space.createdAt === "string" ? space.createdAt.slice(0, 64) : null,
@@ -284,6 +290,7 @@ export class SpaceCreationEngine {
     this.spaces = new Map();
     this.previews = new Map();
     this.deletePreviews = new Map();
+    this.lifecyclePreviews = new Map();
     this.listeners = new Set();
     this.loadError = false;
     this.load(this.accountScope);
@@ -291,6 +298,7 @@ export class SpaceCreationEngine {
       this.accountScope = getAccountScope();
       this.previews.clear();
       this.deletePreviews.clear();
+      this.lifecyclePreviews.clear();
       this.load(this.accountScope);
       this.notify("account_scope_changed", { accountScope: this.accountScope });
     });
@@ -348,6 +356,7 @@ export class SpaceCreationEngine {
     this.listeners.clear();
     this.previews.clear();
     this.deletePreviews.clear();
+    this.lifecyclePreviews.clear();
   }
 
   save() {
@@ -676,6 +685,126 @@ export class SpaceCreationEngine {
     }
   }
 
+  previewArchiveSpace(request) {
+    return this.previewLifecycleSpace(request, "archived");
+  }
+
+  previewRestoreSpace(request) {
+    return this.previewLifecycleSpace(request, "active");
+  }
+
+  previewLifecycleSpace(request, targetStatus) {
+    const safeRequest = readDataRecord(request, ["accountScope", "spaceId", "expectedLifecycleRevision"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, spaceId, expectedLifecycleRevision } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to change Space lifecycle" };
+    if (typeof accountScope !== "string" || accountScope !== scope || accountScope !== getAccountScope()) return { error: "Account scope mismatch" };
+    if (typeof spaceId !== "string" || spaceId.length === 0 || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    if (!Number.isSafeInteger(expectedLifecycleRevision) || expectedLifecycleRevision < 0) return { error: "A valid Space lifecycle revision is required" };
+    const refreshed = this.refreshFromStorage(scope, { notify: true });
+    if (refreshed.error) return refreshed;
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the request" };
+    const space = this.spaces.get(spaceId);
+    if (!space || space.accountScope !== scope) return { error: "Space not found" };
+    const expectedStatus = targetStatus === "archived" ? "active" : "archived";
+    if (space.status !== expectedStatus) return { error: targetStatus === "archived" ? "Space is already archived" : "Space is not archived" };
+    if (space.lifecycleRevision !== expectedLifecycleRevision) {
+      return { error: "Space lifecycle changed; reload before reviewing", code: "stale_revision", current: cloneSpace(space) };
+    }
+    if (space.lifecycleRevision === Number.MAX_SAFE_INTEGER) return { error: "Space lifecycle revision limit reached" };
+    const previewId = createId();
+    const expiresAt = Date.now() + SPACE_CREATION_LIMITS.previewLifetimeMs;
+    this.lifecyclePreviews.set(previewId, {
+      accountScope: scope,
+      spaceId,
+      targetStatus,
+      snapshot: JSON.stringify(space),
+      expiresAt,
+    });
+    const isArchive = targetStatus === "archived";
+    return {
+      previewId,
+      accountScope: scope,
+      expiresAt: new Date(expiresAt).toISOString(),
+      action: isArchive ? "archive_private_space" : "restore_private_space",
+      space: cloneSpace(space),
+      effects: [isArchive
+        ? `Mark “${space.name}” as archived and keep its private saved data available for restoration`
+        : `Restore “${space.name}” to active status while keeping its saved data private`],
+      permissionsChanged: false,
+      requiresConfirmation: true,
+    };
+  }
+
+  confirmArchiveSpace(request) {
+    return this.confirmLifecycleSpace(request, "archived");
+  }
+
+  confirmRestoreSpace(request) {
+    return this.confirmLifecycleSpace(request, "active");
+  }
+
+  confirmLifecycleSpace(request, targetStatus) {
+    const safeRequest = readDataRecord(request, ["previewId", "confirm"]);
+    if (safeRequest.error) return safeRequest;
+    const { previewId, confirm } = safeRequest.value;
+    const scope = this.accountScope;
+    if (typeof previewId !== "string" || previewId.length === 0 || previewId.length > 100) return { error: "A valid Space lifecycle preview ID is required" };
+    if (confirm !== true) return { error: "Explicit confirmation is required" };
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to change Space lifecycle" };
+    if (getAccountScope() !== scope) {
+      this.lifecyclePreviews.clear();
+      return { error: "Account scope changed; lifecycle preview is no longer valid" };
+    }
+    const pending = this.lifecyclePreviews.get(previewId);
+    if (!pending || pending.accountScope !== scope || pending.targetStatus !== targetStatus) return { error: "Space lifecycle preview not found or already used" };
+    if (Date.now() > pending.expiresAt) {
+      this.lifecyclePreviews.delete(previewId);
+      return { error: "Space lifecycle preview expired; review the change again" };
+    }
+    const writeLockKey = JSON.stringify([scope, pending.spaceId]);
+    if (activeSpaceRecordWrites.has(writeLockKey)) return { error: "A Space update is already in progress", code: "write_in_progress" };
+    activeSpaceRecordWrites.add(writeLockKey);
+    try {
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error) return refreshed;
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; lifecycle preview is no longer valid" };
+      const current = this.spaces.get(pending.spaceId);
+      if (!current || current.accountScope !== scope) {
+        this.lifecyclePreviews.delete(previewId);
+        return { error: "Space no longer exists" };
+      }
+      if (JSON.stringify(current) !== pending.snapshot) {
+        this.lifecyclePreviews.delete(previewId);
+        return { error: "Space changed after lifecycle review; review the latest version", code: "stale_revision", current: cloneSpace(current) };
+      }
+      this.lifecyclePreviews.delete(previewId);
+      const nextSpaces = new Map(this.spaces);
+      const updated = { ...current, status: targetStatus, lifecycleRevision: current.lifecycleRevision + 1 };
+      nextSpaces.set(pending.spaceId, updated);
+      const serialized = serializeSpaces(nextSpaces, scope);
+      if (!serialized) return { error: "Space lifecycle change could not be saved", code: "write_failed" };
+      try {
+        const key = getAccountStorageKey(STORAGE_KEY, scope);
+        safeStorage.setItem(key, serialized);
+        if (safeStorage.getItem(key) !== serialized) return { error: "Space lifecycle change could not be saved", code: "write_failed" };
+      } catch {
+        return { error: "Space lifecycle change could not be saved", code: "write_failed" };
+      }
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying" };
+      this.spaces = nextSpaces;
+      const result = { success: true, accountScope: scope, spaceId: pending.spaceId, status: targetStatus, revision: updated.lifecycleRevision, permissionsChanged: false };
+      const action = targetStatus === "archived" ? "archived" : "restored";
+      this.notify(`space_${action}`, result);
+      publish(`spaces.private_space_${action}`, result);
+      recordAudit({ action: `space.private_${action}`, status: "completed", metadata: { spaceId: pending.spaceId, accountScope: scope } });
+      return result;
+    } finally {
+      activeSpaceRecordWrites.delete(writeLockKey);
+    }
+  }
+
   previewNaturalLanguageRequest(request) {
     const safeRequest = readDataRecord(request, ["accountScope", "prompt", "templateId"]);
     if (safeRequest.error) return safeRequest;
@@ -748,6 +877,8 @@ export class SpaceCreationEngine {
       description: SPACE_STARTERS[pending.templateId || "empty"].description,
       templateId: pending.templateId || "empty",
       detailsRevision: 0,
+      status: "active",
+      lifecycleRevision: 0,
       visibility: "private",
       sharing: "off",
       createdAt: new Date().toISOString(),
@@ -797,6 +928,23 @@ export function getPrivateSpaces() {
 /** Updates a private Space's name or description with its expected details revision. */
 export function updatePrivateSpaceDetails(request) {
   return spaceCreationEngine.updateDetails(request);
+}
+
+/** Lifecycle previews are account-scoped, revision-bound, and require explicit confirmation. */
+export function previewPrivateSpaceArchive(request) {
+  return spaceCreationEngine.previewArchiveSpace(request);
+}
+
+export function confirmPrivateSpaceArchive(request) {
+  return spaceCreationEngine.confirmArchiveSpace(request);
+}
+
+export function previewPrivateSpaceRestore(request) {
+  return spaceCreationEngine.previewRestoreSpace(request);
+}
+
+export function confirmPrivateSpaceRestore(request) {
+  return spaceCreationEngine.confirmRestoreSpace(request);
 }
 
 export function getOnboardingSpaceSuggestions() {
