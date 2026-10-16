@@ -15,6 +15,8 @@ const STEP_TERMINAL_STATES = new Set([
   "skipped",
 ]);
 
+const workflowAbortControllers = new WeakMap();
+
 function createId(prefix = "id") {
   if (globalThis.crypto?.randomUUID) {
     return `${prefix}_${globalThis.crypto.randomUUID()}`;
@@ -185,6 +187,7 @@ export function cancelWorkflow(workflow, reason = "Workflow cancelled.") {
   workflow.status = "cancelled";
   workflow.cancelledAt = new Date();
   workflow.cancelReason = reason;
+  workflowAbortControllers.get(workflow)?.abort(new Error(reason));
 
   for (const step of workflow.steps) {
     if (!STEP_TERMINAL_STATES.has(step.status)) {
@@ -235,6 +238,9 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
     return workflow;
   }
 
+  const abortController = new AbortController();
+  workflowAbortControllers.set(workflow, abortController);
+
   const maxSteps =
     Number.isInteger(options.maxSteps) && options.maxSteps > 0
       ? options.maxSteps
@@ -271,7 +277,9 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
     }
 
     if (typeof options.shouldCancel === "function") {
-      const shouldCancel = await options.shouldCancel(workflow, step);
+      const shouldCancel = await options.shouldCancel(workflow, step, {
+        signal: abortController.signal,
+      });
 
       if (workflow.status === "cancelled") {
         return workflow;
@@ -341,6 +349,7 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
         context: executionContext,
         options,
         index,
+        signal: abortController.signal,
       });
 
       step.result = result;

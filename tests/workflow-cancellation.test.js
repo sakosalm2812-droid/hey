@@ -16,11 +16,15 @@ test("cancellation while checking the next step prevents its first dispatch", as
   const cancellationCheck = deferred();
   const workflow = createWorkflow("Wait then act", [{ action: "first" }]);
   let handlerCalls = 0;
+  let cancellationSignal;
 
   const running = runWorkflow(workflow, {
     first: async () => { handlerCalls += 1; return { success: true }; },
   }, {
-    shouldCancel: async () => cancellationCheck.promise,
+    shouldCancel: async (_workflow, _step, { signal }) => {
+      cancellationSignal = signal;
+      return cancellationCheck.promise;
+    },
   });
 
   await new Promise((resolve) => setImmediate(resolve));
@@ -28,6 +32,7 @@ test("cancellation while checking the next step prevents its first dispatch", as
   cancellationCheck.resolve(false);
 
   const result = await running;
+  assert.equal(cancellationSignal.aborted, true);
   assert.equal(result.status, "cancelled");
   assert.equal(result.steps[0].status, "cancelled");
   assert.equal(handlerCalls, 0);
@@ -38,13 +43,15 @@ test("cancellation during an in-flight workflow step remains cancelled and preve
   let verificationCalls = 0;
   let laterStepCalls = 0;
   let observedTargetState = "unchanged";
+  let handlerSignal;
   const workflow = createWorkflow("Perform two computer actions", [
     { action: "first" },
     { action: "second" },
   ]);
 
   const running = runWorkflow(workflow, {
-    first: async () => {
+    first: async (_step, { signal }) => {
+      handlerSignal = signal;
       await handlerResult.promise;
       observedTargetState = "complete";
       return { success: true, receipt: "step-one" };
@@ -60,6 +67,7 @@ test("cancellation during an in-flight workflow step remains cancelled and preve
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(workflow.steps[0].status, "running");
   cancelWorkflow(workflow, "User stopped the workflow.");
+  assert.equal(handlerSignal.aborted, true);
   handlerResult.resolve();
 
   const result = await running;
@@ -74,23 +82,28 @@ test("cancellation during an in-flight workflow step remains cancelled and preve
 });
 
 test("a handler failure that settles after cancellation cannot change the workflow to failed or completed", async () => {
-  const handlerResult = deferred();
   const workflow = createWorkflow("Perform a recoverable action", [
     { action: "first" },
     { action: "second" },
   ]);
   let laterStepCalls = 0;
+  let handlerSignal;
 
   const running = runWorkflow(workflow, {
-    first: async () => handlerResult.promise,
+    first: async (_step, { signal }) => {
+      handlerSignal = signal;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("adapter stopped after partial effect")), { once: true });
+      });
+    },
     second: async () => { laterStepCalls += 1; return { success: true }; },
   });
 
   await new Promise((resolve) => setImmediate(resolve));
   cancelWorkflow(workflow, "User stopped the workflow.");
-  handlerResult.reject(new Error("adapter stopped after partial effect"));
 
   const result = await running;
+  assert.equal(handlerSignal.aborted, true);
   assert.equal(result.status, "cancelled");
   assert.equal(result.steps[0].status, "cancelled");
   assert.equal(result.steps[0].settledAfterCancellation, true);
