@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Download,
@@ -36,6 +36,7 @@ import {
   createBrowserSpeechSynthesisProvider,
   createVoiceSession,
 } from "./lib/voiceProviders.js";
+import { createConversationScopedVoiceAsk } from "./lib/voiceConversationContext.js";
 
 const welcomeMessage = {
   role: "hey",
@@ -78,6 +79,8 @@ function ChatWorkspace() {
   const [messages, setMessages] = useState([welcomeMessage]);
   const [conversations, setConversations] = useState([]);
   const [conversationId, setConversationId] = useState(null);
+  const conversationIdRef = useRef(conversationId);
+  useLayoutEffect(() => { conversationIdRef.current = conversationId; }, [conversationId]);
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
@@ -157,7 +160,11 @@ function ChatWorkspace() {
     voiceSessionRef.current = createVoiceSession({
       speechProvider: createBrowserSpeechProvider(window),
       synthesisProvider: createBrowserSpeechSynthesisProvider(window),
-      ask: (...args) => askFromVoiceRef.current?.(...args),
+      ask: createConversationScopedVoiceAsk({
+        ask: (...args) => askFromVoiceRef.current?.(...args),
+        getConversationId: () => conversationIdRef.current,
+        onConversationId: setConversationId,
+      }),
       environment: window,
       onStateChange: ({ state, error, transcript: nextTranscript, answer, ttsUnavailable }) => {
         setVoiceState(state);
@@ -320,7 +327,7 @@ function ChatWorkspace() {
     setPendingComputerPreview(nextPreview);
   }, []);
 
-  const askFromVoice = useCallback(async (text, { signal } = {}) => {
+  const askFromVoice = useCallback(async (text, { signal, conversationId: activeConversationId, onConversationId } = {}) => {
     const nextPreview = await createSafeComputerPreview(text, signal);
     if (signal?.aborted) return t("chat.voiceOS.cancelled", "Computer preview cancelled. Nothing was sent or opened.");
     if (nextPreview?.blocked) return t("chat.voiceOS.accountRequiredVoice", "Sign in to the current account before reviewing a computer action. Nothing was run.");
@@ -332,7 +339,7 @@ function ChatWorkspace() {
         .replace("{action}", action)
         .replace("{target}", nextPreview.summary.target);
     }
-    return askHEY(text, { signal });
+    return askHEY(text, { signal, conversationId: activeConversationId, onConversationId });
   }, [createSafeComputerPreview, storeComputerPreview, t]);
 
   useEffect(() => {

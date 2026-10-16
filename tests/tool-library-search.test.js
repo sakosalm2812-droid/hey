@@ -34,3 +34,32 @@ test("Tool Library search does not evaluate hostile catalog accessors", () => {
   assert.deepEqual(searchToolLibraryCatalog([hostile], "speech recognition"), []);
   assert.equal(getterCalls, 0);
 });
+
+test("Tool Library search ignores accessor-backed catalog slots and bounds catalog/query work", () => {
+  let slotGetterCalls = 0;
+  const catalog = [];
+  Object.defineProperty(catalog, "0", {
+    configurable: true,
+    get() { slotGetterCalls += 1; throw new Error("catalog slot accessor ran"); },
+  });
+  catalog.length = 1;
+
+  assert.deepEqual(searchToolLibraryCatalog(catalog, "speech recognition"), []);
+  assert.equal(slotGetterCalls, 0);
+  assert.deepEqual(searchToolLibraryCatalog([{ name: "speech recognition" }], "x".repeat(257)), []);
+  assert.deepEqual(searchToolLibraryCatalog(Array(257).fill({ name: "speech recognition" }), "speech recognition"), []);
+});
+
+test("Tool Library search bounds per-entry metadata and skips accessor-backed metadata slots", () => {
+  let metadataGetterCalls = 0;
+  const capabilities = [];
+  Object.defineProperty(capabilities, "0", {
+    configurable: true,
+    get() { metadataGetterCalls += 1; throw new Error("metadata accessor ran"); },
+  });
+  capabilities.length = 1;
+
+  assert.deepEqual(searchToolLibraryCatalog([{ name: "voice", capabilities }], "speech recognition"), []);
+  assert.equal(metadataGetterCalls, 0);
+  assert.deepEqual(searchToolLibraryCatalog([{ description: "speech recognition", capabilities: Array(65).fill({ capability: "speech recognition" }) }], "speech recognition"), [{ description: "speech recognition", capabilities: Array(65).fill({ capability: "speech recognition" }) }]);
+});
