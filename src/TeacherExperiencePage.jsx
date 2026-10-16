@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, Download, GraduationCap, LoaderCircle, ShieldCheck } from "lucide-react";
 
 import HEY from "./core/index.js";
@@ -7,6 +7,7 @@ import { supabaseClient } from "./lib/supabase.js";
 import { listRecords } from "./lib/heyRecords.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "./teacherExperiencePageContract.js";
+import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount } from "./teacherPageState.js";
 import "./TeacherExperiencePage.css";
 
 const EMPTY_LESSON = Object.freeze({
@@ -53,7 +54,13 @@ async function readCurrentTeacherAccess(expectedUserId) {
 
 export default function TeacherExperiencePage() {
   const { user, loading: authLoading } = useAuth();
+  const accountId = user?.id || "";
+  const accountRef = useRef(accountId);
+  const previousAccountIdRef = useRef(accountId);
+  useLayoutEffect(() => { accountRef.current = accountId; }, [accountId]);
   const [access, setAccess] = useState({ status: "checking", classIds: [] });
+  const [accessAccountId, setAccessAccountId] = useState("");
+  const [accessEpoch, setAccessEpoch] = useState(0);
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedClassId, setSelectedClassId] = useState("");
@@ -64,7 +71,7 @@ export default function TeacherExperiencePage() {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [safetyAcknowledged, setSafetyAcknowledged] = useState(false);
-  const busyRef = useRef(false);
+  const busyRef = useRef(null);
   const draftRevisionRef = useRef(0);
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectId) || null, [projects, selectedProjectId]);
 
@@ -77,38 +84,61 @@ export default function TeacherExperiencePage() {
     setError("");
   }, []);
 
-  useEffect(() => subscribeAccountScope(() => {
+  useEffect(() => subscribeAccountScope((_previousScope, nextScope) => {
+    const nextAccountId = nextScope.startsWith("account:") ? nextScope.slice("account:".length) : "";
+    previousAccountIdRef.current = nextAccountId;
+    accountRef.current = nextAccountId;
     draftRevisionRef.current += 1;
     resetTransientJourney();
+    setLessonForm({ ...EMPTY_LESSON });
     setProjects([]);
     setSelectedProjectId("");
     setSelectedClassId("");
     setAccess({ status: "checking", classIds: [] });
+    setAccessAccountId("");
+    setAccessEpoch((current) => current + 1);
   }), [resetTransientJourney]);
 
   useEffect(() => {
     let cancelled = false;
+    const accountChanged = shouldResetTeacherDraft(previousAccountIdRef.current, accountId);
+    previousAccountIdRef.current = accountId;
+    setAccessAccountId("");
+    if (accountChanged) {
+      draftRevisionRef.current += 1;
+      setLessonForm({ ...EMPTY_LESSON });
+      resetTransientJourney();
+      setProjects([]);
+      setSelectedProjectId("");
+      setSelectedClassId("");
+    }
     async function loadTeacherAccess() {
-      if (authLoading) return;
-      if (!user?.id) {
-        setAccess({ status: "identity-missing", classIds: [] });
+      if (authLoading) {
+        setAccess({ status: "checking", classIds: [] });
         return;
       }
-      const expectedAccountScope = `account:${user.id}`;
+      if (!accountId) {
+        setAccess({ status: "identity-missing", classIds: [] });
+        setAccessAccountId(accountId);
+        return;
+      }
+      const expectedAccountScope = `account:${accountId}`;
       setAccess({ status: "checking", classIds: [] });
       setProjects([]);
       try {
         const { data, error: authError } = await supabaseClient.auth.getUser();
         if (cancelled) return;
-        if (authError || data?.user?.id !== user.id || getAccountScope() !== expectedAccountScope) {
+        if (authError || data?.user?.id !== accountId || getAccountScope() !== expectedAccountScope) {
           setAccess({ status: "service-unavailable", classIds: [] });
+          setAccessAccountId(accountId);
           return;
         }
         const verifiedAccess = resolveTeacherPageAccess(data.user, expectedAccountScope);
         setAccess(verifiedAccess);
+        setAccessAccountId(accountId);
         if (verifiedAccess.status !== "ready") return;
-        const records = await listRecords(data.user.id, "project");
-        if (cancelled || getAccountScope() !== expectedAccountScope) return;
+        const records = await listRecords(accountId, "project");
+        if (cancelled || accountRef.current !== accountId || getAccountScope() !== expectedAccountScope) return;
         const eligibleProjects = (records || []).filter((record) => typeof record?.id === "string" && record.id.trim())
           .map((record) => ({ id: record.id, name: record.title || "Untitled project" }));
         setProjects(eligibleProjects);
@@ -116,12 +146,15 @@ export default function TeacherExperiencePage() {
           ? current : eligibleProjects[0]?.id || "");
         setSelectedClassId((current) => verifiedAccess.classIds.includes(current) ? current : verifiedAccess.classIds[0] || "");
       } catch {
-        if (!cancelled) setAccess({ status: "service-unavailable", classIds: [] });
+        if (!cancelled && accountRef.current === accountId) {
+          setAccess({ status: "service-unavailable", classIds: [] });
+          setAccessAccountId(accountId);
+        }
       }
     }
     loadTeacherAccess();
     return () => { cancelled = true; };
-  }, [authLoading, user?.id]);
+  }, [authLoading, accountId, accessEpoch, resetTransientJourney]);
 
   function updateField(field, value) {
     draftRevisionRef.current += 1;
@@ -179,8 +212,10 @@ export default function TeacherExperiencePage() {
 
   async function preparePreview(event) {
     event.preventDefault();
-    if (busyRef.current) return;
-    busyRef.current = true;
+    const operationAccountId = accountId;
+    const operationAccountScope = `account:${operationAccountId}`;
+    if (!teacherOperationCanStart(busyRef.current, operationAccountId)) return;
+    busyRef.current = operationAccountId;
     const draftRevision = draftRevisionRef.current;
     resetTransientJourney();
     setStatus("preparing");
@@ -193,22 +228,28 @@ export default function TeacherExperiencePage() {
       if (draftRevisionRef.current !== draftRevision) throw new Error("Your lesson or class changed while the preview was being prepared. Review the current form and try again.");
       const journeyId = globalThis.crypto?.randomUUID?.();
       if (!journeyId) throw new Error("A secure journey ID is unavailable in this browser. Try an up-to-date browser.");
-      if (!hasActiveContext({ ...requests.expected, classId: requests.context.classId }, access.classIds)) {
+      if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope
+        || !hasActiveContext({ ...requests.expected, classId: requests.context.classId }, access.classIds)) {
         throw new Error("Teacher access changed while the preview was being prepared. Review your class and try again.");
       }
       setPreview({ ...requests, lesson, assessment, worksheet, journeyId });
       setStatus("preview-ready");
     } catch (prepareError) {
-      setError(prepareError?.message || "The lesson preview could not be prepared.");
-      setStatus("error");
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && draftRevisionRef.current === draftRevision) {
+        setError(prepareError?.message || "The lesson preview could not be prepared.");
+        setStatus("error");
+      }
     } finally {
-      busyRef.current = false;
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
     }
   }
 
   async function saveJourney() {
-    if (!preview || busyRef.current) return;
-    busyRef.current = true;
+    if (!preview || !teacherOperationCanStart(busyRef.current, accountId)) return;
+    const operationAccountId = accountId;
+    const operationAccountScope = preview.expected.accountScope;
+    busyRef.current = operationAccountId;
     setStatus("saving");
     setError("");
     setExports(null);
@@ -231,21 +272,28 @@ export default function TeacherExperiencePage() {
       if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)) {
         throw new Error("The signed-in account changed before Forge confirmation could be shown. Reload Teacher Mode to check the saved journey.");
       }
+      if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        throw new Error("Your account changed before the saved lesson could be shown.");
+      }
       setSavedJourney(result);
       setStatus("saved");
     } catch (saveError) {
-      setError(saveError?.recovery?.journeyId === preview.journeyId
-        ? "Forge could not confirm this journey. Retry the same save to safely verify or complete it; the journey ID is unchanged."
-        : saveError?.message || "Forge could not confirm the lesson set.");
-      setStatus("save-error");
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+        setError(saveError?.recovery?.journeyId === preview.journeyId
+          ? "Forge could not confirm this journey. Retry the same save to safely verify or complete it; the journey ID is unchanged."
+          : saveError?.message || "Forge could not confirm the lesson set.");
+        setStatus("save-error");
+      }
     } finally {
-      busyRef.current = false;
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
     }
   }
 
   async function prepareExports() {
-    if (!savedJourney || !preview || busyRef.current) return;
-    busyRef.current = true;
+    if (!savedJourney || !preview || !teacherOperationCanStart(busyRef.current, accountId)) return;
+    const operationAccountId = accountId;
+    const operationAccountScope = preview.expected.accountScope;
+    busyRef.current = operationAccountId;
     setStatus("exporting");
     setError("");
     try {
@@ -280,16 +328,24 @@ export default function TeacherExperiencePage() {
       if (hasTeacherAnswerKeyField(savedJourney.studentArtifact.content)) throw new Error("Student worksheet answer-key check failed.");
       const confirmedAccess = await readCurrentTeacherAccess(preview.expected.userId);
       if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)) throw new Error("Teacher access changed during export preparation.");
+      if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) throw new Error("Your account changed during export preparation.");
       setExports({ lesson, answerKey, worksheet });
       setStatus("complete");
     } catch (exportError) {
-      setError(exportError?.message || "Teacher access could not be verified for export.");
-      setStatus("export-error");
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+        setError(exportError?.message || "Teacher access could not be verified for export.");
+        setStatus("export-error");
+      }
     } finally {
-      busyRef.current = false;
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
     }
   }
 
+  const accessIsCurrent = !authLoading && Boolean(accountId) && teacherPageStateMatchesAccount(accessAccountId, accountId);
+  const currentAccess = accessIsCurrent
+    ? access
+    : authLoading || accountId ? { status: "checking", classIds: [] } : { status: "identity-missing", classIds: [] };
+  const accountIsCurrent = accessIsCurrent && currentAccess.status === "ready";
   const busy = ["preparing", "saving", "exporting"].includes(status);
 
   return (
@@ -300,15 +356,15 @@ export default function TeacherExperiencePage() {
         <span className="teacher-experience__secure"><GraduationCap size={17} aria-hidden="true" /> Teacher access required</span>
       </header>
 
-      {authLoading || access.status === "checking" ? <p className="teacher-experience__notice" role="status"><LoaderCircle className="teacher-experience__spin" size={17} aria-hidden="true" /> Checking your signed-in Teacher access…</p> : null}
-      {access.status === "identity-missing" || access.status === "role-denied" || access.status === "scope-mismatch" ? (
+      {currentAccess.status === "checking" ? <p className="teacher-experience__notice" role="status"><LoaderCircle className="teacher-experience__spin" size={17} aria-hidden="true" /> Checking your signed-in Teacher access…</p> : null}
+      {currentAccess.status === "identity-missing" || currentAccess.status === "role-denied" || currentAccess.status === "scope-mismatch" ? (
         <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>This workspace is available only to a Teacher account with a verified school account and assigned class.</p></div>
       ) : null}
-      {access.status === "class-unassigned" ? <div className="teacher-experience__notice" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Your account has no verified class assignments. A school administrator must provision Teacher access.</p></div> : null}
-      {access.status === "service-unavailable" ? <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>HEY could not verify your current account with Supabase. No lesson data was loaded or saved.</p></div> : null}
-      {access.status === "ready" && !projects.length ? <div className="teacher-experience__notice" role="status"><AlertCircle size={18} aria-hidden="true" /><p>Create a project first. Forge saves the lesson set to a project you can access.</p></div> : null}
+      {currentAccess.status === "class-unassigned" ? <div className="teacher-experience__notice" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Your account has no verified class assignments. A school administrator must provision Teacher access.</p></div> : null}
+      {currentAccess.status === "service-unavailable" ? <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>HEY could not verify your current account with Supabase. No lesson data was loaded or saved.</p></div> : null}
+      {currentAccess.status === "ready" && !projects.length ? <div className="teacher-experience__notice" role="status"><AlertCircle size={18} aria-hidden="true" /><p>Create a project first. Forge saves the lesson set to a project you can access.</p></div> : null}
 
-      {access.status === "ready" && projects.length > 0 ? (
+      {currentAccess.status === "ready" && projects.length > 0 ? (
         <>
           <p className="teacher-experience__privacy" role="note">No student names, grades, records, or personal answers are collected here. Use fictional examples. Teacher answers stay in the private answer key.</p>
           <form className="teacher-experience__form" onSubmit={preparePreview}>
@@ -316,7 +372,7 @@ export default function TeacherExperiencePage() {
               <div className="teacher-experience__section-heading"><span>01</span><div><h2 id="teacher-scope-heading">Verified class and project</h2><p>These choices are limited to your signed-in account’s assignments.</p></div></div>
               <div className="teacher-experience__grid">
                 <label>Class<select value={selectedClassId} onChange={(event) => { draftRevisionRef.current += 1; setSelectedClassId(event.target.value); resetTransientJourney(); }} required>
-                  {access.classIds.map((classId) => <option key={classId} value={classId}>{classId}</option>)}
+                  {currentAccess.classIds.map((classId) => <option key={classId} value={classId}>{classId}</option>)}
                 </select></label>
                 <label>Forge project<select value={selectedProjectId} onChange={(event) => { draftRevisionRef.current += 1; setSelectedProjectId(event.target.value); resetTransientJourney(); }} required>
                   {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -382,7 +438,7 @@ export default function TeacherExperiencePage() {
         </>
       ) : null}
 
-      {error ? <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p>{status === "save-error" && preview ? <button className="teacher-experience__secondary" type="button" onClick={saveJourney} disabled={busy}>Retry the same journey save</button> : null}</div> : null}
+      {accountIsCurrent && error ? <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>{error}</p>{status === "save-error" && preview ? <button className="teacher-experience__secondary" type="button" onClick={saveJourney} disabled={busy}>Retry the same journey save</button> : null}</div> : null}
     </main>
   );
 }

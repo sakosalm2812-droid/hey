@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "../src/teacherExperiencePageContract.js";
+import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount } from "../src/teacherPageState.js";
 
 const readSource = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const page = readSource("../src/TeacherExperiencePage.jsx");
@@ -56,6 +57,8 @@ test("worksheet answer-key classifier fails closed on cycles and scans nested da
 });
 
 test("real protected entrypoint uses the atomic journey API and keeps retry IDs stable", () => {
+  assert.equal((app.match(/path="\/teacher"/g) || []).length, 1);
+  assert.doesNotMatch(app, /TeacherPage\.jsx/);
   assert.match(app, /path="\/teacher" element=\{<ProtectedLayout><TeacherExperiencePage \/><\/ProtectedLayout>\}/);
   assert.match(layout, /label: "Teacher", path: "\/teacher"/);
   assert.match(palette, /\["Open Teacher", "\/teacher"/);
@@ -67,4 +70,28 @@ test("real protected entrypoint uses the atomic journey API and keeps retry IDs 
   assert.match(page, /readCurrentTeacherAccess\(preview\.expected\.userId\)/);
   assert.match(page, /hasTeacherAnswerKeyField\(savedJourney\.studentArtifact\.content\)/);
   assert.match(page, /Nothing was written to Forge while preparing this preview/);
+});
+
+test("active Teacher page fences readiness and drafts to the signed-in account", () => {
+  assert.equal(teacherPageStateMatchesAccount("teacher-1", "teacher-1"), true);
+  assert.equal(teacherPageStateMatchesAccount("teacher-1", "teacher-2"), false);
+  assert.equal(shouldResetTeacherDraft("teacher-1", "teacher-2"), true);
+  assert.equal(shouldResetTeacherDraft("teacher-1", "teacher-1"), false);
+  assert.match(page, /previousAccountIdRef/);
+  assert.match(page, /setLessonForm\(\{ \.\.\.EMPTY_LESSON \}\)/);
+  assert.match(page, /setAccessAccountId\(""\)/);
+  assert.match(page, /const currentAccess = accessIsCurrent/);
+  assert.match(page, /currentAccess\.status === "ready" && projects\.length > 0/);
+  assert.match(page, /accountRef\.current === operationAccountId && getAccountScope\(\) === operationAccountScope/);
+});
+
+test("in-flight Teacher actions do not block the newly signed-in account or clear its lock", () => {
+  assert.equal(teacherOperationCanStart(null, "teacher-1"), true);
+  assert.equal(teacherOperationCanStart("teacher-1", "teacher-1"), false);
+  assert.equal(teacherOperationCanStart("teacher-1", "teacher-2"), true);
+  assert.equal(teacherOperationCanStart(null, ""), false);
+  assert.equal(teacherOperationLockBelongsToAccount("teacher-1", "teacher-1"), true);
+  assert.equal(teacherOperationLockBelongsToAccount("teacher-2", "teacher-1"), false);
+  assert.match(page, /teacherOperationCanStart\(busyRef\.current, accountId\)/);
+  assert.match(page, /teacherOperationLockBelongsToAccount\(busyRef\.current, operationAccountId\)/);
 });

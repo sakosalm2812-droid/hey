@@ -26,7 +26,9 @@ function preparedJourney() {
 }
 
 test("Teacher route and navigation reach a fresh server-claim guarded workflow", () => {
-  assert.match(routes, /path="\/teacher"[^\n]*TeacherPage/);
+  assert.match(routes, /path="\/teacher"[^\n]*TeacherExperiencePage/);
+  assert.equal((routes.match(/path="\/teacher"/g) || []).length, 1);
+  assert.doesNotMatch(routes, /lazy\(\(\) => import\("\.\/TeacherPage\.jsx"\)\)/);
   assert.match(appNavigation, /label: "Teacher", path: "\/teacher"/);
   assert.match(legacyNavigation, /label: "Teacher", path: "\/teacher"/);
   assert.match(page, /supabaseClient\.auth\.getUser\(\)/);
