@@ -909,6 +909,72 @@ test("an ended camera track stops recognition without misreporting permission re
   off();
 });
 
+test("active camera track loss releases capture and suppresses the in-flight detector result", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  camera.video.readyState = 2;
+  const listeners = camera.listeners;
+  let resolveDetection;
+  let signalDetectionStarted;
+  const detectionStarted = new Promise((resolve) => { signalDetectionStarted = resolve; });
+  let adapterStops = 0;
+  const scheduledFrames = [];
+  const previousOffscreenCanvas = globalThis.OffscreenCanvas;
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return {
+        drawImage() {},
+        getImageData() { return { data: new Uint8ClampedArray(4) }; },
+      };
+    }
+  };
+  globalThis.requestAnimationFrame = (callback) => { scheduledFrames.push(callback); return scheduledFrames.length; };
+  const states = [];
+  const frameObservations = [];
+  engine.subscribe((event, payload) => {
+    if (event === "recognition_state_changed") states.push(payload);
+    if (event === "gesture_frame_observed") frameObservations.push(payload);
+  });
+  engine.setRecognitionAdapter({
+    kind: "mediapipe-hands-bundled",
+    detect() {
+      signalDetectionStarted();
+      return new Promise((resolve) => { resolveDetection = resolve; });
+    },
+    getLatestObservation() {
+      return { pose: Array(63).fill(0), handedness: "right", handConfidence: 0.99, timestamp: Date.now() };
+    },
+    stop() { adapterStops += 1; },
+  });
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const actions = [];
+  const offAction = subscribe("gesture.action_requested", (event) => actions.push(event));
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "active" })).success, true);
+    await detectionStarted;
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+    assert.equal(typeof listeners.get("ended"), "function");
+    camera.videoTrack.readyState = "ended";
+    listeners.get("ended")();
+    resolveDetection({ id: "G01", confidence: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(engine.cameraCapabilityStatus, "supported");
+    assert.equal(camera.stopped, 1);
+    assert.equal(adapterStops, 1);
+    assert.equal(states.at(-1)?.reason, "camera_track_ended");
+    assert.deepEqual(frameObservations, []);
+    assert.deepEqual(actions, []);
+    assert.deepEqual(scheduledFrames, []);
+  } finally {
+    offAction();
+    engine.stopRecognition("test_cleanup");
+    if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
+});
 test("gesture bindings cannot publish an action outside their active consented session", () => {
   const { engine, profile } = makeEngine();
   const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });

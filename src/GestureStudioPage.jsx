@@ -62,8 +62,8 @@ export default function GestureStudioPage() {
       if (event === "recognition_state_changed") {
         setSessionState(payload?.state || gestureEngine.getRecognitionState());
         void gestureEngine.getRecognitionCapability().then(setCapability);
-        if (payload?.reason === "permission_revoked") setError("Camera access was revoked. Recognition stopped and camera tracks were released.");
-        if (payload?.reason === "camera_track_ended") setError("The camera feed ended. Recognition stopped and camera tracks were released. Check the camera and restart when ready.");
+        if (payload?.reason === "permission_revoked") { setConsent(false); setError("Camera access was revoked. Recognition stopped and camera tracks were released."); }
+        if (payload?.reason === "camera_track_ended") { setConsent(false); setError("The camera feed ended. Recognition stopped and camera tracks were released. Check the camera and restart when ready."); }
         if (payload?.reason === "account_changed") setError("The signed-in account changed. The session stopped and account data was cleared.");
       }
       if (event === "recognition_adapter_error") setError("The local detector stopped unexpectedly. Camera access has been released.");
