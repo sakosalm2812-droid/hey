@@ -36,6 +36,9 @@ const FORBIDDEN_SYNC_FIELDS = new Set(["__proto__", "prototype", "constructor"])
 const LEGACY_OFFLINE_STORAGE_KEY = "hey_offline";
 const DEVICE_OFFLINE_STORAGE_KEY = "hey_offline_device_v1";
 const OFFLINE_STORAGE_VERSION = 2;
+const OUTBOX_RETRY_BASE_MS = 1000;
+const OUTBOX_RETRY_MAX_MS = 5 * 60 * 1000;
+const OUTBOX_RETRY_MAX_EXPONENT = 9;
 const RESOURCE_BUDGET_LIMITS = Object.freeze({
   cpu: [1, 100],
   memory: [1, 1_048_576],
@@ -243,6 +246,7 @@ class OfflineEngine {
       resourceBudget: { ...this.deviceResourceBudget },
       cache: new Map(),
       outbox: [],
+      outboxInFlight: new Set(),
       lanCompute: { enabled: false, peers: [] },
     };
   }
@@ -616,6 +620,9 @@ class OfflineEngine {
       requiresConsent: input.requiresConsent !== false,
       createdAt: new Date().toISOString(),
       attempts: 0,
+      deliveryState: "pending",
+      nextAttemptAt: null,
+      lastError: null,
     };
 
     this.localRuntime.outbox.push(item);
@@ -625,12 +632,14 @@ class OfflineEngine {
   }
 
   processOutbox() {
-    if (!navigator.onLine) return;
+    if (typeof navigator === "undefined" || navigator.onLine !== true) return;
     if (this.localRuntime.outbox.length === 0) return;
 
-    const item = this.localRuntime.outbox[0];
-    if (item.requiresConsent && !this.hasUserConsent(item)) return;
-
+    const now = Date.now();
+    const item = this.localRuntime.outbox.find((queued) => queued.deliveryState !== "blocked"
+      && (!Number.isFinite(queued.nextAttemptAt) || queued.nextAttemptAt <= now)
+      && (!queued.requiresConsent || this.hasUserConsent(queued)));
+    if (!item) return;
     this.sendOutboxItem(item);
   }
 
@@ -641,16 +650,36 @@ class OfflineEngine {
   async sendOutboxItem(item) {
     const capture = this.captureScope();
     if (!capture.runtime.outbox.includes(item)) return { error: "item_not_queued" };
+    if (capture.runtime.outboxInFlight.has(item.id)) return { error: "already_sending" };
+    if (item.deliveryState === "blocked") return { error: "delivery_blocked" };
+    if (Number.isFinite(item.nextAttemptAt) && item.nextAttemptAt > Date.now()) {
+      return { error: "retry_scheduled", retryAt: item.nextAttemptAt };
+    }
+    capture.runtime.outboxInFlight.add(item.id);
     try {
       const destination = item.destination;
       const body = JSON.stringify(item.payload);
       if (!this.isCurrentScope(capture)) return { error: "account_changed" };
-      await fetch(destination, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-      });
+      let response;
+      try {
+        response = await fetch(destination, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+      } catch {
+        return this.recordOutboxFailure(item, capture, "network_error", true);
+      }
       if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+      const status = response?.status;
+      if (!response || !Number.isInteger(status) || status < 100 || status > 599) {
+        return this.recordOutboxFailure(item, capture, "invalid_response", true);
+      }
+      if (status < 200 || status >= 300 || response.ok !== true) {
+        const retryable = status === 408 || status === 425 || status === 429 || status >= 500;
+        return this.recordOutboxFailure(item, capture, `http_${status}`, retryable);
+      }
+
       const itemIndex = capture.runtime.outbox.indexOf(item);
       if (itemIndex < 0) return { error: "item_not_queued" };
       capture.runtime.outbox.splice(itemIndex, 1);
@@ -658,17 +687,46 @@ class OfflineEngine {
       if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       this.notify("outbox_sent", item);
       return { success: true };
-    } catch (error) {
+    } catch {
       if (!this.isCurrentScope(capture)) return { error: "account_changed" };
-      if (!capture.runtime.outbox.includes(item)) return { error: "item_not_queued" };
-      item.attempts++;
-      item.lastError = error.message;
-      if (item.attempts >= 3) {
-        capture.runtime.outbox.splice(capture.runtime.outbox.indexOf(item), 1);
-      }
-      this.save(capture);
-      return { error: error.message };
+      return this.recordOutboxFailure(item, capture, "invalid_payload", false);
+    } finally {
+      capture.runtime.outboxInFlight.delete(item.id);
     }
+  }
+
+  recordOutboxFailure(item, capture, code, retryable) {
+    if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+    if (!capture.runtime.outbox.includes(item)) return { error: "item_not_queued" };
+    const previousAttempts = Number.isSafeInteger(item.attempts) && item.attempts >= 0 ? item.attempts : 0;
+    item.attempts = Math.min(previousAttempts + 1, Number.MAX_SAFE_INTEGER);
+    item.lastError = code;
+    if (retryable) {
+      const exponent = Math.min(Math.max(item.attempts - 1, 0), OUTBOX_RETRY_MAX_EXPONENT);
+      const delay = Math.min(OUTBOX_RETRY_BASE_MS * (2 ** exponent), OUTBOX_RETRY_MAX_MS);
+      item.deliveryState = "retry_wait";
+      item.nextAttemptAt = Date.now() + delay;
+    } else {
+      item.deliveryState = "blocked";
+      item.nextAttemptAt = null;
+    }
+    this.save(capture);
+    if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+    return retryable
+      ? { error: code, retryAt: item.nextAttemptAt }
+      : { error: code, blocked: true };
+  }
+
+  retryOutboxItem(itemId) {
+    const item = this.localRuntime.outbox.find((queued) => queued.id === itemId);
+    if (!item) return { error: "item_not_queued" };
+    if (this.localRuntime.outboxInFlight.has(item.id)) return { error: "already_sending" };
+    item.attempts = 0;
+    item.lastError = null;
+    item.deliveryState = "pending";
+    item.nextAttemptAt = null;
+    this.save();
+    return { success: true, item };
   }
 
   enableLANCompute(enabled) {
@@ -777,6 +835,10 @@ export function addToOutbox(input) {
 
 export function processOutbox() {
   return offlineEngine.processOutbox();
+}
+
+export function retryOutboxItem(itemId) {
+  return offlineEngine.retryOutboxItem(itemId);
 }
 
 export function resolveSyncConflict(input) {
