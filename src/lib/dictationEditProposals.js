@@ -449,6 +449,7 @@ export function createDictationEditSession(options = {}) {
     } catch {
       return fail("invalid_confirmation", "invalid_confirmation_input");
     }
+    if (!isCurrent()) return fail("session_ended", "account_changed");
 
     const saved = proposal && typeof proposal === "object" ? proposals.get(proposal) : null;
     if (!saved) return fail("invalid_proposal", "proposal_not_created_by_this_session");

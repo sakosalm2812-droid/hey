@@ -356,6 +356,33 @@ test("stale target and selection context cannot be confirmed after the proposal 
   runtime.destroy();
 });
 
+test("account switches during hostile confirmation inspection fence the old proposal", async () => {
+  setAccountScope("edit-confirm-account-a");
+  const runtime = createDictationEditSession({
+    preferences: { language: "en-US", snippets: [{ name: "signature", text: "Regards" }] },
+    applicationId: "mail.app",
+  });
+  try {
+    const result = await runtime.propose(proposalInput({ sourceText: "body", utterance: "insert signature" }));
+    assert.equal(result.status, "preview_required");
+    const confirmation = new Proxy(confirmationInput("body", "mail.app"), {
+      ownKeys(target) {
+        setAccountScope("edit-confirm-account-b");
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    assert.deepEqual(runtime.confirm(result.proposal, confirmation), {
+      success: false,
+      status: "session_ended",
+      reason: "account_changed",
+    });
+  } finally {
+    runtime.destroy();
+    setAccountScope(null);
+  }
+});
+
 test("a rewrite result arriving after account change is discarded", async () => {
   setAccountScope("edit-account-d");
   let resolveRewrite;
