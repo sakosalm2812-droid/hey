@@ -577,9 +577,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
         },
         onError: (error) => {
           if (currentGeneration === generation && !destroyed) {
-            active = false;
-            finishAttempt("recognition_error");
-            transition(VOICE_STATES.error, error);
+            rejectRecognitionResult("recognition_error", error);
           }
         },
         onEnd: () => {

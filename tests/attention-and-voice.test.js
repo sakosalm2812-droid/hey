@@ -212,22 +212,31 @@ test("dictation corrections are bounded, unambiguous, and snapshotted for one se
 });
 
 test("dictation provider outage disables capture and drops late private transcript data", async () => {
-  let callbacks;
+  const callbacks = [];
+  let stops = 0;
   const transcripts = [];
   const stateEvents = [];
   const session = createDictationSession({
-    speechProvider: { start(value) { callbacks = value; return {}; }, stop() {} },
+    speechProvider: { start(value) { callbacks.push(value); return { attempt: callbacks.length }; }, stop() { stops += 1; } },
     environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) } } },
     onTranscript: (text) => transcripts.push(text),
     onStateChange: (event) => stateEvents.push(event),
   });
   assert.equal((await session.start({ consentGiven: "true" })).status, "consent_required");
   assert.equal((await session.start({ consentGiven: true })).success, true);
-  callbacks.onError("network");
-  callbacks.onTranscript("private transcript after provider outage");
+  callbacks[0].onError("network");
+  callbacks[0].onTranscript("private transcript after provider outage");
+  assert.equal(stops, 1);
   assert.equal(session.snapshot().state, VOICE_STATES.error);
   assert.deepEqual(transcripts, []);
   assert.equal(JSON.stringify(stateEvents).includes("private transcript"), false);
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks[0].onEnd();
+  callbacks[0].onTranscript("stale transcript after retry");
+  assert.equal(session.snapshot().state, VOICE_STATES.listening);
+  callbacks[1].onTranscript("fresh transcript");
+  assert.deepEqual(transcripts, ["fresh transcript"]);
   session.destroy();
 });
 
