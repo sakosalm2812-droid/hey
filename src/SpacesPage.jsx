@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Archive, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCcw, RotateCw, Search, Trash2, Wrench, X } from "lucide-react";
+import { AlertCircle, Archive, Check, Download, FileUp, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCcw, RotateCw, Search, Trash2, Wrench, X } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
@@ -662,6 +662,11 @@ export default function SpacesPage() {
   const [recoveryPreview, setRecoveryPreview] = useState(null);
   const [recoveryError, setRecoveryError] = useState("");
   const [recovering, setRecovering] = useState(false);
+  const importFileRef = useRef(null);
+  const [importPreview, setImportPreview] = useState(null);
+  const [transferError, setTransferError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const refreshSpaces = useCallback(() => {
     if (accountRef.current !== accountId) return false;
@@ -787,6 +792,92 @@ export default function SpacesPage() {
     if (refreshSpaces()) setNotice(`Recovered ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"} from the last valid snapshot.`);
   }
 
+  async function exportSpacesFile() {
+    if (!accountId || !accountIsCurrent || exporting || importing || loadError) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setExporting(true);
+    setTransferError("");
+    try {
+      const result = HEY.spaces.export({ accountScope: requestedScope });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      if (result?.success !== true || result.accountScope !== requestedScope || typeof result.exportJson !== "string") {
+        setTransferError(result?.error || "Your private Spaces could not be exported. Try again.");
+        return;
+      }
+      const file = new Blob([result.exportJson], { type: "application/json" });
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `hey-private-spaces-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) {
+        setTransferError(error?.message || "Your private Spaces could not be exported. Try again.");
+      }
+    } finally {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) setExporting(false);
+    }
+  }
+
+  async function previewSpaceImport(event) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || !accountId || !accountIsCurrent || importing || exporting || loadError) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    const maxTransferBytes = HEY.spaces.limits.maxStoredChars + 16_384;
+    setImporting(true);
+    setTransferError("");
+    setImportPreview(null);
+    try {
+      if (file.size > maxTransferBytes) {
+        setTransferError("This file is larger than the supported Space transfer size.");
+        return;
+      }
+      const exportJson = await file.text();
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      const result = HEY.spaces.previewImport({ accountScope: requestedScope, exportJson });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      const safeSpaces = Array.isArray(result?.spaces) ? result.spaces.filter((space) =>
+        space && typeof space.id === "string" && typeof space.name === "string"
+        && (space.status === "active" || space.status === "archived")
+      ) : null;
+      if (result?.accountScope !== requestedScope || typeof result?.previewId !== "string" || result.requiresConfirmation !== true || !safeSpaces || safeSpaces.length !== result.spaceCount) {
+        setTransferError(result?.error || "This file could not be previewed as a valid private Space export.");
+        return;
+      }
+      setImportPreview({ accountId: requestedAccountId, previewId: result.previewId, spaces: safeSpaces });
+    } catch (error) {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) {
+        setTransferError(error?.message || "This file could not be read. Choose a valid Space export and try again.");
+      }
+    } finally {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) setImporting(false);
+    }
+  }
+
+  function confirmSpaceImport() {
+    if (!importPreview || importPreview.accountId !== accountId || !accountIsCurrent || importing || exporting || loadError) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setImporting(true);
+    setTransferError("");
+    const result = HEY.spaces.confirmImport({ previewId: importPreview.previewId, confirm: true });
+    if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+    setImporting(false);
+    setImportPreview(null);
+    if (result?.success !== true || result.accountScope !== requestedScope) {
+      setTransferError(result?.error || "The reviewed Spaces could not be imported. Choose the file again to review and retry.");
+      return;
+    }
+    if (refreshSpaces()) setNotice(`Imported ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"}.`);
+  }
+
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -812,6 +903,10 @@ export default function SpacesPage() {
     setRecoveryPreview(null);
     setRecoveryError("");
     setRecovering(false);
+    setImportPreview(null);
+    setTransferError("");
+    setImporting(false);
+    setExporting(false);
 
     const refreshCurrentAccount = () => {
       if (active) refreshSpaces();
@@ -1086,6 +1181,30 @@ export default function SpacesPage() {
         <div className="spaces-page__list-heading"><div><h2 id="spaces-list-title">Your Spaces</h2><p>Only Spaces saved to the signed-in account appear here.</p></div>
           {!accountDataLoading && !loadError && <span className="spaces-page__count" aria-live="polite">{currentSpaces.length} {currentSpaces.length === 1 ? "Space" : "Spaces"}</span>}
         </div>
+        <section className="spaces-page__transfer" aria-labelledby="space-transfer-title">
+          <div className="spaces-page__transfer-copy"><h3 id="space-transfer-title">Move Spaces with a file</h3><p>Export private Spaces to a JSON file, or review a file before importing copies into this account.</p></div>
+          <input ref={importFileRef} className="spaces-page__sr-only" type="file" accept=".json,application/json" aria-label="Choose a private Space export file" onChange={previewSpaceImport} />
+          <div className="spaces-page__transfer-actions">
+            <button type="button" className="spaces-page__secondary" onClick={exportSpacesFile} disabled={!accountIsCurrent || accountDataLoading || Boolean(loadError) || exporting || importing}>
+              {exporting ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />} Export file
+            </button>
+            <button type="button" className="spaces-page__secondary" onClick={() => importFileRef.current?.click()} disabled={!accountIsCurrent || accountDataLoading || Boolean(loadError) || exporting || importing}>
+              {importing ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <FileUp size={15} aria-hidden="true" />} Choose file to import
+            </button>
+          </div>
+          {transferError && <p className="spaces-page__transfer-error" role="alert"><AlertCircle size={16} aria-hidden="true" /> {transferError}</p>}
+          {!accountDataLoading && importPreview?.accountId === accountId && accountIsCurrent && !loadError && <section className="spaces-page__transfer-review" aria-labelledby="space-import-review-title">
+            <h4 id="space-import-review-title">Review imported Spaces</h4>
+            <p>{importPreview.spaces.length} private {importPreview.spaces.length === 1 ? "Space" : "Spaces"} will be added as new copies. Your existing Spaces stay in this account, and access permissions will not change.</p>
+            <ul>{importPreview.spaces.map((space) => <li key={space.id}><strong>{space.name}</strong><span>{space.status === "archived" ? "Archived" : "Active"}</span></li>)}</ul>
+            <div className="spaces-page__actions">
+              <button type="button" className="spaces-page__secondary" onClick={() => { setImportPreview(null); setTransferError(""); }} disabled={importing}>Cancel</button>
+              <button type="button" className="spaces-page__primary" onClick={confirmSpaceImport} disabled={importing || !accountIsCurrent}>
+                {importing ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Check size={15} aria-hidden="true" />} Import reviewed Spaces
+              </button>
+            </div>
+          </section>}
+        </section>
         {accountDataLoading && <p className="spaces-page__status" role="status" aria-live="polite"><LoaderCircle size={18} className="spaces-page__spin" aria-hidden="true" /> Loading your Spaces…</p>}
         {!accountDataLoading && loadError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={19} aria-hidden="true" /><p>{loadError}</p><button type="button" className="spaces-page__secondary" onClick={loadSpaces}><RotateCw size={15} aria-hidden="true" /> Try again</button><button type="button" className="spaces-page__secondary" onClick={previewSpaceRecovery} disabled={!accountIsCurrent || recovering}><RotateCw size={15} aria-hidden="true" /> Review recovery</button></div>}
         {recoveryError && !accountDataLoading && <p className="spaces-page__membership-error" role="alert">{recoveryError}</p>}
