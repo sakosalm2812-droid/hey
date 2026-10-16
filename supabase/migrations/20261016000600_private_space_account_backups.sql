@@ -20,6 +20,82 @@ create policy hey_private_space_backups_select_own
   on public.hey_private_space_backups for select to authenticated
   using (user_id = (select auth.uid()));
 
+-- JavaScript counts UTF-16 code units. Keep the direct RPC contract aligned for
+-- supplementary Unicode characters as well as ordinary BMP text.
+create or replace function public.hey_private_space_backup_utf16_length(p_value text)
+returns integer
+language sql
+immutable
+strict
+set search_path = pg_catalog
+as $$
+  select coalesce(sum(case when ascii(substr(p_value, positions.position, 1)) > 65535 then 2 else 1 end), 0)::integer
+  from generate_series(1, char_length(p_value)) as positions(position)
+$$;
+
+create or replace function public.hey_private_space_backup_layout_preferences_valid(p_preferences jsonb)
+returns boolean
+language plpgsql
+immutable
+set search_path = pg_catalog, public
+as $$
+declare
+  v_field text;
+  v_max_count integer;
+  v_values jsonb;
+  v_item jsonb;
+  v_value text;
+  v_distinct_count integer;
+begin
+  if p_preferences is null or jsonb_typeof(p_preferences) <> 'object'
+    or not (p_preferences ?& array['contractVersion', 'revision', 'favoriteToolIds', 'widgetIds', 'shortcutIds', 'toolIds'])
+    or exists (
+      select 1 from jsonb_object_keys(p_preferences) as keys(key_name)
+      where key_name not in ('contractVersion', 'revision', 'favoriteToolIds', 'widgetIds', 'shortcutIds', 'toolIds')
+    )
+    or p_preferences ->> 'contractVersion' <> '1'
+    or coalesce(p_preferences ->> 'revision', '') !~ '^(0|[1-9][0-9]*)$'
+    or case when coalesce(p_preferences ->> 'revision', '') ~ '^(0|[1-9][0-9]*)$'
+      then (p_preferences ->> 'revision')::numeric > 9007199254740991 else false end then
+    return false;
+  end if;
+
+  foreach v_field in array array['favoriteToolIds', 'widgetIds', 'shortcutIds', 'toolIds'] loop
+    v_max_count := case when v_field = 'toolIds' then 64 else 32 end;
+    v_values := p_preferences -> v_field;
+    if jsonb_typeof(v_values) <> 'array' or jsonb_array_length(v_values) > v_max_count then
+      return false;
+    end if;
+
+    for v_item in select value from jsonb_array_elements(v_values) as items(value) loop
+      if jsonb_typeof(v_item) <> 'string' then return false; end if;
+      v_value := v_item #>> '{}';
+      if v_field = 'toolIds' then
+        if v_value = ''
+          or public.hey_private_space_backup_utf16_length(v_value) > 160
+          or v_value ~ '[[:cntrl:]]'
+          or v_value ~ '^\s|\s$' then
+          return false;
+        end if;
+      elsif public.hey_private_space_backup_utf16_length(v_value) > 64
+        or v_value !~ '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$' then
+        return false;
+      end if;
+    end loop;
+
+    select count(distinct value)::integer into v_distinct_count
+      from jsonb_array_elements_text(v_values) as ids(value);
+    if v_distinct_count <> jsonb_array_length(v_values) then return false; end if;
+  end loop;
+  return true;
+exception when others then
+  return false;
+end;
+$$;
+
+revoke all on function public.hey_private_space_backup_utf16_length(text) from public, anon, authenticated;
+revoke all on function public.hey_private_space_backup_layout_preferences_valid(jsonb) from public, anon, authenticated;
+
 create or replace function public.save_hey_private_space_backup(
   p_document jsonb,
   p_expected_revision integer
@@ -65,53 +141,23 @@ begin
         or coalesce(item ->> 'id', '') = ''
         or length(item ->> 'id') > 100
         or jsonb_typeof(item -> 'name') <> 'string'
-        or coalesce(item ->> 'name', '') = ''
-        or length(item ->> 'name') > 80
+        or coalesce(item ->> 'name', '') !~ $space_name$^[[:alnum:]][[:alnum:] ._’'()-]{0,79}$space_name$
+        or public.hey_private_space_backup_utf16_length(item ->> 'name') > 80
         or jsonb_typeof(item -> 'description') <> 'string'
-        or length(item ->> 'description') > 240
+        or public.hey_private_space_backup_utf16_length(item ->> 'description') > 240
+        or item ->> 'description' ~ '[[:cntrl:]]'
         or item ->> 'templateId' not in ('empty', 'planning', 'research', 'custom')
         or coalesce(item ->> 'detailsRevision', '') !~ '^(0|[1-9][0-9]*)$'
+        or case when coalesce(item ->> 'detailsRevision', '') ~ '^(0|[1-9][0-9]*)$'
+          then (item ->> 'detailsRevision')::numeric > 9007199254740991 else false end
         or item ->> 'status' not in ('active', 'archived')
         or coalesce(item ->> 'lifecycleRevision', '') !~ '^(0|[1-9][0-9]*)$'
+        or case when coalesce(item ->> 'lifecycleRevision', '') ~ '^(0|[1-9][0-9]*)$'
+          then (item ->> 'lifecycleRevision')::numeric > 9007199254740991 else false end
         or item ->> 'visibility' <> 'private'
         or item ->> 'sharing' <> 'off'
         or (item -> 'createdAt' <> 'null'::jsonb and jsonb_typeof(item -> 'createdAt') <> 'string')
-        or jsonb_typeof(item -> 'layoutPreferences') <> 'object'
-        or not ((item -> 'layoutPreferences') ?& array['contractVersion', 'revision', 'favoriteToolIds', 'widgetIds', 'shortcutIds', 'toolIds'])
-        or exists (
-          select 1 from jsonb_object_keys(item -> 'layoutPreferences') as keys(key_name)
-          where key_name not in ('contractVersion', 'revision', 'favoriteToolIds', 'widgetIds', 'shortcutIds', 'toolIds')
-        )
-        or item -> 'layoutPreferences' ->> 'contractVersion' <> '1'
-        or coalesce(item -> 'layoutPreferences' ->> 'revision', '') !~ '^(0|[1-9][0-9]*)$'
-        or jsonb_typeof(item -> 'layoutPreferences' -> 'favoriteToolIds') <> 'array'
-        or jsonb_typeof(item -> 'layoutPreferences' -> 'widgetIds') <> 'array'
-        or jsonb_typeof(item -> 'layoutPreferences' -> 'shortcutIds') <> 'array'
-        or jsonb_typeof(item -> 'layoutPreferences' -> 'toolIds') <> 'array'
-        or jsonb_array_length(item -> 'layoutPreferences' -> 'favoriteToolIds') > 32
-        or jsonb_array_length(item -> 'layoutPreferences' -> 'widgetIds') > 32
-        or jsonb_array_length(item -> 'layoutPreferences' -> 'shortcutIds') > 32
-        or jsonb_array_length(item -> 'layoutPreferences' -> 'toolIds') > 64
-        or exists (
-          select 1
-          from jsonb_array_elements(item -> 'layoutPreferences' -> 'favoriteToolIds') as preference_ids(preference_id)
-          where jsonb_typeof(preference_id) <> 'string'
-        )
-        or exists (
-          select 1
-          from jsonb_array_elements(item -> 'layoutPreferences' -> 'widgetIds') as preference_ids(preference_id)
-          where jsonb_typeof(preference_id) <> 'string'
-        )
-        or exists (
-          select 1
-          from jsonb_array_elements(item -> 'layoutPreferences' -> 'shortcutIds') as preference_ids(preference_id)
-          where jsonb_typeof(preference_id) <> 'string'
-        )
-        or exists (
-          select 1
-          from jsonb_array_elements(item -> 'layoutPreferences' -> 'toolIds') as preference_ids(preference_id)
-          where jsonb_typeof(preference_id) <> 'string'
-        )
+        or not public.hey_private_space_backup_layout_preferences_valid(item -> 'layoutPreferences')
     ) then
     raise exception 'Invalid private Space backup document.' using errcode = '22023';
   end if;

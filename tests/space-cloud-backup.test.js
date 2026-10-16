@@ -126,6 +126,57 @@ test("account backup writes validate private data, bind the authenticated accoun
   assert.notEqual(failed.success, true);
 });
 
+test("adversarial backup fixtures are rejected before RPC and the direct RPC has matching SQL guards", async () => {
+  const invalidDocuments = [
+    ["unsafe Space name", (document) => { document.spaces[0].name = "Bad/name"; }],
+    ["oversized Space name", (document) => { document.spaces[0].name = "A".repeat(81); }],
+    ["control character in name", (document) => { document.spaces[0].name = "Plan\u0007"; }],
+    ["oversized description", (document) => { document.spaces[0].description = "A".repeat(241); }],
+    ["control character in description", (document) => { document.spaces[0].description = "Plan\u0085"; }],
+    ["invalid category preference ID", (document) => { document.spaces[0].layoutPreferences.widgetIds = ["with space"]; }],
+    ["oversized category preference ID", (document) => { document.spaces[0].layoutPreferences.favoriteToolIds = ["x".repeat(65)]; }],
+    ["too many category preference IDs", (document) => { document.spaces[0].layoutPreferences.shortcutIds = Array.from({ length: 33 }, (_, index) => `id${index}`); }],
+    ["duplicate category preference IDs", (document) => { document.spaces[0].layoutPreferences.widgetIds = ["notes", "notes"]; }],
+    ["control character in tool ID", (document) => { document.spaces[0].layoutPreferences.toolIds = ["tool\u0085name"]; }],
+    ["trimmed tool ID", (document) => { document.spaces[0].layoutPreferences.toolIds = [" tool.name"]; }],
+    ["oversized tool ID", (document) => { document.spaces[0].layoutPreferences.toolIds = ["x".repeat(161)]; }],
+    ["too many tool IDs", (document) => { document.spaces[0].layoutPreferences.toolIds = Array.from({ length: 65 }, (_, index) => `tool${index}`); }],
+    ["duplicate tool IDs", (document) => { document.spaces[0].layoutPreferences.toolIds = ["tool.notes", "tool.notes"]; }],
+  ];
+
+  for (const [label, mutate] of invalidDocuments) {
+    const document = structuredClone(makeDocument());
+    mutate(document);
+    const client = makeClient();
+    const result = await new SpaceCloudBackupService(client, () => "account:user-a")
+      .save({ accountId: "user-a", expectedRevision: 0, exportJson: JSON.stringify(document) });
+    assert.equal(result.success, undefined, label);
+    assert.equal(client.calls.rpc, null, `${label} must be rejected before dispatch`);
+  }
+
+  const helperStart = migration.indexOf("create or replace function public.hey_private_space_backup_layout_preferences_valid");
+  const rpcStart = migration.indexOf("create or replace function public.save_hey_private_space_backup");
+  const helper = migration.slice(helperStart, rpcStart);
+  const rpc = migration.slice(rpcStart);
+  assert.ok(helperStart >= 0 && rpcStart > helperStart);
+  assert.match(migration, /hey_private_space_backup_utf16_length\(p_value text\)/i);
+  assert.ok(rpc.includes("coalesce(item ->> 'name', '') !~ $space_name$^[[:alnum:]][[:alnum:] ._’'()-]{0,79}$space_name$"));
+  assert.match(rpc, /hey_private_space_backup_utf16_length\(item ->> 'name'\) > 80/i);
+  assert.match(rpc, /hey_private_space_backup_utf16_length\(item ->> 'description'\) > 240/i);
+  assert.match(rpc, /item ->> 'description' ~ '\[\[:cntrl:\]\]'/i);
+  assert.match(rpc, /not public\.hey_private_space_backup_layout_preferences_valid\(item -> 'layoutPreferences'\)/i);
+  assert.match(helper, /v_max_count := case when v_field = 'toolIds' then 64 else 32 end/i);
+  assert.ok(helper.includes("v_value !~ '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$'"));
+  assert.match(helper, /v_value ~ '\[\[:cntrl:\]\]'/i);
+  assert.ok(helper.includes("v_value ~ '^\\s|\\s$'"));
+  assert.match(helper, /hey_private_space_backup_utf16_length\(v_value\) > 64/i);
+  assert.match(helper, /hey_private_space_backup_utf16_length\(v_value\) > 160/i);
+  assert.match(helper, /v_distinct_count <> jsonb_array_length\(v_values\)/i);
+  assert.ok(rpc.indexOf("if p_document is null") < rpc.indexOf("pg_advisory_xact_lock"), "payload validation must precede any write");
+  assert.match(rpc, /v_user_id uuid := auth\.uid\(\)/i);
+  assert.doesNotMatch(rpc, /p_user_id|p_account_id/i);
+});
+
 test("account backup migration isolates reads and serializes compare-and-swap writes", () => {
   assert.match(migration, /create table if not exists public\.hey_private_space_backups/i);
   assert.match(migration, /enable row level security/i);
@@ -139,9 +190,7 @@ test("account backup migration isolates reads and serializes compare-and-swap wr
   assert.match(migration, /item ->> 'visibility' <> 'private'/i);
   assert.match(migration, /item ->> 'sharing' <> 'off'/i);
   assert.match(migration, /not \(item \?& array\['id', 'name'.*'layoutPreferences'\]\)/i);
-  assert.match(migration, /not \(\(item -> 'layoutPreferences'\) \?& array\['contractVersion'.*'toolIds'\]\)/i);
-  assert.match(migration, /jsonb_array_length\(item -> 'layoutPreferences' -> 'toolIds'\) > 64/i);
-  assert.match(migration, /jsonb_typeof\(preference_id\) <> 'string'/i);
+  assert.match(migration, /not public\.hey_private_space_backup_layout_preferences_valid\(item -> 'layoutPreferences'\)/i);
   assert.match(migration, /grant execute on function public\.save_hey_private_space_backup\(jsonb, integer\) to authenticated/i);
   assert.doesNotMatch(migration, /grant (?:insert|update|delete|all) on public\.hey_private_space_backups to authenticated/i);
 });
