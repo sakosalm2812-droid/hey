@@ -1,5 +1,6 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
+const MIN_CLAIM_LEASE_MS = 1_000;
 const MAX_LEASE_MS = 300_000;
 const MAX_COMMAND_BYTES = 65_536;
 
@@ -139,7 +140,7 @@ export class SupabaseDeviceCommandQueueStore {
   }
 
   async claimNext(accountId, deviceId, idempotencyKey, leaseMs = 30_000, credentialHash) {
-    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS) throw new RangeError("Device command lease must be between 1 ms and 5 minutes.");
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < MIN_CLAIM_LEASE_MS || leaseMs > MAX_LEASE_MS) throw new RangeError("Device command claim lease must be between 1 second and 5 minutes.");
     const data = rpcData(await this.client.rpc("claim_hey_device_command", {
       p_account_id: requiredUuid(accountId, "accountId"),
       p_device_id: requiredUuid(deviceId, "deviceId"),

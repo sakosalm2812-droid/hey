@@ -74,6 +74,9 @@ test("transport CORS accepts configured and verified Tauri origins but rejects o
 
 test("transport request contract remains claim, renew, ack and fail", () => {
   assert.ok(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-1", leaseMs: 1000 }));
+  assert.ok(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-default" }));
+  assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-too-short", leaseMs: 999 }), null);
+  assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-too-short", leaseMs: 1 }), null);
   assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, leaseMs: 1000 }), null);
   assert.ok(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew", leaseMs: 1000 }));
   assert.ok(normalizeTransportRequest({ operation: "ack", deviceId, commandId, leaseToken }));

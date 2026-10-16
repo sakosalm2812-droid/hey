@@ -1,6 +1,7 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TOKEN = /^heydev1\.[A-Za-z0-9_-]{43}$/;
 const HASH = /^[0-9a-f]{64}$/;
+const MIN_CLAIM_LEASE_MS = 1_000;
 const MAX_LEASE_MS = 300_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const TAURI_DEVICE_ORIGINS = new Set(["http://tauri.localhost", "tauri://localhost"]);
@@ -87,7 +88,7 @@ export function normalizeTransportRequest(body) {
       const leaseMs = source.leaseMs === undefined ? 30_000 : source.leaseMs;
       if (typeof source.idempotencyKey !== "string" || !source.idempotencyKey.trim() || source.idempotencyKey.length > 128
         || [...source.idempotencyKey].some((char) => char.codePointAt(0) < 32 || char.codePointAt(0) === 127)
-        || !Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS
+        || !Number.isSafeInteger(leaseMs) || leaseMs < MIN_CLAIM_LEASE_MS || leaseMs > MAX_LEASE_MS
         || keys.some((key) => !["deviceId", "operation", "idempotencyKey", "leaseMs"].includes(key))) return null;
       return { deviceId: source.deviceId, operation: "claim", idempotencyKey: source.idempotencyKey.trim(), leaseMs };
     }

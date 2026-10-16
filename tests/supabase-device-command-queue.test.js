@@ -69,6 +69,8 @@ test("queue rejects malformed identifiers, envelopes, accessors, oversized paylo
   await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope), /mandate scope/);
   await assert.rejects(store.claimNext(accountId, deviceId, "\u0000bad-key", 5_000, credentialHash), /bounded printable text/);
   await assert.rejects(store.claimNext(accountId, deviceId, "x".repeat(129), 5_000, credentialHash), /bounded printable text/);
+  await assert.rejects(store.claimNext(accountId, deviceId, "too-short", 999, credentialHash), /1 second and 5 minutes/);
+  await assert.rejects(store.claimNext(accountId, deviceId, "too-short", 1, credentialHash), /1 second and 5 minutes/);
   const hostileAuthority = { ...authority, mandateIds: [mandateId] };
   Object.defineProperty(hostileAuthority.mandateIds, "0", { enumerable: true, get() { getterCalls += 1; return mandateId; } });
   await assert.rejects(store.enqueue(accountId, deviceId, "key", envelope, hostileAuthority), /mandate scope/);
@@ -132,6 +134,20 @@ test("device claims replay one active lease by bounded per-device key and fail c
   assert.match(sql, /if not found then return null; end if;[\s\S]*v_claim := public\.claim_hey_device_command\(p_account_id, p_device_id, p_lease_ms\)/i);
   assert.match(sql, /insert into public\.hey_device_command_claim_receipts[\s\S]*return v_claim/i);
   assert.match(sql, /revoke all on function public\.claim_hey_device_command\(uuid, uuid, text, integer, text\) from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.claim_hey_device_command\(uuid, uuid, text, integer, text\) to service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.claim_hey_device_command\([^;]+\) to [^;]*authenticated/i);
+});
+
+test("latest claim RPC enforces the one-second delivery floor before locking or consuming an attempt", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261016000500_minimum_device_command_claim_lease.sql", import.meta.url), "utf8");
+  const claim = sql.slice(sql.indexOf("create or replace function public.claim_hey_device_command"), sql.indexOf("$$;", sql.indexOf("create or replace function public.claim_hey_device_command")) + 3);
+  assert.match(claim, /p_lease_ms not between 1000 and 300000/i);
+  assert.ok(claim.indexOf("p_lease_ms not between 1000 and 300000") < claim.indexOf("select * into v_device"), "short leases must be rejected before acquiring a device lease");
+  assert.match(claim, /coalesce\(auth\.role\(\), ''\) <> 'service_role'/i);
+  assert.match(claim, /c\.secret_hash = p_credential_hash and c\.revoked_at is null for update/i);
+  assert.match(claim, /r\.idempotency_key = trim\(p_idempotency_key\)[\s\S]*v_claim := public\.claim_hey_device_command\(p_account_id, p_device_id, p_lease_ms\)/i);
+  assert.match(sql, /revoke all on function public\.claim_hey_device_command\(uuid, uuid, integer\) from public, anon, authenticated, service_role/i);
+  assert.match(sql, /revoke all on function public\.claim_hey_device_command\(uuid, uuid, integer, text\) from public, anon, authenticated, service_role/i);
   assert.match(sql, /grant execute on function public\.claim_hey_device_command\(uuid, uuid, text, integer, text\) to service_role/i);
   assert.doesNotMatch(sql, /grant execute on function public\.claim_hey_device_command\([^;]+\) to [^;]*authenticated/i);
 });
