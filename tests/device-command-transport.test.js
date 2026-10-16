@@ -166,6 +166,32 @@ test("transport binds claim, acknowledgement and failure to authenticated device
   ]);
 });
 
+test("a committed failure report can be retried with the same account, device, lease and credential digest", async () => {
+  const token = await credential();
+  const digest = await digestDeviceCredential(token);
+  const calls = [];
+  let committedTransitions = 0;
+  const credentialStore = { async authenticate(received) { assert.equal(received, digest); return { accountId, deviceId, active: true }; } };
+  const queue = {
+    async recordFailure(...args) {
+      calls.push(args);
+      if (args[0] !== accountId || args[1] !== deviceId || args[2] !== commandId || args[3] !== leaseToken || args[4] !== digest) return false;
+      if (committedTransitions === 0) committedTransitions += 1;
+      return true;
+    },
+  };
+  const body = { operation: "fail", deviceId, commandId, leaseToken };
+  const first = await handleDeviceTransport({ authorization: `Bearer ${token}`, body, credentialStore, queue });
+  const replay = await handleDeviceTransport({ authorization: `Bearer ${token}`, body, credentialStore, queue });
+  assert.deepEqual(first, { ok: true, status: 200, accepted: true });
+  assert.deepEqual(replay, first, "a lost response retry must be reported as accepted after the receipt lookup");
+  assert.equal(committedTransitions, 1, "replay must not apply the retry/backoff transition twice");
+  assert.deepEqual(calls, [
+    [accountId, deviceId, commandId, leaseToken, digest],
+    [accountId, deviceId, commandId, leaseToken, digest],
+  ]);
+});
+
 test("credential rotation or revocation between authentication and dispatch is fenced at the queue call", async () => {
   const token = await credential();
   const authenticatedDigest = await digestDeviceCredential(token);

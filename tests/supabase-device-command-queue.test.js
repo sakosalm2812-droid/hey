@@ -114,6 +114,32 @@ test("transport queue migration locks current device and credential before every
   assert.match(sql, /revoke all on function public\.fail_hey_device_command\(uuid, uuid, uuid, uuid\) from public, anon, authenticated, service_role/i);
 });
 
+test("delivery failure retries are idempotent per exact lease and remain private and revocation-fenced", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261016000300_idempotent_device_command_failure_receipts.sql", import.meta.url), "utf8");
+  const table = sql.slice(sql.indexOf("create table public.hey_device_command_failure_receipts"), sql.indexOf(";", sql.indexOf("create table public.hey_device_command_failure_receipts")) + 1);
+  assert.match(table, /primary key \(command_id, lease_token\)/i);
+  assert.match(table, /foreign key \(device_id, account_id\) references public\.hey_devices\(id, user_id\)/i);
+  assert.doesNotMatch(table, /secret_hash|credential|envelope|error text/i);
+  assert.match(sql, /alter table public\.hey_device_command_failure_receipts enable row level security/i);
+  assert.match(sql, /revoke all on public\.hey_device_command_failure_receipts from public, anon, authenticated, service_role/i);
+
+  const failFn = sql.slice(sql.indexOf("create or replace function public.fail_hey_device_command"));
+  assert.match(failFn, /c\.id = p_command_id and c\.account_id = p_account_id and c\.device_id = p_device_id[\s\S]*c\.lease_token = p_lease_token and c\.lease_until > clock_timestamp\(\)/i);
+  assert.match(failFn, /hey_device_command_mandate_is_current/i);
+  assert.match(failFn, /last_error = 'delivery_failed'/i);
+  assert.doesNotMatch(failFn, /p_error|error_message|exception_message/i);
+  assert.match(failFn, /d\.status in \('online', 'offline'\) and d\.capabilities @> jsonb_build_array\(c\.envelope->>'action'\)/i);
+  assert.match(failFn, /p\.user_id = c\.account_id[\s\S]*p\.status = 'granted'/i);
+  assert.match(failFn, /if found then[\s\S]*insert into public\.hey_device_command_failure_receipts[\s\S]*return true/i);
+  assert.match(failFn, /return exists \([\s\S]*r\.account_id = p_account_id and r\.device_id = p_device_id[\s\S]*r\.command_id = p_command_id and r\.lease_token = p_lease_token/i);
+  assert.match(failFn, /join public\.hey_device_commands c on c\.id = r\.command_id[\s\S]*join public\.hey_devices d on d\.id = r\.device_id and d\.user_id = r\.account_id/i);
+  assert.match(sql, /revoke all on function public\.fail_hey_device_command\(uuid, uuid, uuid, uuid\) from public, anon, authenticated, service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.fail_hey_device_command\([^;]+\) to [^;]*authenticated/i);
+
+  const credentialFence = await readFile(new URL("../supabase/migrations/20261016000200_atomic_device_transport_credential_fence.sql", import.meta.url), "utf8");
+  assert.match(credentialFence, /create or replace function public\.fail_hey_device_command\([\s\S]*?p_credential_hash text\s*\)[\s\S]*?c\.secret_hash = p_credential_hash and c\.revoked_at is null for update[\s\S]*?return public\.fail_hey_device_command\(p_account_id, p_device_id, p_command_id, p_lease_token\)/i);
+});
+
 test("queue migration fences replay, cross-account access, stale leases and revoked devices", async () => {
   const sql = await readFile(new URL("../supabase/migrations/20261015000000_durable_device_command_queue.sql", import.meta.url), "utf8");
   assert.match(sql, /unique\s*\(account_id,\s*device_id,\s*idempotency_key\)/i);
