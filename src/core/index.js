@@ -181,6 +181,7 @@ import {
   exportTeacherWorksheetMarkdown,
   prepareTeacherLessonWorksheetJourney,
   createTeacherLessonWorksheetJourney,
+  getTeacherLessonWorksheetJourney,
 } from "./teacherExperience.js";
 import { createProactiveSuggestion, evaluateProactiveSignals, explainSuggestion } from "./proactiveEngine.js";
 
@@ -924,6 +925,7 @@ import {
       prepareLessonWorksheetJourney: prepareTeacherLessonWorksheetJourney,
       createTeacherLessonWorksheetJourney,
       createLessonWorksheetJourney: createTeacherLessonWorksheetJourney,
+      getLessonWorksheetJourney: getTeacherLessonWorksheetJourney,
     },
 
     live: {

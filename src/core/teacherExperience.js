@@ -1,4 +1,4 @@
-import { createArtifact as createForgeArtifact, createTeacherArtifactBatch } from "./artifactEngine.js";
+import { createArtifact as createForgeArtifact, createTeacherArtifactBatch, getPersistedArtifactsByIds } from "./artifactEngine.js";
 import { canReadTeacherArtifact, canWriteTeacherArtifact, authorizeTeacherArtifactWrite } from "./teacherArtifactAccess.js";
 import { supabaseClient } from "../lib/supabase.js";
 
@@ -15,7 +15,7 @@ const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
 const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "teacherAnswer", "points"]);
 const WORKSHEET_QUESTION_FIELDS = new Set(["prompt", "points"]);
 const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata", "createdBy"]);
-const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "classId", "journeyId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
+const METADATA_FIELDS = new Set(["workflow", "artifactContract", "accountScope", "workspaceId", "classId", "journeyId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
 const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
@@ -27,6 +27,7 @@ const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
 const PREPARED_TEACHER_JOURNEYS = new WeakSet();
 const BUILT_TEACHER_ACTIVITY_HANDOUTS = new WeakSet();
+const PERSISTED_TEACHER_READBACK = Symbol("verified persisted Teacher journey readback");
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "studentName", "learnerName", "studentId", "learnerId", "studentEmail",
@@ -683,8 +684,9 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
   return frozenArtifact;
 }
 
-export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId, classId } = {}) {
-  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(artifact)) {
+export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, workspaceId, classId } = {}, readbackToken) {
+  if (!artifact || typeof artifact !== "object"
+    || (!BUILT_TEACHER_ASSESSMENT_ARTIFACTS.has(artifact) && readbackToken !== PERSISTED_TEACHER_READBACK)) {
     return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
   }
   try {
@@ -871,8 +873,9 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
   return frozenArtifact;
 }
 
-export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId, classId } = {}) {
-  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact)) {
+export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId, classId } = {}, readbackToken) {
+  if (!artifact || typeof artifact !== "object"
+    || (!BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact) && readbackToken !== PERSISTED_TEACHER_READBACK)) {
     return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
   }
   try {
@@ -1147,6 +1150,76 @@ export async function createTeacherLessonWorksheetJourney({ lesson: lessonReques
   }
 }
 
+/** Reload a saved lesson set from Forge after an interrupted browser session. */
+export async function getTeacherLessonWorksheetJourney({ journeyId, context: contextRequest } = {}) {
+  let context;
+  try {
+    context = snapshotLessonData(contextRequest);
+  } catch {
+    throw new Error("Teacher journey recovery context must contain only safe, bounded data");
+  }
+  assertOnlyDataFields(context, "Teacher journey recovery context", SAVE_CONTEXT_FIELDS);
+  const accountScope = requiredText(context.accountScope, "Account scope", 240);
+  const workspaceId = requiredText(context.workspaceId, "Workspace ID", 200);
+  const classId = requiredText(context.classId, "Class ID", 200);
+  if (context.currentAccountScope !== accountScope
+    || context.currentWorkspaceId !== workspaceId
+    || context.currentClassId !== classId) {
+    throw new Error("Teacher journey recovery scope must match the active account, project, and class");
+  }
+  if (typeof journeyId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(journeyId)) {
+    throw new TypeError("journeyId must be a UUID to reopen a saved Teacher journey");
+  }
+  const userId = await requireTeacherAuthor(accountScope, classId);
+  const [lessonId, answerKeyId, worksheetId] = await Promise.all([
+    deriveJourneyArtifactId(journeyId, "lesson"),
+    deriveJourneyArtifactId(journeyId, "answer-key"),
+    deriveJourneyArtifactId(journeyId, "worksheet"),
+  ]);
+  const artifactIds = [lessonId, answerKeyId, worksheetId];
+  const artifacts = await getPersistedArtifactsByIds(artifactIds);
+  if (artifacts.length !== 3) throw new Error("Forge could not find a complete saved lesson set for this recovery ID");
+  const byId = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+  const [lesson, teacherArtifact, studentArtifact] = artifactIds.map((id) => byId.get(id));
+  const records = [lesson, teacherArtifact, studentArtifact];
+  const contracts = ["hey.teacher.lesson.v1", "hey.teacher.assessment.v1", "hey.teacher.worksheet.v1"];
+  const allowed = await Promise.all(records.map((artifact) => canReadTeacherArtifact(artifact, { accountScope, classId })));
+  const scopeMatches = records.every((artifact, index) => artifact
+    && artifact.createdBy === userId
+    && artifact.projectId === workspaceId
+    && artifact.type === "document"
+    && artifact.status === "draft"
+    && artifact.version === 1
+    && artifact.parentVersionId === null
+    && artifact.branchName === "main"
+    && artifact.metadata?.artifactContract === contracts[index]
+    && artifact.metadata?.accountScope === accountScope
+    && artifact.metadata?.workspaceId === workspaceId
+    && artifact.metadata?.classId === classId
+    && artifact.metadata?.journeyId === journeyId);
+  if (!scopeMatches || allowed.some((readable) => !readable)) {
+    throw new Error("Forge denied or returned an out-of-scope saved Teacher journey");
+  }
+  const verificationInputs = records.map((artifact) => ({
+    type: artifact.type,
+    title: artifact.title,
+    description: artifact.description,
+    content: artifact.content,
+    metadata: artifact.metadata,
+    createdBy: artifact.createdBy,
+  }));
+  const [lessonResult, assessmentResult, worksheetResult] = await Promise.all([
+    verifyTeacherLessonArtifact(verificationInputs[0], { accountScope, workspaceId, classId }),
+    verifyTeacherAssessmentArtifact(verificationInputs[1], { accountScope, workspaceId, classId }, PERSISTED_TEACHER_READBACK),
+    verifyTeacherWorksheetArtifact(verificationInputs[2], { accountScope, workspaceId, classId }, PERSISTED_TEACHER_READBACK),
+  ]);
+  if (!lessonResult.valid || !assessmentResult.valid || !worksheetResult.valid) {
+    throw new Error("Forge returned a saved Teacher journey that failed content verification");
+  }
+  const saved = Object.freeze({ lesson, teacherArtifact, studentArtifact });
+  return Object.freeze({ journeyId, lesson, teacherArtifact, studentArtifact, saved, recovered: true });
+}
+
 export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, classId, safetyReview } = {}) {
   let stableArtifact;
   let stableSafetyReview;
@@ -1307,4 +1380,5 @@ export default {
   exportTeacherWorksheetMarkdown,
   prepareTeacherLessonWorksheetJourney,
   createTeacherLessonWorksheetJourney,
+  getTeacherLessonWorksheetJourney,
 };

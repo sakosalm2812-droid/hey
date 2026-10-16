@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Download, GraduationCap, LoaderCircle, ShieldCheck } from "lucide-react";
+import { AlertCircle, Check, Download, GraduationCap, LoaderCircle, RotateCw, ShieldCheck } from "lucide-react";
 
 import HEY from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
@@ -7,7 +7,7 @@ import { supabaseClient } from "./lib/supabase.js";
 import { listRecords } from "./lib/heyRecords.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "./teacherExperiencePageContract.js";
-import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount } from "./teacherPageState.js";
+import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount, readTeacherJourneyRecoveryHint, writeTeacherJourneyRecoveryHint } from "./teacherPageState.js";
 import "./TeacherExperiencePage.css";
 
 const EMPTY_LESSON = Object.freeze({
@@ -52,6 +52,10 @@ async function readCurrentTeacherAccess(expectedUserId) {
   return current;
 }
 
+function getSessionStorageSafely() {
+  try { return globalThis.sessionStorage; } catch { return null; }
+}
+
 export default function TeacherExperiencePage() {
   const { user, loading: authLoading } = useAuth();
   const accountId = user?.id || "";
@@ -67,6 +71,7 @@ export default function TeacherExperiencePage() {
   const [lessonForm, setLessonForm] = useState({ ...EMPTY_LESSON });
   const [preview, setPreview] = useState(null);
   const [savedJourney, setSavedJourney] = useState(null);
+  const [recoveryHint, setRecoveryHint] = useState(null);
   const [exports, setExports] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -90,6 +95,7 @@ export default function TeacherExperiencePage() {
     accountRef.current = nextAccountId;
     draftRevisionRef.current += 1;
     resetTransientJourney();
+    setRecoveryHint(null);
     setLessonForm({ ...EMPTY_LESSON });
     setProjects([]);
     setSelectedProjectId("");
@@ -155,6 +161,21 @@ export default function TeacherExperiencePage() {
     loadTeacherAccess();
     return () => { cancelled = true; };
   }, [authLoading, accountId, accessEpoch, resetTransientJourney]);
+
+  useEffect(() => {
+    if (authLoading || !accountId || accessAccountId !== accountId || access.status !== "ready") {
+      setRecoveryHint(null);
+      return;
+    }
+    const hint = readTeacherJourneyRecoveryHint(getSessionStorageSafely(), accountId);
+    if (!hint || !access.classIds.includes(hint.classId)) {
+      setRecoveryHint(null);
+      return;
+    }
+    setRecoveryHint(hint);
+    setSelectedClassId(hint.classId);
+    if (projects.some((project) => project.id === hint.workspaceId)) setSelectedProjectId(hint.workspaceId);
+  }, [authLoading, accountId, accessAccountId, access.status, access.classIds, projects]);
 
   function updateField(field, value) {
     draftRevisionRef.current += 1;
@@ -259,6 +280,14 @@ export default function TeacherExperiencePage() {
         || !hasActiveContext(preview.expected, freshAccess.classIds)) {
         throw new Error("Teacher access or the selected class changed. Recheck access and prepare a fresh preview.");
       }
+      const hint = {
+        userId: preview.expected.userId,
+        accountScope: preview.expected.accountScope,
+        workspaceId: preview.expected.workspaceId,
+        classId: preview.expected.classId,
+        journeyId: preview.journeyId,
+      };
+      if (writeTeacherJourneyRecoveryHint(getSessionStorageSafely(), hint)) setRecoveryHint(hint);
       const result = await HEY.teacher.createLessonWorksheetJourney({
         lesson: preview.lessonRequest,
         assessment: preview.assessmentRequest,
@@ -283,6 +312,68 @@ export default function TeacherExperiencePage() {
           ? "Forge could not confirm this journey. Retry the same save to safely verify or complete it; the journey ID is unchanged."
           : saveError?.message || "Forge could not confirm the lesson set.");
         setStatus("save-error");
+      }
+    } finally {
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
+    }
+  }
+
+  async function recoverSavedJourney() {
+    if (!recoveryHint || !teacherOperationCanStart(busyRef.current, accountId)) return;
+    const operationAccountId = accountId;
+    const operationAccountScope = recoveryHint.accountScope;
+    busyRef.current = operationAccountId;
+    setStatus("recovering");
+    setError("");
+    try {
+      const freshAccess = await readCurrentTeacherAccess(operationAccountId);
+      const expected = {
+        userId: operationAccountId,
+        accountScope: `account:${operationAccountId}`,
+        workspaceId: recoveryHint.workspaceId,
+        classId: recoveryHint.classId,
+        journeyId: recoveryHint.journeyId,
+      };
+      if (freshAccess.userId !== recoveryHint.userId || expected.accountScope !== operationAccountScope
+        || !hasActiveContext(expected, freshAccess.classIds)) {
+        throw new Error("This saved journey is outside your current Teacher account or class access.");
+      }
+      const context = {
+        accountScope: expected.accountScope,
+        workspaceId: expected.workspaceId,
+        classId: expected.classId,
+        currentAccountScope: expected.accountScope,
+        currentWorkspaceId: expected.workspaceId,
+        currentClassId: expected.classId,
+      };
+      const result = await HEY.teacher.getLessonWorksheetJourney({ journeyId: expected.journeyId, context });
+      if (!teacherJourneyPersistenceMatches(result, expected)) {
+        throw new Error("Forge did not return the complete saved lesson set for this account, project, and class.");
+      }
+      if (hasTeacherAnswerKeyField(result.studentArtifact.content)) {
+        throw new Error("Recovery stopped because the saved student worksheet contains a teacher-only field.");
+      }
+      const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
+      if (confirmedAccess.status !== "ready" || !hasActiveContext(expected, confirmedAccess.classIds)
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        throw new Error("Your account or class access changed while Forge reopened this journey.");
+      }
+      const recoveryPreview = {
+        journeyId: expected.journeyId,
+        expected,
+        lesson: result.lesson,
+        assessment: result.teacherArtifact,
+        worksheet: result.studentArtifact,
+      };
+      setPreview(recoveryPreview);
+      setSavedJourney(result);
+      setSafetyAcknowledged(false);
+      setExports(null);
+      setStatus("saved");
+    } catch (recoveryError) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+        setError(recoveryError?.message || "Forge could not verify the saved Teacher journey.");
+        setStatus("recovery-error");
       }
     } finally {
       if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
@@ -346,7 +437,7 @@ export default function TeacherExperiencePage() {
     ? access
     : authLoading || accountId ? { status: "checking", classIds: [] } : { status: "identity-missing", classIds: [] };
   const accountIsCurrent = accessIsCurrent && currentAccess.status === "ready";
-  const busy = ["preparing", "saving", "exporting"].includes(status);
+  const busy = ["preparing", "saving", "recovering", "exporting"].includes(status);
 
   return (
     <main className="teacher-experience" aria-labelledby="teacher-experience-title">
@@ -363,6 +454,11 @@ export default function TeacherExperiencePage() {
       {currentAccess.status === "class-unassigned" ? <div className="teacher-experience__notice" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Your account has no verified class assignments. A school administrator must provision Teacher access.</p></div> : null}
       {currentAccess.status === "service-unavailable" ? <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={18} aria-hidden="true" /><p>HEY could not verify your current account with Supabase. No lesson data was loaded or saved.</p></div> : null}
       {currentAccess.status === "ready" && !projects.length ? <div className="teacher-experience__notice" role="status"><AlertCircle size={18} aria-hidden="true" /><p>Create a project first. Forge saves the lesson set to a project you can access.</p></div> : null}
+
+      {currentAccess.status === "ready" && recoveryHint && !preview ? <section className="teacher-experience__section" aria-labelledby="teacher-recovery-heading">
+        <div className="teacher-experience__section-heading"><span><RotateCw size={17} aria-hidden="true" /></span><div><h2 id="teacher-recovery-heading">Check for an interrupted Forge save</h2><p>Only the journey ID and class/project scope are kept in this tab. Forge reloads content only if all three saved artifacts pass your current access and content checks.</p></div></div>
+        <button type="button" className="teacher-experience__primary" onClick={recoverSavedJourney} disabled={busy}>{status === "recovering" ? <LoaderCircle className="teacher-experience__spin" size={17} aria-hidden="true" /> : <Check size={17} aria-hidden="true" />}{status === "recovering" ? "Checking Forge…" : "Check Forge for the saved set"}</button>
+      </section> : null}
 
       {currentAccess.status === "ready" && projects.length > 0 ? (
         <>
@@ -414,7 +510,7 @@ export default function TeacherExperiencePage() {
           </form>
 
           {preview ? <section className="teacher-experience__preview" aria-labelledby="teacher-preview-heading">
-            <header><div><p className="teacher-experience__eyebrow">Unsaved preview</p><h2 id="teacher-preview-heading">Review the lesson set</h2><p>Nothing was written to Forge while preparing this preview.</p></div></header>
+            <header><div><p className="teacher-experience__eyebrow">{savedJourney ? "Saved in Forge" : "Unsaved preview"}</p><h2 id="teacher-preview-heading">Review the lesson set</h2><p>{savedJourney ? "Reopened from the persisted Forge artifacts. Review the content before preparing exports." : "Nothing was written to Forge while preparing this preview."}</p></div></header>
             {[preview.lesson, preview.assessment].some((artifact) => artifact.metadata?.safety?.reviewRequired)
               ? <div className="teacher-experience__notice" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Safety review flags: {[...new Set([...(preview.lesson.metadata.safety.reviewReasons || []), ...(preview.assessment.metadata.safety.reviewReasons || [])])].join(", ")}. Review the content before classroom use.</p></div> : null}
             <div className="teacher-experience__outputs">

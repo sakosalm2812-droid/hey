@@ -902,6 +902,24 @@ export async function getArtifact(artifactId) {
   return artifactEngine.getArtifact(artifactId);
 }
 
+export async function getPersistedArtifactsByIds(artifactIds) {
+  if (!Array.isArray(artifactIds) || artifactIds.length < 1 || artifactIds.length > 10
+    || artifactIds.some((id) => typeof id !== "string" || !id.trim())
+    || new Set(artifactIds).size !== artifactIds.length) {
+    throw new TypeError("Persisted artifact lookup requires unique artifact IDs");
+  }
+  const { data, error } = await supabaseClient
+    .from("hey_artifacts")
+    .select("*")
+    .in("id", artifactIds);
+  if (error) throw new Error("Forge could not reload the persisted artifacts", { cause: error });
+  if (!Array.isArray(data)) throw new Error("Forge returned an invalid persisted artifact readback");
+  const artifacts = data.map((row) => artifactEngine.deserializeArtifact(row));
+  const readable = await Promise.all(artifacts.map((artifact) => canReadTeacherArtifact(artifact)));
+  if (readable.some((allowed) => !allowed)) throw new Error("Forge denied access to one or more persisted artifacts");
+  return artifacts;
+}
+
 export async function updateArtifact(artifactId, updates) {
   return artifactEngine.updateArtifact(artifactId, updates);
 }
@@ -972,6 +990,7 @@ export default {
   createArtifact,
   createTeacherArtifactBatch,
   getArtifact,
+  getPersistedArtifactsByIds,
   updateArtifact,
   createVersion,
   branchArtifact,

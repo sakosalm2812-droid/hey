@@ -816,6 +816,77 @@ test("a mismatched batch readback is rejected before any artifact enters the For
   }, { mismatchResponse: true });
 });
 
+test("saved teacher journeys reopen from persisted rows and reject incomplete or cross-scope readbacks", async () => {
+  const journeyId = "8e204c16-97c1-4f3b-a8e8-8bb39e7426f1";
+  const context = teacherContext();
+  await withForgeBatchPersistence(async (_calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    const originalGetUser = supabaseClient.auth.getUser;
+    let reads = 0;
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(field, ids) {
+        assert.equal(field, "id");
+        reads += 1;
+        return Promise.resolve({ data: ids.map((id) => rowsById.get(id)).filter(Boolean), error: null });
+      },
+    });
+    try {
+      const created = await HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      });
+      const bypassAttempt = await verifyTeacherAssessmentArtifact(created.saved.teacherArtifact, {
+        accountScope: context.accountScope, workspaceId: context.workspaceId, classId: context.classId,
+      }, true);
+      assert.equal(bypassAttempt.valid, false, "public callers cannot forge the private persisted-readback token");
+      const reopened = await HEY.teacher.getLessonWorksheetJourney({ journeyId, context });
+      assert.equal(reopened.recovered, true);
+      assert.equal(reopened.saved.lesson.metadata.journeyId, journeyId);
+      assert.match(JSON.stringify(reopened.saved.teacherArtifact.content), /teacherAnswer/);
+      assert.doesNotMatch(JSON.stringify(reopened.saved.studentArtifact.content), /teacherAnswer|One quarter is one of four equal parts/);
+
+      await assert.rejects(HEY.teacher.getLessonWorksheetJourney({
+        journeyId, context: { ...context, classId: "other-class", currentClassId: "other-class" },
+      }), /Authenticated teacher access/);
+      supabaseClient.auth.getUser = async () => ({ data: { user: {
+        id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: context.accountScope, hey_class_ids: [context.classId] },
+      } }, error: null });
+      await assert.rejects(HEY.teacher.getLessonWorksheetJourney({ journeyId, context }), /Authenticated teacher access/);
+      assert.equal(reads, 1, "unauthorized recovery must be denied before querying Forge");
+      supabaseClient.auth.getUser = originalGetUser;
+
+      supabaseClient.from = (table) => ({
+        select() { assert.equal(table, "hey_artifacts"); return this; },
+        in(_field, ids) { return Promise.resolve({ data: ids.slice(0, 2).map((id) => rowsById.get(id)), error: null }); },
+      });
+      await assert.rejects(HEY.teacher.getLessonWorksheetJourney({ journeyId, context }), /complete saved lesson set/);
+
+      supabaseClient.from = (table) => ({
+        select() { assert.equal(table, "hey_artifacts"); return this; },
+        in(_field, ids) {
+          const records = ids.map((id) => rowsById.get(id));
+          records[2] = { ...records[2], content: { ...records[2].content, questions: [{ prompt: "Question", points: 1, teacherAnswer: "secret" }] } };
+          return Promise.resolve({ data: records, error: null });
+        },
+      });
+      await assert.rejects(HEY.teacher.getLessonWorksheetJourney({ journeyId, context }), /content verification/);
+
+      supabaseClient.from = (table) => ({
+        select() { assert.equal(table, "hey_artifacts"); return this; },
+        in(_field, ids) {
+          const records = ids.map((id) => rowsById.get(id));
+          records[0] = { ...records[0], status: "final" };
+          return Promise.resolve({ data: records, error: null });
+        },
+      });
+      await assert.rejects(HEY.teacher.getLessonWorksheetJourney({ journeyId, context }), /out-of-scope/);
+    } finally {
+      supabaseClient.from = originalFrom;
+      supabaseClient.auth.getUser = originalGetUser;
+    }
+  });
+});
+
 test("batch persistence receipts must confirm draft status and version lineage before caching", async () => {
   const cases = [
     { journeyId: "55d17586-dc08-43f8-9dd4-8072243cb629", receipt: { status: "final" } },

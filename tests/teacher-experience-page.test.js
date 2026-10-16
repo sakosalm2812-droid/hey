@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "../src/teacherExperiencePageContract.js";
-import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount } from "../src/teacherPageState.js";
+import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount, readTeacherJourneyRecoveryHint, writeTeacherJourneyRecoveryHint } from "../src/teacherPageState.js";
 
 const readSource = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const page = readSource("../src/TeacherExperiencePage.jsx");
@@ -94,4 +94,31 @@ test("in-flight Teacher actions do not block the newly signed-in account or clea
   assert.equal(teacherOperationLockBelongsToAccount("teacher-2", "teacher-1"), false);
   assert.match(page, /teacherOperationCanStart\(busyRef\.current, accountId\)/);
   assert.match(page, /teacherOperationLockBelongsToAccount\(busyRef\.current, operationAccountId\)/);
+});
+
+test("recovery hints are account-keyed metadata only and malformed or foreign hints are ignored", () => {
+  const values = new Map();
+  const storage = {
+    setItem(key, value) { values.set(key, value); },
+    getItem(key) { return values.get(key) || null; },
+  };
+  const hint = {
+    userId: "teacher-1", accountScope: "account:teacher-1", workspaceId: "project-1",
+    classId: "class-1", journeyId: "e0e5c6a1-29a6-4ccb-9ca8-f57a7073fe93",
+  };
+  assert.equal(writeTeacherJourneyRecoveryHint(storage, hint), true);
+  assert.deepEqual(readTeacherJourneyRecoveryHint(storage, "teacher-1"), hint);
+  assert.equal(readTeacherJourneyRecoveryHint(storage, "teacher-2"), null);
+  assert.doesNotMatch([...values.values()][0], /teacherAnswer|Fractions|worksheet/i);
+  values.set("hey.teacher.journey-recovery.v1:teacher-1", JSON.stringify({ ...hint, answerKey: "private" }));
+  assert.equal(readTeacherJourneyRecoveryHint(storage, "teacher-1"), null);
+});
+
+test("Teacher recovery rechecks access and reloads persisted data through Forge", () => {
+  assert.match(page, /HEY\.teacher\.getLessonWorksheetJourney\(/);
+  assert.match(page, /readCurrentTeacherAccess\(operationAccountId\)/);
+  assert.match(page, /teacherJourneyPersistenceMatches\(result, expected\)/);
+  assert.match(page, /hasTeacherAnswerKeyField\(result\.studentArtifact\.content\)/);
+  assert.match(page, /readTeacherJourneyRecoveryHint\(getSessionStorageSafely\(\), accountId\)/);
+  assert.match(page, /Check Forge for the saved set/);
 });
