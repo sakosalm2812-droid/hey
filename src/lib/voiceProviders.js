@@ -182,7 +182,7 @@ function escapedLiteralPattern(value, language) {
  * one pass so a replacement can never trigger another replacement. This
  * helper deliberately does not persist either the vocabulary or transcript.
  */
-export function applyDictationCorrections(transcript, corrections = [], language = "en-US") {
+function applyDictationCorrectionsWithLimit(transcript, corrections, language, maxOutputLength) {
   if (typeof transcript !== "string") return "";
   const locale = normalizeSpeechLanguage(language);
   const entries = [...normalizeDictationCorrections(corrections, locale)]
@@ -191,10 +191,31 @@ export function applyDictationCorrections(transcript, corrections = [], language
 
   const alternatives = entries.map(({ from }) => `(${escapedLiteralPattern(from, locale)})`);
   const matcher = new RegExp(`(^|[^\\p{L}\\p{N}_])(?:${alternatives.join("|")})(?=$|[^\\p{L}\\p{N}_])`, "gu");
-  return transcript.replace(matcher, (match, prefix, ...captures) => {
+  const chunks = [];
+  let outputLength = 0;
+  let lastIndex = 0;
+  let exceeded = false;
+  const append = (value) => {
+    if (outputLength + value.length > maxOutputLength) {
+      exceeded = true;
+      return;
+    }
+    outputLength += value.length;
+    chunks.push(value);
+  };
+  for (const result of transcript.matchAll(matcher)) {
+    const [match, prefix, ...captures] = result;
+    append(transcript.slice(lastIndex, result.index));
     const index = captures.findIndex((source) => source !== undefined);
-    return `${prefix}${index >= 0 ? entries[index].to : match.slice(prefix.length)}`;
-  });
+    append(`${prefix}${index >= 0 ? entries[index].to : match.slice(prefix.length)}`);
+    lastIndex = result.index + match.length;
+  }
+  append(transcript.slice(lastIndex));
+  return exceeded ? null : chunks.join("");
+}
+
+export function applyDictationCorrections(transcript, corrections = [], language = "en-US") {
+  return applyDictationCorrectionsWithLimit(transcript, corrections, language, Infinity);
 }
 
 export function createVoiceSession({ speechProvider, synthesisProvider, ask, environment = globalThis, onStateChange } = {}) {
@@ -360,6 +381,16 @@ export function createDictationSession({ speechProvider, environment = globalThi
     try { onMetrics?.(metrics); } catch { /* Optional instrumentation cannot affect dictation. */ }
   }
 
+  function rejectRecognitionResult(status, message) {
+    active = false;
+    generation += 1;
+    finishAttempt(status);
+    const rejectedRecognition = recognition;
+    recognition = null;
+    try { activeSpeechProvider?.stop(rejectedRecognition); } catch { /* The session still fails closed. */ }
+    transition(VOICE_STATES.error, message);
+  }
+
   function transition(nextState, error = null) {
     const result = state.transition(nextState);
     if (result.success && !destroyed) onStateChange?.({ ...result, error });
@@ -447,13 +478,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
         onTranscript: (transcript) => {
           if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) return;
           if (typeof transcript === "string" && transcript.length > MAX_DICTATION_TRANSCRIPT_LENGTH) {
-            active = false;
-            generation += 1;
-            finishAttempt("oversized_result");
-            const rejectedRecognition = recognition;
-            recognition = null;
-            try { activeSpeechProvider?.stop(rejectedRecognition); } catch { /* The session still fails closed. */ }
-            transition(VOICE_STATES.error, "Speech recognition returned an oversized result. It was discarded; start again to retry.");
+            rejectRecognitionResult("oversized_result", "Speech recognition returned an oversized result. It was discarded; start again to retry.");
             return;
           }
           const text = typeof transcript === "string" ? transcript.trim() : "";
@@ -463,7 +488,12 @@ export function createDictationSession({ speechProvider, environment = globalThi
           }
           currentAttempt.transcriptCount = Math.min(1000, currentAttempt.transcriptCount + 1);
           if (currentAttempt.firstTranscriptAt === null) currentAttempt.firstTranscriptAt = now();
-          onTranscript?.(applyDictationCorrections(text, correctionSnapshot, sessionLanguage));
+          const corrected = applyDictationCorrectionsWithLimit(text, correctionSnapshot, sessionLanguage, MAX_DICTATION_TRANSCRIPT_LENGTH);
+          if (corrected === null) {
+            rejectRecognitionResult("correction_expansion_rejected", "A dictation correction made the result too long. It was discarded; start again to retry.");
+            return;
+          }
+          onTranscript?.(corrected);
         },
         onError: (error) => {
           if (currentGeneration === generation && !destroyed) {

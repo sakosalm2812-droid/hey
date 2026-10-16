@@ -182,6 +182,42 @@ test("oversized recognition results are discarded with bounded diagnostics and a
   session.destroy();
 });
 
+test("correction expansion is bounded, retryable, and fenced from late callbacks after account switch", async () => {
+  setAccountScope("correction-expansion-account-a");
+  const callbacks = [];
+  const transcripts = [];
+  const metrics = [];
+  const states = [];
+  const session = createDictationSession({
+    corrections: [{ from: "x", to: "z".repeat(2000) }],
+    speechProvider: { start(options) { callbacks.push(options); return {}; }, stop() {} },
+    environment: environmentWithPermission(),
+    onTranscript: (value) => transcripts.push(value),
+    onMetrics: (value) => metrics.push(value),
+    onStateChange: (value) => states.push(value),
+  });
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks[0].onTranscript("x x x x x");
+  assert.equal(transcripts.length, 0);
+  assert.equal(metrics[0].status, "correction_expansion_rejected");
+  assert.match(states.at(-1).error, /correction made the result too long.*discarded/i);
+  assert.equal(JSON.stringify(metrics).includes("zzzz"), false);
+  callbacks[0].onTranscript("late result from rejected provider");
+  assert.equal(transcripts.length, 0);
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks[1].onTranscript("safe retry");
+  assert.deepEqual(transcripts, ["safe retry"]);
+  setAccountScope("correction-expansion-account-b");
+  callbacks[1].onTranscript("private late account text");
+  assert.deepEqual(transcripts, ["safe retry"]);
+  assert.equal(metrics.at(-1).status, "account_changed");
+  assert.equal(JSON.stringify(metrics).includes("private late account text"), false);
+  session.destroy();
+  setAccountScope(null);
+});
+
 test("account switches stop dictation and emit only an aggregate terminal metric", async () => {
   setAccountScope("metrics-account-a");
   let callbacks;
