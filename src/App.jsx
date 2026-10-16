@@ -46,6 +46,7 @@ const CalendarPage = lazy(() => import("./CalendarPage.jsx"));
 const DeenPage = lazy(() => import("./pages/DeenPage.jsx"));
 const TasksPage = lazy(() => import("./TasksPage.jsx"));
 const LearnPage = lazy(() => import("./LearnPage.jsx"));
+const TeacherExperiencePage = lazy(() => import("./TeacherExperiencePage.jsx"));
 const AgentsPage = lazy(() => import("./AgentsPage.jsx"));
 const AnalyticsPage = lazy(() => import("./AnalyticsPage.jsx"));
 const FinancePage = lazy(() => import("./FinancePage.jsx"));
@@ -261,6 +262,8 @@ function AnimatedRoutes() {
             </ProtectedLayout>
           }
         />
+
+        <Route path="/teacher" element={<ProtectedLayout><TeacherExperiencePage /></ProtectedLayout>} />
 
         <Route path="/studio" element={<ProtectedLayout><StudioPage /></ProtectedLayout>} />
         <Route path="/agents" element={<ProtectedLayout><AgentsPage /></ProtectedLayout>} />

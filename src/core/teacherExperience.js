@@ -344,7 +344,7 @@ export async function buildTeacherLessonArtifact(input) {
   return frozenArtifact;
 }
 
-export async function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId } = {}) {
+export async function verifyTeacherLessonArtifact(artifact, { accountScope, workspaceId, classId } = {}) {
   try {
     artifact = snapshotLessonData(artifact);
   } catch {
@@ -409,6 +409,7 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
     lessonShapeSafe,
     accountScope: typeof accountScope === "string" && artifact?.metadata?.accountScope === accountScope,
     workspace: typeof workspaceId === "string" && artifact?.metadata?.workspaceId === workspaceId,
+    classScope: classId === undefined || artifact?.metadata?.classId === classId,
     studentDataPolicy: artifact?.metadata?.studentDataPolicy === "not_collected",
     provenance: artifact?.metadata?.provenance?.generatedBy === "HEY Teacher Lesson Workflow"
       && artifact?.metadata?.provenance?.method === "structured_from_teacher_provided_inputs"
@@ -1101,7 +1102,12 @@ export async function createTeacherLessonWorksheetJourney({ lesson: lessonReques
   let journeyArtifactIds = [];
 
   try {
-    const lesson = await buildTeacherLessonArtifact({ ...lessonInput, createdAt: stableContext.journeyCreatedAt });
+    const builtLesson = await buildTeacherLessonArtifact({ ...lessonInput, createdAt: stableContext.journeyCreatedAt });
+    const lesson = freezeDeep({
+      ...builtLesson,
+      metadata: { ...builtLesson.metadata, classId: requiredText(stableContext.classId, "Class ID", 200) },
+    });
+    BUILT_TEACHER_LESSON_ARTIFACTS.add(lesson);
     const assessment = await buildTeacherAssessmentArtifact(lesson, { ...assessmentInput, createdAt: stableContext.journeyCreatedAt }, stableContext);
     const worksheet = await buildTeacherWorksheetArtifact(assessment, stableContext);
     const [lessonId, answerKeyId, worksheetId] = await Promise.all([
@@ -1141,7 +1147,7 @@ export async function createTeacherLessonWorksheetJourney({ lesson: lessonReques
   }
 }
 
-export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
+export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, classId, safetyReview } = {}) {
   let stableArtifact;
   let stableSafetyReview;
   try {
@@ -1150,10 +1156,10 @@ export async function exportTeacherLessonMarkdown(artifact, { accountScope, work
   } catch {
     throw new Error("Lesson artifact failed verification for the active account and workspace");
   }
-  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope })) {
-    throw new Error("Authenticated teacher access to this account is required to export the lesson");
+  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope, classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to export the lesson");
   }
-  const verification = await verifyTeacherLessonArtifact(stableArtifact, { accountScope, workspaceId });
+  const verification = await verifyTeacherLessonArtifact(stableArtifact, { accountScope, workspaceId, classId });
   if (!verification.valid) throw new Error("Lesson artifact failed verification for the active account and workspace");
   if (stableArtifact.metadata.safety.reviewRequired) {
     if (!isPlainRecord(stableSafetyReview)) throw new Error("Teacher safety review is required for the active account and workspace before exporting this lesson");

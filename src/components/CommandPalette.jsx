@@ -23,6 +23,7 @@ const commands = [
   ["Open Health", "/health", "Track wellness and vitals"],
   ["Open Journal", "/journal", "Reflect and write"],
   ["Open Learn", "/learn", "Discover and study"],
+  ["Open Teacher", "/teacher", "Build a class-scoped lesson and worksheet"],
   ["Open Agents", "/agents", "Manage AI agents"],
   ["Open Forge", "/forge", "Build custom capabilities"],
   ["Open Devices", "/device", "Connect and manage devices"],

@@ -1,0 +1,201 @@
+.teacher-experience {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(22px, 4vw, 44px);
+  color: var(--text-primary, #f4f4f5);
+}
+
+.teacher-experience__header,
+.teacher-experience__section-heading,
+.teacher-experience__saved,
+.teacher-experience__actions,
+.teacher-experience__review,
+.teacher-experience__outputs article > div {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.teacher-experience__header {
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 28px;
+}
+
+.teacher-experience h1,
+.teacher-experience h2,
+.teacher-experience h3,
+.teacher-experience h4,
+.teacher-experience p {
+  margin-top: 0;
+}
+
+.teacher-experience h1 { margin-bottom: 8px; font-size: clamp(30px, 4vw, 42px); }
+.teacher-experience h2 { margin-bottom: 5px; font-size: 21px; }
+.teacher-experience h3 { font-size: 17px; }
+.teacher-experience h4 { margin-bottom: 6px; }
+.teacher-experience p { color: var(--text-secondary, #a9abb3); line-height: 1.55; }
+
+.teacher-experience__eyebrow {
+  margin-bottom: 8px;
+  color: var(--accent, #c4a97d) !important;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.teacher-experience__secure,
+.teacher-experience__saved {
+  color: #a8dfc1;
+}
+
+.teacher-experience__secure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(168, 223, 193, .24);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(45, 115, 77, .12);
+  font-size: 13px;
+}
+
+.teacher-experience__privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border-left: 3px solid rgba(196, 169, 125, .7);
+  padding: 12px 15px;
+  background: rgba(255, 255, 255, .035);
+}
+
+.teacher-experience__form,
+.teacher-experience__preview {
+  display: grid;
+  gap: 18px;
+}
+
+.teacher-experience__section,
+.teacher-experience__preview,
+.teacher-experience__notice,
+.teacher-experience__saved {
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 18px;
+  padding: clamp(16px, 2vw, 24px);
+  background: rgba(255, 255, 255, .035);
+}
+
+.teacher-experience__section-heading { align-items: flex-start; margin-bottom: 20px; }
+.teacher-experience__section-heading > span { color: var(--accent, #c4a97d); font-weight: 700; }
+.teacher-experience__section-heading p { margin-bottom: 0; }
+
+.teacher-experience__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.teacher-experience__grid label,
+.teacher-experience__review label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-secondary, #c4c4ca);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.teacher-experience input:not([type="checkbox"]),
+.teacher-experience select,
+.teacher-experience textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, .13);
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: rgba(5, 7, 10, .48);
+  color: var(--text-primary, #f4f4f5);
+  font: inherit;
+}
+
+.teacher-experience select:focus-visible,
+.teacher-experience input:focus-visible,
+.teacher-experience textarea:focus-visible,
+.teacher-experience button:focus-visible {
+  outline: 2px solid var(--accent, #c4a97d);
+  outline-offset: 2px;
+}
+
+.teacher-experience__wide { grid-column: 1 / -1; }
+.teacher-experience__answer textarea { border-color: rgba(196, 169, 125, .42); }
+
+.teacher-experience__primary,
+.teacher-experience__secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  padding: 10px 15px;
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.teacher-experience__primary { background: var(--accent, #c4a97d); color: #171717; }
+.teacher-experience__secondary { border-color: rgba(255, 255, 255, .14); background: rgba(255, 255, 255, .045); }
+.teacher-experience button:disabled { opacity: .55; cursor: not-allowed; }
+.teacher-experience__actions { flex-wrap: wrap; }
+
+.teacher-experience__outputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.teacher-experience__outputs article {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(0, 0, 0, .16);
+}
+
+.teacher-experience__outputs li { margin: 6px 0; color: var(--text-secondary, #c4c4ca); }
+.teacher-experience__private { border-color: rgba(196, 169, 125, .4) !important; }
+.teacher-experience__saved { align-items: flex-start; color: #a8dfc1; }
+.teacher-experience__saved div { display: grid; gap: 5px; }
+.teacher-experience__saved span { color: var(--text-secondary, #bcbec6); }
+.teacher-experience__review { align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.teacher-experience__review label { display: flex; align-items: flex-start; max-width: 600px; }
+.teacher-experience__review input { margin-top: 2px; }
+.teacher-experience__exports { grid-template-columns: 1fr; }
+.teacher-experience__exports article { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.teacher-experience__exports article > div { display: block; }
+.teacher-experience__exports pre { grid-column: 1 / -1; overflow: auto; max-height: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.teacher-experience__notice { display: flex; align-items: flex-start; gap: 10px; }
+.teacher-experience__notice p { margin: 0; }
+.teacher-experience__notice--error { border-color: rgba(232, 124, 124, .35); color: #ffb8b8; }
+.teacher-experience__notice--error p { color: #ffd4d4; }
+.teacher-experience__spin { animation: teacher-spin 1s linear infinite; }
+
+@keyframes teacher-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 760px) {
+  .teacher-experience__header { flex-direction: column; }
+  .teacher-experience__outputs { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 540px) {
+  .teacher-experience { padding: 18px 14px; }
+  .teacher-experience__grid { grid-template-columns: minmax(0, 1fr); }
+  .teacher-experience__wide { grid-column: auto; }
+  .teacher-experience__exports article { grid-template-columns: 1fr; }
+  .teacher-experience__exports article > button,
+  .teacher-experience__exports pre { grid-column: 1; }
+}
