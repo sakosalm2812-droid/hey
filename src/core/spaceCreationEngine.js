@@ -8,6 +8,7 @@ import { getOnboardingMotivations, rankOnboardingStarterSuggestions } from "./on
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
 export const SPACE_STORAGE_CONTRACT_VERSION = 5;
 export const SPACE_RECOVERY_CONTRACT_VERSION = 1;
+export const SPACE_TRANSFER_CONTRACT_VERSION = 1;
 export const SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION = 1;
 export const SPACE_CREATION_LIMITS = Object.freeze({
   maxPromptLength: 500,
@@ -24,6 +25,8 @@ export const SPACE_CREATION_LIMITS = Object.freeze({
 const STORAGE_KEY = "hey_spaces";
 const RECOVERY_STORAGE_KEY = "hey_spaces_recovery";
 const MAX_RECOVERY_SNAPSHOT_CHARS = SPACE_CREATION_LIMITS.maxStoredChars + 1024;
+const SPACE_TRANSFER_KIND = "hey-private-spaces-export";
+const MAX_SPACE_TRANSFER_CHARS = SPACE_CREATION_LIMITS.maxStoredChars + 16_384;
 const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, 2, 3, 4, SPACE_STORAGE_CONTRACT_VERSION]);
 const SPACE_LIFECYCLE_STATUSES = new Set(["active", "archived"]);
 const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
@@ -367,6 +370,50 @@ function createId() {
   return `space_${globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`}`;
 }
 
+function parseSpaceTransfer(exportJson, scope) {
+  if (typeof exportJson !== "string" || exportJson.length > MAX_SPACE_TRANSFER_CHARS) return { error: "Space export must be valid JSON within the transfer size limit" };
+  let parsed;
+  try { parsed = JSON.parse(exportJson); } catch { return { error: "Space export is not valid JSON" }; }
+  const envelope = readDataRecord(parsed, ["kind", "contractVersion", "exportedAt", "spaceCount", "spaces"]);
+  if (envelope.error) return envelope;
+  const input = envelope.value;
+  if (input.kind !== SPACE_TRANSFER_KIND || input.contractVersion !== SPACE_TRANSFER_CONTRACT_VERSION) return { error: "Space export format is not supported" };
+  if (typeof input.exportedAt !== "string" || input.exportedAt.length > 64 || !Number.isFinite(Date.parse(input.exportedAt))) return { error: "Space export timestamp is invalid" };
+  if (!Array.isArray(input.spaces)) return { error: "Space export must contain a list of Spaces" };
+  let descriptors;
+  try { descriptors = Object.getOwnPropertyDescriptors(input.spaces); } catch { return { error: "Space export could not be safely inspected" }; }
+  const length = descriptors.length?.value;
+  if (!Number.isSafeInteger(length) || length < 0 || length > SPACE_CREATION_LIMITS.maxSpacesPerAccount
+    || Object.keys(descriptors).some((key) => key !== "length" && !/^(?:0|[1-9]\d*)$/.test(key))
+    || Object.getOwnPropertySymbols(input.spaces).length > 0
+    || input.spaceCount !== length) return { error: "Space export list is invalid or exceeds the account limit" };
+
+  const allowedSpaceKeys = ["id", "name", "description", "templateId", "detailsRevision", "status", "lifecycleRevision", "visibility", "sharing", "createdAt", "layoutPreferences"];
+  const imported = [];
+  const seenIds = new Set();
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[index];
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return { error: "Space export contains a missing or unsafe record" };
+    const safeSpace = readDataRecord(descriptor.value, allowedSpaceKeys);
+    if (safeSpace.error) return { error: safeSpace.error };
+    const item = safeSpace.value;
+    if (allowedSpaceKeys.some((key) => !Object.hasOwn(item, key))) return { error: "Space export is missing required Space fields" };
+    if (typeof item.id !== "string" || item.id.length === 0 || item.id.length > 100 || seenIds.has(item.id)) return { error: "Space export contains an invalid or duplicate Space ID" };
+    seenIds.add(item.id);
+    if (typeof item.description !== "string" || item.description.length > 240 || containsControlChars(item.description)
+      || typeof item.visibility !== "string" || item.visibility !== "private"
+      || typeof item.sharing !== "string" || item.sharing !== "off"
+      || !(item.createdAt === null || (typeof item.createdAt === "string" && item.createdAt.length <= 64
+        && !containsControlChars(item.createdAt) && Number.isFinite(Date.parse(item.createdAt))))) {
+      return { error: "Space export contains invalid or non-private Space data" };
+    }
+    const clean = cleanStoredSpace(item.id, { ...item, accountScope: scope }, scope);
+    if (!clean) return { error: "Space export contains an invalid Space record" };
+    imported.push(clean);
+  }
+  return { spaces: imported };
+}
+
 export class SpaceCreationEngine {
   constructor() {
     this.accountScope = getAccountScope();
@@ -375,6 +422,7 @@ export class SpaceCreationEngine {
     this.deletePreviews = new Map();
     this.lifecyclePreviews = new Map();
     this.recoveryPreviews = new Map();
+    this.transferPreviews = new Map();
     this.listeners = new Set();
     this.loadError = false;
     this.load(this.accountScope);
@@ -384,6 +432,7 @@ export class SpaceCreationEngine {
       this.deletePreviews.clear();
       this.lifecyclePreviews.clear();
       this.recoveryPreviews.clear();
+      this.transferPreviews.clear();
       this.load(this.accountScope);
       this.notify("account_scope_changed", { accountScope: this.accountScope });
     });
@@ -453,6 +502,7 @@ export class SpaceCreationEngine {
     this.deletePreviews.clear();
     this.lifecyclePreviews.clear();
     this.recoveryPreviews.clear();
+    this.transferPreviews.clear();
   }
 
   updateRecoverySnapshot(scope, serialized, { notify = true } = {}) {
@@ -606,6 +656,139 @@ export class SpaceCreationEngine {
     if (this.loadError) this.load(this.accountScope);
     if (this.loadError) throw new Error("Space storage could not be read");
     return [...this.spaces.values()].map(cloneSpace);
+  }
+
+  exportSpaces(request) {
+    const safeRequest = readDataRecord(request, ["accountScope"]);
+    if (safeRequest.error) return safeRequest;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to export private Spaces" };
+    if (safeRequest.value.accountScope !== scope || getAccountScope() !== scope) return { error: "Account scope mismatch" };
+    const refreshed = this.refreshFromStorage(scope);
+    if (refreshed.error) return refreshed;
+    const spaces = [...this.spaces.values()].map((space) => ({
+      id: space.id,
+      name: space.name,
+      description: space.description,
+      templateId: space.templateId,
+      detailsRevision: space.detailsRevision,
+      status: space.status,
+      lifecycleRevision: space.lifecycleRevision,
+      visibility: "private",
+      sharing: "off",
+      createdAt: space.createdAt,
+      layoutPreferences: cloneSpaceLayoutPreferences(space.layoutPreferences),
+    }));
+    const exportJson = JSON.stringify({
+      kind: SPACE_TRANSFER_KIND,
+      contractVersion: SPACE_TRANSFER_CONTRACT_VERSION,
+      exportedAt: new Date().toISOString(),
+      spaceCount: spaces.length,
+      spaces,
+    });
+    if (exportJson.length > MAX_SPACE_TRANSFER_CHARS) return { error: "Space export exceeds the transfer size limit" };
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the export" };
+    return { success: true, accountScope: scope, contractVersion: SPACE_TRANSFER_CONTRACT_VERSION, spaceCount: spaces.length, exportJson };
+  }
+
+  previewImport(request) {
+    const safeRequest = readDataRecord(request, ["accountScope", "exportJson"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, exportJson } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to import private Spaces" };
+    if (accountScope !== scope || getAccountScope() !== scope) return { error: "Account scope mismatch" };
+    if (this.loadError) return { error: "Space storage could not be read; try again" };
+    const decoded = parseSpaceTransfer(exportJson, scope);
+    if (decoded.error) return decoded;
+    const refreshed = this.refreshFromStorage(scope);
+    if (refreshed.error) return refreshed;
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the import" };
+    if (this.spaces.size + decoded.spaces.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) return { error: "Space limit reached", code: "space_limit" };
+
+    const imported = decoded.spaces.map((space) => ({ ...space, id: createId(), accountScope: scope }));
+    const previewId = createId();
+    const expiresAt = Date.now() + SPACE_CREATION_LIMITS.previewLifetimeMs;
+    this.transferPreviews.set(previewId, {
+      accountScope: scope,
+      baseSnapshot: serializeSpaces(this.spaces, scope),
+      spaces: imported,
+      expiresAt,
+    });
+    return {
+      previewId,
+      accountScope: scope,
+      expiresAt: new Date(expiresAt).toISOString(),
+      action: "import_private_spaces",
+      contractVersion: SPACE_TRANSFER_CONTRACT_VERSION,
+      spaceCount: imported.length,
+      spaces: imported.map(({ id, name, status, templateId }) => ({ id, name, status, templateId })),
+      effects: ["Add private copies to this account with new Space IDs and no sharing or permission changes"],
+      permissionsChanged: false,
+      requiresConfirmation: true,
+    };
+  }
+
+  confirmImport(request) {
+    const safeRequest = readDataRecord(request, ["previewId", "confirm"]);
+    if (safeRequest.error) return safeRequest;
+    const { previewId, confirm } = safeRequest.value;
+    const scope = this.accountScope;
+    if (typeof previewId !== "string" || previewId.length === 0 || previewId.length > 100) return { error: "A valid Space import preview ID is required" };
+    if (confirm !== true) return { error: "Explicit confirmation is required" };
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to import private Spaces" };
+    if (getAccountScope() !== scope) {
+      this.transferPreviews.clear();
+      return { error: "Account scope changed; import preview is no longer valid" };
+    }
+    const pending = this.transferPreviews.get(previewId);
+    if (!pending || pending.accountScope !== scope) return { error: "Space import preview not found or already used" };
+    if (Date.now() > pending.expiresAt) {
+      this.transferPreviews.delete(previewId);
+      return { error: "Space import preview expired; review the import again" };
+    }
+    const lockKey = JSON.stringify([scope, "__space_import__"]);
+    if (activeSpaceRecordWrites.has(lockKey)) return { error: "A Space import is already in progress", code: "write_in_progress" };
+    activeSpaceRecordWrites.add(lockKey);
+    this.transferPreviews.delete(previewId);
+    try {
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error) return refreshed;
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; import preview is no longer valid" };
+      if (serializeSpaces(this.spaces, scope) !== pending.baseSnapshot) return { error: "Spaces changed after import review; review the import again", code: "stale_snapshot" };
+      if (this.spaces.size + pending.spaces.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) return { error: "Space limit reached", code: "space_limit" };
+      const nextSpaces = new Map(this.spaces);
+      for (const space of pending.spaces) {
+        if (nextSpaces.has(space.id)) return { error: "Imported Space ID conflicts with an existing Space", code: "stale_snapshot" };
+        nextSpaces.set(space.id, space);
+      }
+      const serialized = serializeSpaces(nextSpaces, scope);
+      if (!serialized) return { error: "Space storage limit reached", code: "write_failed" };
+      const key = getAccountStorageKey(STORAGE_KEY, scope);
+      try {
+        safeStorage.setItem(key, serialized);
+        if (readStorageItem(key) !== serialized) return { error: "Imported Spaces could not be saved", code: "write_failed" };
+      } catch {
+        return { error: "Imported Spaces could not be saved", code: "write_failed" };
+      }
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying the import" };
+      this.updateRecoverySnapshot(scope, serialized);
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying the import" };
+      this.spaces = nextSpaces;
+      const result = {
+        success: true,
+        accountScope: scope,
+        spaceCount: pending.spaces.length,
+        spaceIds: pending.spaces.map(({ id }) => id),
+        permissionsChanged: false,
+      };
+      this.notify("spaces_imported", result);
+      publish("spaces.private_spaces_imported", result);
+      recordAudit({ action: "space.private_imported", status: "completed", metadata: { accountScope: scope, spaceCount: result.spaceCount } });
+      return result;
+    } finally {
+      activeSpaceRecordWrites.delete(lockKey);
+    }
   }
 
   getOnboardingSuggestions() {
@@ -1148,6 +1331,21 @@ export function confirmNaturalLanguageSpaceCreation(request) {
 
 export function getPrivateSpaces() {
   return spaceCreationEngine.getSpaces();
+}
+
+/** Exports private Space data without account identifiers or grants. */
+export function exportPrivateSpaces(request) {
+  return spaceCreationEngine.exportSpaces(request);
+}
+
+/** Previews portable private Space imports for the active account. */
+export function previewPrivateSpaceImport(request) {
+  return spaceCreationEngine.previewImport(request);
+}
+
+/** Applies a reviewed portable Space import exactly once. */
+export function confirmPrivateSpaceImport(request) {
+  return spaceCreationEngine.confirmImport(request);
 }
 
 /** Previews restoration from the last valid account-scoped Space snapshot. */

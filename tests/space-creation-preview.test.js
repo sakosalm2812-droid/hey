@@ -68,7 +68,11 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(spacesApi.layoutPreferencesContractVersion, 1);
   assert.equal(spacesApi.storageContractVersion, 5);
   assert.equal(spacesApi.recoveryContractVersion, 1);
+  assert.equal(spacesApi.transferContractVersion, 1);
   assert.equal(typeof spacesApi.getLayoutPreferences, "function");
+  assert.equal(typeof spacesApi.export, "function");
+  assert.equal(typeof spacesApi.previewImport, "function");
+  assert.equal(typeof spacesApi.confirmImport, "function");
   assert.equal(typeof spacesApi.previewRecovery, "function");
   assert.equal(typeof spacesApi.confirmRecovery, "function");
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
@@ -1306,5 +1310,117 @@ test("legacy Space recovery payloads remain recoverable and upgrade after a conf
     const retry = unreadable.previewRecovery({ accountScope: "account:space-recovery-legacy" });
     assert.equal(retry.recoveryContractVersion, 1);
     assert.equal(retry.spaceCount, 1);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("portable Space export omits account identity and confirmed import rebinds private copies to the target account", () => withStorage(() => {
+  const previousScope = "spaces-transfer-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-transfer-source-account");
+    const source = new SpaceCreationEngine();
+    const created = source.confirmNaturalLanguagePreview({
+      previewId: source.previewNaturalLanguageRequest({ prompt: "Create a space called Portable study", templateId: "research" }).previewId,
+      confirm: true,
+    });
+    assert.equal(created.success, true);
+    assert.equal(source.updateDetails({
+      accountScope: "account:space-transfer-source-account",
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      description: "A portable private Space",
+    }).success, true);
+    assert.equal(source.updateLayoutPreferences({
+      accountScope: "account:space-transfer-source-account",
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      preferences: { favoriteToolIds: ["tool.search"], widgetIds: ["notes"] },
+    }).success, true);
+    const archive = source.previewArchiveSpace({
+      accountScope: "account:space-transfer-source-account",
+      spaceId: created.space.id,
+      expectedLifecycleRevision: 0,
+    });
+    assert.equal(source.confirmArchiveSpace({ previewId: archive.previewId, confirm: true }).success, true);
+
+    const exported = source.exportSpaces({ accountScope: "account:space-transfer-source-account" });
+    assert.equal(exported.success, true);
+    assert.equal(exported.contractVersion, 1);
+    assert.equal(exported.spaceCount, 1);
+    assert.equal(exported.exportJson.includes("space-transfer-source-account"), false);
+    const portable = JSON.parse(exported.exportJson);
+    assert.equal(portable.kind, "hey-private-spaces-export");
+    assert.equal(Object.hasOwn(portable.spaces[0], "accountScope"), false);
+    assert.equal(portable.spaces[0].sharing, "off");
+
+    setAccountScope("space-transfer-target-account");
+    const target = new SpaceCreationEngine();
+    const preview = target.previewImport({ accountScope: "account:space-transfer-target-account", exportJson: exported.exportJson });
+    assert.equal(preview.requiresConfirmation, true);
+    assert.equal(preview.permissionsChanged, false);
+    assert.notEqual(preview.spaces[0].id, created.space.id);
+    assert.match(target.confirmImport({ previewId: preview.previewId, confirm: false }).error, /Explicit confirmation/);
+    const imported = target.confirmImport({ previewId: preview.previewId, confirm: true });
+    assert.equal(imported.success, true);
+    assert.equal(imported.permissionsChanged, false);
+    assert.equal(imported.spaceCount, 1);
+    assert.match(target.confirmImport({ previewId: preview.previewId, confirm: true }).error, /not found or already used/);
+    const [copy] = target.getSpaces();
+    assert.notEqual(copy.id, created.space.id);
+    assert.equal(copy.accountScope, "account:space-transfer-target-account");
+    assert.equal(copy.name, "Portable study");
+    assert.equal(copy.description, "A portable private Space");
+    assert.equal(copy.templateId, "research");
+    assert.equal(copy.status, "archived");
+    assert.equal(copy.visibility, "private");
+    assert.equal(copy.sharing, "off");
+    assert.deepEqual(target.getLayoutPreferences(copy.id).favoriteToolIds, ["tool.search"]);
+    assert.deepEqual(target.getLayoutPreferences(copy.id).widgetIds, ["notes"]);
+
+    setAccountScope("space-transfer-source-account");
+    assert.equal(new SpaceCreationEngine().getSpaces()[0].id, created.space.id);
+    setAccountScope("space-transfer-target-account");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("portable Space imports reject sharing escalation, stale account snapshots, and failed persistence", () => withStorage((storage) => {
+  const previousScope = "spaces-transfer-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-transfer-adversarial-source");
+    const source = new SpaceCreationEngine();
+    const create = source.previewNaturalLanguageRequest({ prompt: "Create a space called Safe source" });
+    assert.equal(source.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).success, true);
+    const exported = source.exportSpaces({ accountScope: "account:space-transfer-adversarial-source" });
+    const escalated = JSON.parse(exported.exportJson);
+    escalated.spaces[0].sharing = "on";
+    const incomplete = JSON.parse(exported.exportJson);
+    delete incomplete.spaces[0].layoutPreferences;
+
+    setAccountScope("space-transfer-adversarial-target");
+    const target = new SpaceCreationEngine();
+    assert.match(target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: JSON.stringify(escalated) }).error, /non-private/);
+    assert.match(target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: JSON.stringify(incomplete) }).error, /missing required/);
+    assert.match(target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: "{" }).error, /valid JSON/);
+    const accessorRequest = { accountScope: "account:space-transfer-adversarial-target" };
+    Object.defineProperty(accessorRequest, "exportJson", { enumerable: true, get() { throw new Error("must not read getter"); } });
+    assert.match(target.previewImport(accessorRequest).error, /Accessor properties/);
+
+    const preview = target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: exported.exportJson });
+    const newLocal = target.previewNaturalLanguageRequest({ prompt: "Create a space called Local update" });
+    assert.equal(target.confirmNaturalLanguagePreview({ previewId: newLocal.previewId, confirm: true }).success, true);
+    assert.equal(target.confirmImport({ previewId: preview.previewId, confirm: true }).code, "stale_snapshot");
+    assert.deepEqual(target.getSpaces().map((space) => space.name), ["Local update"]);
+
+    const retry = target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: exported.exportJson });
+    storage.failWrites = true;
+    assert.equal(target.confirmImport({ previewId: retry.previewId, confirm: true }).code, "write_failed");
+    assert.deepEqual(target.getSpaces().map((space) => space.name), ["Local update"]);
+    storage.failWrites = false;
+
+    const switched = target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: exported.exportJson });
+    setAccountScope("space-transfer-third-account");
+    assert.match(target.confirmImport({ previewId: switched.previewId, confirm: true }).error, /Account scope changed|not found or already used/);
+    assert.deepEqual(new SpaceCreationEngine().getSpaces(), []);
   } finally { setAccountScope(previousScope); }
 }));
