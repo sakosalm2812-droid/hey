@@ -159,6 +159,18 @@ test("adaptive selector preserves exact output under high fanout and adversarial
   }
 });
 
+test("adaptive selector preserves top-ranked output for a 2,000-expert shared-term fanout", () => {
+  const catalog = Array.from({ length: 2_000 }, (_, expertIndex) => ({
+    id: `expert-${String(expertIndex).padStart(5, "0")}`,
+    terms: ["shared", ...Array.from({ length: 30 }, (_, termIndex) => `unique${expertIndex}x${termIndex}`)],
+  }));
+  const selector = createUltraSparseSelector(catalog);
+  assert.equal(selector.strategy, "indexed-candidates");
+  for (const query of ["shared", "unrelated nothing", "shared unique1999x29", `${"shared ".repeat(700)}unique0000x00`]) {
+    assert.deepEqual(selector.select(query), selector.selectLinear(query));
+  }
+});
+
 test("catalog selector fails closed on hostile, duplicate, sparse, and oversized definitions", () => {
   assert.throws(() => createUltraSparseSelector(null), /Invalid expert catalog/);
   assert.throws(() => createUltraSparseSelector([new Array(1)]), /Invalid expert definition/);

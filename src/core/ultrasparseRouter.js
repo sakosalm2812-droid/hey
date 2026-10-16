@@ -108,10 +108,15 @@ export function createUltraSparseSelector(catalog) {
   if (ids.size !== experts.length || totalTerms > MAX_CATALOG_TERMS) throw new TypeError("Invalid expert catalog");
 
   let tokenIndex = null;
+  // The synchronous selector has no callbacks, so these scratch buffers cannot overlap calls.
+  let expertMasks = null;
+  let candidateExpertIndices = null;
 
   function prepareIndexed() {
     if (tokenIndex) return false;
     tokenIndex = new Map();
+    expertMasks = new Uint32Array(experts.length);
+    candidateExpertIndices = [];
     for (const [expertIndex, expert] of experts.entries()) {
       for (const [termIndex, term] of expert.terms.entries()) {
         if (!tokenIndex.has(term)) tokenIndex.set(term, []);
@@ -135,21 +140,36 @@ export function createUltraSparseSelector(catalog) {
     const normalized = selectionInput(input, limit);
     if (!normalized) return { experts: [], matchedTerms: [], status: "invalid_input" };
     prepareIndexed();
-    const masks = new Map();
+    candidateExpertIndices.length = 0;
     for (const token of normalized.tokenSet) {
       for (const { expertIndex, bit } of tokenIndex.get(token) || []) {
-        masks.set(expertIndex, (masks.get(expertIndex) || 0) | bit);
+        if (expertMasks[expertIndex] === 0) candidateExpertIndices.push(expertIndex);
+        expertMasks[expertIndex] |= bit;
       }
     }
-    const ranked = [];
-    for (const [expertIndex, mask] of masks) {
+    const topCandidates = [];
+    for (const expertIndex of candidateExpertIndices) {
+      const mask = expertMasks[expertIndex];
+      let score = 0;
+      for (let remaining = mask; remaining !== 0; remaining &= remaining - 1) score += 1;
+      const candidate = { expertIndex, mask, score, id: experts[expertIndex].id };
+      let position = 0;
+      while (position < topCandidates.length) {
+        const current = topCandidates[position];
+        if (candidate.score > current.score || (candidate.score === current.score && candidate.id < current.id)) break;
+        position += 1;
+      }
+      if (position < normalized.requestedLimit) {
+        topCandidates.splice(position, 0, candidate);
+        if (topCandidates.length > normalized.requestedLimit) topCandidates.pop();
+      }
+    }
+    for (const expertIndex of candidateExpertIndices) expertMasks[expertIndex] = 0;
+    const ranked = topCandidates.map(({ expertIndex, mask, score, id }) => {
       const expert = experts[expertIndex];
-      const matchedTerms = [];
-      for (let termIndex = 0; termIndex < expert.terms.length; termIndex += 1) {
-        if ((mask & (1 << termIndex)) !== 0) matchedTerms.push(expert.terms[termIndex]);
-      }
-      ranked.push({ id: expert.id, score: matchedTerms.length, matchedTerms });
-    }
+      const matchedTerms = expert.terms.filter((_, termIndex) => (mask & (1 << termIndex)) !== 0);
+      return { id, score, matchedTerms };
+    });
     return formatSelection(ranked, normalized.requestedLimit, normalized.truncated);
   }
 
