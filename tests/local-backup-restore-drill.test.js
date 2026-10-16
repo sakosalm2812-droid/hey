@@ -8,6 +8,7 @@ test("local backup/restore drill verifies all synthetic files and their hashes",
   assert.equal(result.scope, "synthetic_local_files_only");
   assert.equal(result.fileCount, 3);
   assert.equal(result.restoredFileCount, 3);
+  assert.equal(result.temporaryDataRemoved, true);
   assert.deepEqual(result.verifiedSha256.map(({ path }) => path), [
     "account/preferences.json",
     "account/profile.json",
@@ -24,9 +25,19 @@ for (const [fault, reason] of [
 ]) {
   test(`local backup/restore drill fails closed for ${fault} input`, async () => {
     const result = await runLocalBackupRestoreDrill({ testFault: fault });
-    assert.deepEqual(result, { status: "failed", reason, restoredFileCount: 0 });
+    assert.deepEqual(result, { status: "failed", reason, restoredFileCount: 0, temporaryDataRemoved: true });
   });
 }
+
+test("local backup/restore drill reports an actual partial write failure instead of claiming zero restores", async () => {
+  const result = await runLocalBackupRestoreDrill({ testFault: "restore-conflict" });
+  assert.deepEqual(result, {
+    status: "failed",
+    reason: "partial_restore_detected",
+    restoredFileCount: 1,
+    temporaryDataRemoved: true,
+  });
+});
 
 test("local backup/restore drill rejects unknown test fault names", async () => {
   await assert.rejects(() => runLocalBackupRestoreDrill({ testFault: "delete-production-data" }), /Unknown drill fault/);

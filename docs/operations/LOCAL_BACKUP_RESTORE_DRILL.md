@@ -14,6 +14,6 @@ Run the focused adversarial suite with:
 node --test tests/local-backup-restore-drill.test.js
 ```
 
-The tests inject payload corruption, a missing backup file, an unlisted extra file, and a path traversal manifest entry. Each case must fail closed with zero restored files. Fault injection is available only through the test API; the CLI always runs the clean rehearsal.
+The tests inject payload corruption, a missing backup file, an unlisted extra file, a path traversal manifest entry, and a restore destination conflict. Integrity failures must fail before restoring any files. The destination-conflict case forces a write failure after one valid file has been restored and verifies that the harness reports the actual partial count rather than claiming zero; all synthetic data is removed after each run. Fault injection is available only through the test API; the CLI always runs the clean rehearsal.
 
 This verifies only the local harness over synthetic files. It does not exercise HEY production databases, object storage, encryption/key custody, live backup scheduling, deployment rollback, or disaster recovery. Passing it is not production backup evidence.

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const DRILL_DIRECTORY_PREFIX = "hey-local-backup-restore-drill-";
 const MANIFEST_VERSION = 1;
-const TEST_FAULTS = new Set(["corrupt", "missing", "traversal", "extra"]);
+const TEST_FAULTS = new Set(["corrupt", "missing", "traversal", "extra", "restore-conflict"]);
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -126,7 +126,7 @@ async function createBackup(sourceDirectory, backupDirectory) {
   return sourceFiles;
 }
 
-async function applyTestFault(backupDirectory, fault) {
+async function applyTestFault(backupDirectory, restoreDirectory, fault) {
   if (fault === null || fault === undefined) return;
   if (!TEST_FAULTS.has(fault)) throw new TypeError("Unknown drill fault injection.");
   const manifestPath = path.join(backupDirectory, "manifest.json");
@@ -143,7 +143,32 @@ async function applyTestFault(backupDirectory, fault) {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
     manifest.entries[0].path = "../escaped.txt";
     await writeFile(manifestPath, JSON.stringify(manifest), { flag: "w" });
+  } else if (fault === "restore-conflict") {
+    const conflictPath = path.join(restoreDirectory, "account", "profile.json");
+    await mkdir(path.dirname(conflictPath), { recursive: true });
+    await writeFile(conflictPath, "pre-existing conflicting file", { flag: "wx" });
   }
+}
+
+async function countExactRestoredFiles(expectedFiles, restoreDirectory) {
+  let restoredFiles;
+  try {
+    restoredFiles = await listFiles(restoreDirectory);
+  } catch (error) {
+    if (error.code === "ENOENT") return 0;
+    return null;
+  }
+  return [...expectedFiles].filter(([relativePath, bytes]) => restoredFiles.get(relativePath)?.equals(bytes)).length;
+}
+
+async function failedDrillResult(error, expectedFiles, restoreDirectory) {
+  const restoredFileCount = await countExactRestoredFiles(expectedFiles, restoreDirectory);
+  if (restoredFileCount === null) return { status: "failed", reason: "restore_state_unverifiable", restoredFileCount: null };
+  if (restoredFileCount > 0) return { status: "failed", reason: "partial_restore_detected", restoredFileCount };
+  const reason = ["manifest_invalid", "payload_mismatch", "integrity_mismatch", "unsupported_file_type"].includes(error.message)
+    ? error.message
+    : "drill_io_error";
+  return { status: "failed", reason, restoredFileCount: 0 };
 }
 
 /**
@@ -157,39 +182,44 @@ export async function runLocalBackupRestoreDrill({ testFault = null } = {}) {
   const sourceDirectory = path.join(temporaryRoot, "source");
   const backupDirectory = path.join(temporaryRoot, "backup");
   const restoreDirectory = path.join(temporaryRoot, "restored");
+  let result;
   try {
     const fixture = await createFixture(sourceDirectory);
     const sourceFiles = await createBackup(sourceDirectory, backupDirectory);
-    await applyTestFault(backupDirectory, testFault);
+    await mkdir(restoreDirectory, { recursive: true });
+    await applyTestFault(backupDirectory, restoreDirectory, testFault);
     try {
       await verifyBackupAndRestore(backupDirectory, restoreDirectory);
     } catch (error) {
-      return {
-        status: "failed",
-        reason: ["manifest_invalid", "payload_mismatch", "integrity_mismatch", "unsupported_file_type"].includes(error.message)
-          ? error.message
-          : "drill_io_error",
-        restoredFileCount: 0,
-      };
+      result = await failedDrillResult(error, sourceFiles, restoreDirectory);
     }
 
-    const restoredFiles = await listFiles(restoreDirectory);
-    const identical = sourceFiles.size === fixture.size && restoredFiles.size === sourceFiles.size
-      && [...sourceFiles].every(([relativePath, bytes]) => restoredFiles.has(relativePath) && restoredFiles.get(relativePath).equals(bytes));
-    if (!identical) return { status: "failed", reason: "restore_verification_failed", restoredFileCount: restoredFiles.size };
-    return {
-      status: "passed",
-      scope: "synthetic_local_files_only",
-      fileCount: sourceFiles.size,
-      restoredFileCount: restoredFiles.size,
-      verifiedSha256: [...restoredFiles].map(([relativePath, bytes]) => ({ path: relativePath, sha256: sha256(bytes) })),
-    };
-  } catch {
-    return { status: "failed", reason: "drill_io_error", restoredFileCount: 0 };
-  } finally {
-    // This path is exclusively allocated by mkdtemp above; callers cannot choose it.
-    await rm(temporaryRoot, { recursive: true, force: true });
+    if (!result) {
+      const restoredFiles = await listFiles(restoreDirectory);
+      const identical = sourceFiles.size === fixture.size && restoredFiles.size === sourceFiles.size
+        && [...sourceFiles].every(([relativePath, bytes]) => restoredFiles.has(relativePath) && restoredFiles.get(relativePath).equals(bytes));
+      result = identical
+        ? {
+          status: "passed",
+          scope: "synthetic_local_files_only",
+          fileCount: sourceFiles.size,
+          restoredFileCount: restoredFiles.size,
+          verifiedSha256: [...restoredFiles].map(([relativePath, bytes]) => ({ path: relativePath, sha256: sha256(bytes) })),
+        }
+        : { status: "failed", reason: "restore_verification_failed", restoredFileCount: await countExactRestoredFiles(sourceFiles, restoreDirectory) };
+    }
+  } catch (error) {
+    result = await failedDrillResult(error, new Map(), restoreDirectory);
   }
+
+  // This path is exclusively allocated by mkdtemp above; callers cannot choose it.
+  try {
+    await rm(temporaryRoot, { recursive: true, force: true });
+    result.temporaryDataRemoved = true;
+  } catch {
+    result = { status: "failed", reason: "temporary_data_cleanup_failed", restoredFileCount: result.restoredFileCount ?? null, temporaryDataRemoved: false };
+  }
+  return result;
 }
 
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
