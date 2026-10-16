@@ -59,16 +59,18 @@ test("absent, malformed, oversized, and policy-override inputs preserve ordinary
     { name: "adversarial policy override text", input: adversarial, reason: "adversarial_policy_override_text" },
     { name: "single weak lexical match", input: "debug", reason: "weak_lexical_signal" },
     { name: "tied domain matches", input: "code debug source citation", reason: "ambiguous_lexical_signal" },
+    { name: "caller output limit hides tied domain", input: "code debug source citation", limit: 1, reason: "ambiguous_lexical_signal" },
   ];
 
-  for (const { name, input, reason } of cases) {
-    const plan = createUltraSparsePlan(input, { intent });
+  for (const { name, input, limit, reason } of cases) {
+    const plan = createUltraSparsePlan(input, { intent, limit });
     assert.deepEqual(ordinaryPlanOnly(plan.providerPlan), ordinaryProviderPlan, name);
     assert.equal(plan.providerPlan.adaptiveRouting.expert, null, name);
     assert.equal(plan.providerPlan.adaptiveRouting.requestedCapability, null, name);
     assert.equal(plan.providerPlan.adaptiveRouting.applied, false, name);
     assert.equal(plan.providerPlan.adaptiveRouting.suppressedReason, reason, name);
     assert.equal(plan.inferencePerformed, false, name);
+    if (limit === 1) assert.equal(plan.experts.experts.length, 1, name);
   }
 });
 

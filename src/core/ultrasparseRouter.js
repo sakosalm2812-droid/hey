@@ -299,8 +299,13 @@ export function selectUltraSparseExpertsMasked(input, { limit = 2 } = {}) {
  */
 export function createUltraSparsePlan(input, { intent = "conversation", limit = 2 } = {}) {
   const selection = selectUltraSparseExperts(input, { limit });
-  const primaryExpert = selection.experts[0]?.id || null;
-  const suppressedReason = getHintSuppressionReason(input, selection);
+  // Keep ambiguity checks independent of the caller's requested output size.
+  // A top-1 result can hide a tied runner-up, which must still suppress hints.
+  const hintSelection = selection.status === "selected" && selection.experts.length === 1 && limit === 1
+    ? selectUltraSparseExperts(input, { limit: 2 })
+    : selection;
+  const primaryExpert = hintSelection.experts[0]?.id || null;
+  const suppressedReason = getHintSuppressionReason(input, hintSelection);
   const eligibleExpert = suppressedReason ? null : primaryExpert;
   const capabilityHint = eligibleExpert ? PROVIDER_CAPABILITY_BY_EXPERT[eligibleExpert] || null : null;
   const hintedProviderPlan = capabilityHint
