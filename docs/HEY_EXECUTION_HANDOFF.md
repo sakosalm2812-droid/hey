@@ -358,3 +358,51 @@ Chat 06 committed `e63de85de31296ea5348c95cb5465232834dcb77`, adding bounded pri
 - Current active follow-ups: Chat 01 is implementing the signed-in Teacher UI against the already-integrated Forge journey; Chat 04 is correcting Tauri-origin detection and durable command deduplication/lease-loss handling before its device worker is accepted; Chat 05 is adding an offline-capable real gesture detector path (the prior fake-detector-only test commit remains unmerged); Chat 09 is finishing real-provider routing/config work. Chat 11 is idle after Fusion integration. Chat 10's Codex host remains unavailable and has no pushed `codex/next-10-ultrasparse-research` branch; its earlier coordinator benchmark work remains integrated, but this new follow-up is unrecovered.
 - External live E2E blockers unchanged: no local `.env`, Supabase project URL/anon key, deployed Edge Functions, authenticated test account, model provider keys or trusted pricing. The local app at `http://127.0.0.1:5173/` remains a development server; public home and the Ocean theme preference are the only browser-verified product experience. No production/staging URL or complete account → chat → Space → action → activity journey exists yet.
 - Exact next actions: commit/push this checkpoint; review the active worker diffs when pushed; integrate only after scoped code review, relevant tests and security checks; then use configured service credentials and a test account to verify the real browser journey. Never characterize the 511-test pass as live service or production readiness.
+
+## Emergency continuation checkpoint — 2026-10-16
+
+- **Coordinator branch:** `codex/resume-emergency-2026-10-14`.
+- **Latest coordinator commit:** `1c951782591d3fd606e97c5f1364b83de1072ca3` (`Block provider redirects from forwarding credentials`), one commit ahead of `origin/codex/resume-emergency-2026-10-14` at checkpoint time. Push this commit together with this handoff update after the documentation commit.
+- **Current working tree at handoff preparation:** source clean after the redirect commit; the extracted `docs/requirements/v3-agent-pack/` directory remains intentionally untracked because an original nested path exceeds Windows Git path limits. The complete original specification and pack ZIP are committed under `docs/requirements/v3-source/`; preserve the extraction for local use and do not stage it wholesale.
+- **Current engineering focus:** parallel vertical user journeys, integration, and real application proof; Specialist 04 is actively implementing bounded HTTP timeout/cancellation/worker recovery for device transport, without duplicating durable queue retry. The 47-workstream matrix remains in `docs/HEY_STEP_STATUS.md`; do not infer all-step completion from this focused checkpoint.
+
+### This checkpoint's verified delta
+
+- Gemini provider calls in the current Fusion JavaScript provider path and both current Edge Function call sites set `redirect: "error"`. This prevents credentials in the Gemini header from being forwarded to a redirect destination. The adversarial test uses two local HTTP servers: the configured provider endpoint returns a 302 to the second server; the second server receives no request, no answer/vendor body is returned, and the key is absent from the result. This is a local protocol test, not a live Gemini or deployed Edge Function test.
+- **Commit:** `1c951782591d3fd606e97c5f1364b83de1072ca3`.
+- **Focused test:** `node --test tests/edge-fusion-provider.test.js` — 31/31 passed.
+- **Integrated regression:** `npm test` — 564/564 passed.
+- **Build:** `npm run build` — passed, 2,766 modules. Sitemap generation was skipped because `SITE_URL` is unset; the existing `contextManager.js` mixed static/dynamic import warning remains.
+- **Lint/diff:** scoped ESLint had zero errors; ESLint warns it has no configured parser target for `supabase/functions/hey/index.ts`. The TypeScript source check asserts both Gemini call sites set redirect rejection. `git diff --check` passed before commit.
+- **Related worker result:** Chat 11's `654c5b1306a5d5479940755de2390dd3c5f3d08f` binds the Fusion verification digest to the exact prompt as well as the answer. The coordinator already contains this behavior (including its additional hostile Proxy input test); after reviewing the diff, cherry-pick was skipped because it was empty against coordinator HEAD. No worker content was lost or overwritten.
+
+### Running app proof and limits
+
+- `http://127.0.0.1:5173/download` returned HTTP 200 and was opened in the Codex in-app browser. The rendered page labels the web interface “Source verified,” identifies Windows/macOS/Linux as requiring native builds, and iOS/Android as requiring native projects; screenshot and accessibility tree were observed on this turn. `http://127.0.0.1:5173/live` remains a public exploratory entrypoint from the prior checkpoint.
+- `/chat` remains protected and previously redirected to `/login?next=%2Fchat`; no signed-in test account was available. Actual authenticated voice edit, database persistence, provider inference, account isolation against live Supabase, camera inference, native-device functionality, and production deployment remain **UNVERIFIED**.
+- The prior 5173 server accepted requests (HTTP 200) when checked. This continuation also started the current branch at `http://127.0.0.1:5174/` (desktop terminal session 25232) because port 5173 was already bound. Both answered `/download` with HTTP 200; browser evidence above is from 5173. Check process ownership before stopping either.
+
+### Existing specialist workers resumed concurrently
+
+All follow-ups were sent in one parallel dispatch with `model=gpt-6-luna`, `thinking=high`; this records the requested override sent to Codex, not independent telemetry of effective model selection. Each worker was instructed to inspect and preserve its existing branch, use V3 source context, implement code (not an audit-only response), verify and commit. Specialist 04 was already active and was left working.
+
+| Worker | Branch | Codex task | Latest known branch SHA before this dispatch | Status / scope |
+|---|---|---|---|---|
+| 01 Frontend Director | `codex/next-01-frontend-director` | `01a14073-33bf-7403-940b-871cd0de9ebc` | `c4370b03ab7477a77e6bb85983f827fee37345fb` | Resumed for a real Teacher UI slice using existing Forge backend; Chat 01 owns shared UI. |
+| 02 Onboarding / Spaces | `codex/next-02-onboarding-spaces` | `01a14073-9827-7f42-bf35-4eb2faee522d` | `2fe21b39ff47599e8faf05dceee1899a86fe696e` | Resumed for a missing persisted Space user journey and account-switch coverage. |
+| 03 Tool Library | `codex/next-03-tool-library` | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `192b7af5eafb8466956eaee81cd546ad3630669d` | Resumed for a real capability entrypoint through existing authorization/runtime. |
+| 04 Edge | `codex/next-04-edge-everywhere` | `01a14073-c424-70e2-9773-630d488b24ae` | `ad79d5d0ca4fc65b7d0fbe7e667f83e20ddab018` | **Active:** bounded transport timeout, cancellation, and worker recovery tests. |
+| 05 Gesture | `codex/next-05-gesture-control` | `01a14073-de07-7a90-b8bb-08faadea17bc` | `b8798758e9c1c076ee570d60dbdf57f1fc8486b0` | Resumed on supported browser session lifecycle; no camera permission requested. |
+| 06 Flow / Dictation | `codex/next-06-flow-dictation` | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `e2b8c518d498a4e1eb0f71859b3ffadc0de3c3a1` | Resumed for one additional dictation behavior with cancellation/privacy. |
+| 07 VoiceOS | `codex/next-07-voiceos-control` | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `7f892ec2a2156c8f2acc0e02052c1b2215eaeef3` | Resumed for a bounded Trust Kernel-backed, reversible outcome. |
+| 08 Teacher | `codex/next-08-teacher-experience` | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `799d61fdc0529fe617d24ae1690c5712511babd3` | Resumed for tenant authorization gap or coordination with Chat 01 on UI ownership. |
+| 09 HEY One / Models | `codex/next-09-hey-one-models` | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `3ca3a4268cb93b0a3ea30038e2bd4b88f78262cb` | Resumed for a distinct provider routing/configuration gap; coordinator adapted redirect fix to current code. |
+| 10 Ultrasparse | `codex/next-10-ultrasparse-research` | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `fbf82b18e89f3507e96045f884ae78bd57cb1370` | Resumed; only implement reproducible correctness/performance change, no sub-ms claim. |
+| 11 Fusion | `codex/next-11-fusion-models` | `01a14074-9f63-7672-9965-154a8394ffca` | `654c5b1306a5d5479940755de2390dd3c5f3d08f` | Resumed for one distinct safety/cost/recovery gap; prompt digest feature already exists in coordinator. |
+
+### Exact next actions
+
+1. Push coordinator commit `1c95178` and this handoff checkpoint without staging the extracted V3 pack.
+2. Poll all 11 existing task IDs concurrently; record actual progress and latest branch SHAs; review and integrate only scoped source changes that preserve current stronger behavior.
+3. Run focused adversarial tests for each integrated slice, then the full suite/build at the next integration checkpoint; update this handoff with results and worker state.
+4. Keep the local app open at `http://127.0.0.1:5173/download` (or `http://127.0.0.1:5174/download` if port ownership changes). For product-flow proof, obtain a real test account and configured Supabase deployment/provider secrets via the user's service configuration; never place secrets in chat or source control.
