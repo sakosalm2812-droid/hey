@@ -80,6 +80,11 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(route, /filterEntitledProviderAttempts\(getProviderAttempts\(\), entitlements\)/);
   assert.match(route, /parseFusionPricingConfig\(Deno\.env\.get\("HEY_FUSION_PRICING_JSON"/);
   assert.match(route, /orderProviderAttemptsForProfile\(chatProviderAttempts, routingPricing, "lower_cost"\)/);
+  assert.match(route, /authorizeChatProvider = async \(provider: ProviderAttempt\)/);
+  assert.match(route, /await callProvider\(messages, 1200, chatProviderAttempts, authorizeChatProvider\)/);
+  assert.match(route, /if \(authorizeProvider && !await authorizeProvider\(provider\)\)[\s\S]*?const response = provider\.id/);
+  assert.match(route, /if \(response\.ok\) \{\s+if \(authorizeProvider && !await authorizeProvider\(provider\)\)/);
+  assert.match(route, /providerAuthorizationUnavailable[\s\S]*?account_permissions_unavailable/);
   assert.match(client, /getHEYApiUrl\(\).*\/models/);
   assert.match(client, /access_token/);
   assert.match(client, /routingProfile: !fusion && providerProfile === "lower_cost" \? "lower_cost" : undefined/);
