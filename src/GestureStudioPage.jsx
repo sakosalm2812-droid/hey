@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, Hand, Pause, Play, Plus, ShieldCheck, Square, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "./AuthContext.jsx";
-import { gestureEngine } from "./core/gestureEngine.js";
+import { gestureEngine, MIN_GESTURE_CALIBRATION_CONFIDENCE } from "./core/gestureEngine.js";
 import { subscribe } from "./core/eventBus.js";
 import "./GestureStudioPage.css";
 
@@ -117,6 +117,8 @@ export default function GestureStudioPage() {
   const enabledProfileMappings = bindings.filter((binding) => binding.enabled
     && binding.profileId === profileId && binding.actionType === "ui" && binding.action === "summon");
   const canUseActiveMode = enabledProfileMappings.length > 0;
+  const calibrationConfidenceReady = Number.isFinite(latestObservation?.handConfidence)
+    && latestObservation.handConfidence >= MIN_GESTURE_CALIBRATION_CONFIDENCE;
 
   async function createProfile(event) {
     event.preventDefault(); setError(""); setMessage("");
@@ -289,7 +291,8 @@ export default function GestureStudioPage() {
           <form className="hey-gesture-studio__inline-form" onSubmit={createCustom}><label>Custom gesture name<input maxLength={80} value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="For example, my quiet signal"/></label><button type="submit" disabled={!profileId || customGestures.length >= 32}><Plus size={16}/> Create</button></form>
           {customGestures.length > 0 && <label className="hey-gesture-studio__field">Custom gesture<select value={customGestureId} onChange={(event) => setCustomGestureId(event.target.value)}>{customGestures.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.templates.length} samples</option>)}</select></label>}
           {custom && <><p className="hey-gesture-studio__sample-count">{custom.templates.length} / 64 detector samples · {custom.templates.length >= 3 ? customConflicts.status === "clear" ? "No similar trained pose found" : "Similar pose conflict found" : "Three samples required"}</p>{customConflicts.conflicts.map((conflict) => <p key={conflict.gestureId} className="hey-gesture-studio__warning">This pose is similar to “{conflict.name}” ({Math.round(conflict.similarity * 100)}%). Add clearer samples or remove the conflicting profile before mapping.</p>)}
-            <div className="hey-gesture-studio__session-controls"><button type="button" onClick={captureSample} disabled={!active || mode !== "test" || !latestObservation}>Capture current pose</button><button type="button" className="secondary" onClick={testCustom} disabled={custom.templates.length < 3 || !active || mode !== "test"}>Test this pose live</button><button type="button" onClick={mapCustom} disabled={!profileId || custom.templates.length < 3 || customConflicts.status !== "clear" || active || paused}>Map to Dashboard</button><button type="button" className="secondary" disabled={active || paused} onClick={() => { gestureEngine.deleteCustomGesture(custom.id); setCustomGestureId(""); refresh(); }}>Delete custom pose</button></div>
+            {active && mode === "test" && latestObservation && !calibrationConfidenceReady && <p className="hey-gesture-studio__status" role="status" aria-live="polite">Hand tracking is below {Math.round(MIN_GESTURE_CALIBRATION_CONFIDENCE * 100)}% confidence. Keep your hand centered, unobstructed, and well lit; capture will unlock when tracking reaches the threshold.</p>}
+            <div className="hey-gesture-studio__session-controls"><button type="button" onClick={captureSample} disabled={!active || mode !== "test" || !calibrationConfidenceReady}>Capture current pose</button><button type="button" className="secondary" onClick={testCustom} disabled={custom.templates.length < 3 || !active || mode !== "test"}>Test this pose live</button><button type="button" onClick={mapCustom} disabled={!profileId || custom.templates.length < 3 || customConflicts.status !== "clear" || active || paused}>Map to Dashboard</button><button type="button" className="secondary" disabled={active || paused} onClick={() => { gestureEngine.deleteCustomGesture(custom.id); setCustomGestureId(""); refresh(); }}>Delete custom pose</button></div>
           </>}
         </section>
       </>}

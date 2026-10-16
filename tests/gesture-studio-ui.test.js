@@ -26,6 +26,14 @@ test("Gesture Studio requires explicit camera consent and keeps a visible test p
   assert.match(studioSource, /captureCustomGestureSample/);
 });
 
+test("custom-pose capture explains and blocks detector confidence below the engine threshold", () => {
+  assert.match(studioSource, /MIN_GESTURE_CALIBRATION_CONFIDENCE/);
+  assert.match(studioSource, /calibrationConfidenceReady/);
+  assert.match(studioSource, /Hand tracking is below .*confidence/);
+  assert.match(studioSource, /Keep your hand centered, unobstructed, and well lit/);
+  assert.match(studioSource, /disabled=\{!active \|\| mode !== "test" \|\| !calibrationConfidenceReady\}/);
+});
+
 test("Gesture Studio discloses local camera processing and separate MediaPipe metrics before consent", () => {
   const frameDisclosure = studioSource.indexOf("Camera frames and hand poses are processed on this device and are not sent to Google.");
   const metricsDisclosure = studioSource.indexOf("MediaPipe Tasks SDK sends performance and utilization metrics to Google.");

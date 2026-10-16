@@ -52,6 +52,7 @@ const MAX_GESTURE_PROFILES = 32;
 const MAX_GESTURE_BINDINGS = 128;
 const MAX_CUSTOM_GESTURES = 32;
 const MAX_CUSTOM_GESTURE_SAMPLES = 64;
+export const MIN_GESTURE_CALIBRATION_CONFIDENCE = 0.7;
 const MAX_CUSTOM_SAMPLE_VALUES = 128;
 const SAFE_UI_ACTIONS = new Set([
   "summon", "cancel", "navigate_back", "navigate_forward", "minimize", "expand",
@@ -1436,7 +1437,7 @@ export class GestureEngine {
     if (!Array.isArray(data) || data.length !== 63 || data.some((number) => !Number.isFinite(number) || number < -1 || number > 1)) {
       return { success: false, status: "invalid_pose", error: "The local detector returned an invalid pose sample." };
     }
-    if (!Number.isFinite(observation.handConfidence) || observation.handConfidence < 0.7) {
+    if (!Number.isFinite(observation.handConfidence) || observation.handConfidence < MIN_GESTURE_CALIBRATION_CONFIDENCE) {
       return { success: false, status: "low_confidence", error: "Hand tracking confidence is too low. Move into clear view and try again." };
     }
 

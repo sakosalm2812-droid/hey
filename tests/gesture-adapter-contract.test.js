@@ -8,7 +8,7 @@ globalThis.localStorage = {
 };
 const { setAccountScope, getAccountScope, getAccountStorageKey } = await import("../src/core/accountScope.js");
 setAccountScope("gesture-contract-test");
-const { GestureEngine, GESTURE_STATES, gestureEngine } = await import("../src/core/gestureEngine.js");
+const { GestureEngine, GESTURE_STATES, MIN_GESTURE_CALIBRATION_CONFIDENCE, gestureEngine } = await import("../src/core/gestureEngine.js");
 const { subscribe, clearEventListeners } = await import("../src/core/eventBus.js");
 
 function makeStorage({ discardWrites = false } = {}) {
@@ -321,6 +321,57 @@ test("gesture calibration samples are bounded and caller-supplied scores never c
   assert.throws(() => engine.createBinding({ profileId: profile.id, gestureId: custom.id, action: "summon", actionType: "ui" }), /three real detector samples/u);
   assert.equal(engine.getCustomGesture(custom.id).tested, false);
   assert.throws(() => engine.createCustomGesture({ name: "Danger", gestureId: "G01", action: "device.execute", actionType: "device" }), /allowlisted/u);
+});
+
+test("low-confidence detector frames cannot be saved as custom calibration samples", async () => {
+  const { engine, profile } = makeEngine();
+  const custom = engine.createCustomGesture({ name: "Clear open palm", gestureId: "G01", action: "summon", actionType: "ui" });
+  const previousDocument = globalThis.document;
+  const previousOffscreenCanvas = globalThis.OffscreenCanvas;
+  globalThis.document = {
+    createElement(kind) {
+      if (kind !== "canvas") return {};
+      return {
+        getContext() {
+          return {
+            drawImage() {},
+            getImageData() { return { width: 640, height: 480, data: new Uint8ClampedArray(4) }; },
+          };
+        },
+      };
+    },
+  };
+  delete globalThis.OffscreenCanvas;
+  engine.setRecognitionAdapter({
+    kind: "mediapipe-hands-bundled",
+    async detect() { return { id: "G01", confidence: 0.99 }; },
+    getLatestObservation() {
+      return {
+        pose: Array(63).fill(0),
+        handedness: "right",
+        handConfidence: MIN_GESTURE_CALIBRATION_CONFIDENCE - 0.01,
+        timestamp: Date.now(),
+      };
+    },
+  });
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.recognitionMode = "test";
+  engine.activeProfileId = profile.id;
+
+  try {
+    assert.equal((await engine.detectGesture({}, profile, new AbortController().signal)).id, "G01");
+    const result = engine.captureCustomGestureSample(custom.id);
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, "low_confidence");
+    assert.equal(engine.getCustomGesture(custom.id).templates.length, 0);
+  } finally {
+    engine.stopRecognition("test_cleanup");
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
 });
 
 test("camera permission denial leaves recognition inactive and reports no availability", async () => {
