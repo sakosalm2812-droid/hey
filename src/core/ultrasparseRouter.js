@@ -120,7 +120,7 @@ export function createUltraSparseSelector(catalog) {
     for (const [expertIndex, expert] of experts.entries()) {
       for (const [termIndex, term] of expert.terms.entries()) {
         if (!tokenIndex.has(term)) tokenIndex.set(term, []);
-        tokenIndex.get(term).push({ expertIndex, bit: 1 << termIndex });
+        tokenIndex.get(term).push((expertIndex << 5) | termIndex);
       }
     }
     return true;
@@ -142,7 +142,9 @@ export function createUltraSparseSelector(catalog) {
     prepareIndexed();
     candidateExpertIndices.length = 0;
     for (const token of normalized.tokenSet) {
-      for (const { expertIndex, bit } of tokenIndex.get(token) || []) {
+      for (const posting of tokenIndex.get(token) || []) {
+        const expertIndex = posting >>> 5;
+        const bit = 1 << (posting & 31);
         if (expertMasks[expertIndex] === 0) candidateExpertIndices.push(expertIndex);
         expertMasks[expertIndex] |= bit;
       }

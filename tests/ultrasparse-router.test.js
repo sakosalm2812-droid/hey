@@ -131,6 +131,22 @@ test("adaptive strategy switches at the documented 20-expert boundary with exact
   assert.equal(atBoundary.prepareIndexed(), false);
 });
 
+test("explicit indexed prewarm is idempotent and its prepared selector is reusable", () => {
+  const catalog = Array.from({ length: 64 }, (_, index) => ({
+    id: `prewarm-${String(index).padStart(3, "0")}`,
+    terms: ["shared", `unique${index}`, `detail${index}`],
+  }));
+  const selector = createUltraSparseSelector(catalog);
+  assert.equal(selector.prepareIndexed(), true);
+  assert.equal(selector.prepareIndexed(), false);
+
+  const queries = ["shared", "unique63 detail63", "no matching term", `${"noise ".repeat(700)}unique0`];
+  for (let repetition = 0; repetition < 5; repetition += 1) {
+    for (const query of queries) assert.deepEqual(selector.select(query), selector.selectLinear(query));
+  }
+  assert.equal(selector.prepareIndexed(), false);
+});
+
 test("adaptive selector preserves exact output under high fanout and adversarial query shapes", () => {
   const catalog = Array.from({ length: 500 }, (_, expertIndex) => ({
     id: `expert-${String(expertIndex).padStart(4, "0")}`,
