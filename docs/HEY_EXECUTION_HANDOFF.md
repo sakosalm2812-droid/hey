@@ -11,7 +11,14 @@ Completed local parallel workers from the previous checkpoint (both GPT-6 Luna /
 
 Full combined checks: **734/734** Node tests; production build successful; changed-file ESLint covers both integrated changes; `git diff --check` passed. The actual app remains open at `http://127.0.0.1:5175/login`; browser showed the real login UI with disabled sign-in because Supabase URL/public anon key are absent. No authenticated feature was demonstrated. Supabase/Forge, providers, native device and production remain **UNVERIFIED**. No local collaboration worker is active at this checkpoint.
 
-Exact next actions: update the requirement step ledger to this checkpoint, commit and push the handoff; choose next independent incomplete requirements from the authoritative Step 46/47 and vertical workstream prompts for parallel work; keep authenticated/runtime claims gated on missing service configuration. Continue reviewing and integrating one scoped branch at a time. Do not mark a workstream complete based on code presence.
+Active parallel work after checkpoint `a82e677` (GPT-6 Luna / High, isolated worktrees being prepared):
+
+| Worker | Collaboration task reference | Target branch | Scope / current state |
+|---|---|---|---|
+| `/root/step46_contracts` | `/root/step46_contracts` | `codex/wave7-step46-contract-semantics` | Step 46 bounded read-only semantic JSON contract comparison, fail-closed/adversarial tests; worktree setup and commit pending. Must preserve untracked requirements extraction. |
+| `/root/step47_gate` | `/root/step47_gate` | `codex/wave7-step47-gate` | Step 47 concrete release-gate evidence coverage improvement with adversarial tests; worktree setup and commit pending. Must not overlap Step 46 files or claim readiness. |
+
+Exact next actions: collect candidate commit/check reports; inspect the full diffs and overlap; run focused suites, changed-file lint/build/diff-check on each candidate; cherry-pick reviewed changes; rerun full suite/build/scoped lint; update this handoff and the 47-step ledger; commit and push each integration checkpoint. Keep authenticated/runtime claims gated on missing service configuration. Do not mark a workstream complete based on code presence.
 
 ---
 
