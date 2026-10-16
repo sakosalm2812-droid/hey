@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [appSource, layoutSource, settingsSource, toolsSource, studioSource, bridgeSource] = await Promise.all([
+const [appSource, layoutSource, settingsSource, toolsSource, studioSource, bridgeSource, engineSource] = await Promise.all([
   readFile(new URL("../src/App.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/layout/AppLayout.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/SettingsPage.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/ToolLibraryPage.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/GestureStudioPage.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/layout/GestureActionBridge.jsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/core/gestureEngine.js", import.meta.url), "utf8"),
 ]);
 
 test("Gesture Studio has a protected route and entry points from navigation, Settings, and Tools", () => {
@@ -74,6 +75,13 @@ test("Gesture Studio camera selection is profile-scoped and enumeration does not
   assert.match(studioSource, /Finding cameras does not open the camera or request permission/);
   assert.match(studioSource, /editProfile\("cameraId", event\.target\.value \|\| null\)/);
   assert.match(studioSource, /I consent to camera use for this gesture session/);
+});
+
+test("a missing profile camera explains how to recover while preserving the saved choice", () => {
+  assert.match(engineSource, /selected_camera_unavailable/);
+  assert.match(engineSource, /The selected camera is unavailable\. Choose a listed camera or System default, then start again\./);
+  assert.match(engineSource, /profile\.cameraId \? \{ exact: profile\.cameraId \} : undefined/);
+  assert.match(studioSource, /setError\(failure\?\.message \|\| "Gesture recognition could not start\."\)/);
 });
 
 test("ending an active camera session requires fresh consent before restart", () => {

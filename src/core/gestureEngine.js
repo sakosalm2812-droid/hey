@@ -219,11 +219,18 @@ function validateCustomGesture(value, expectedId) {
   return gesture;
 }
 
-function classifyCameraFailure(error) {
+function classifyCameraFailure(error, { selectedCamera = false } = {}) {
   let name = "";
   try { name = typeof error?.name === "string" ? error.name : ""; } catch { /* Host errors can be accessor-backed. */ }
   if (name === "NotAllowedError" || name === "SecurityError") {
     return { status: "permission_denied", code: "camera_permission_denied" };
+  }
+  if (selectedCamera && ["NotFoundError", "OverconstrainedError", "ConstraintNotSatisfiedError"].includes(name)) {
+    return {
+      status: "unavailable",
+      code: "selected_camera_unavailable",
+      error: "The selected camera is unavailable. Choose a listed camera or System default, then start again.",
+    };
   }
   return { status: "unavailable", code: "camera_unavailable" };
 }
@@ -948,12 +955,16 @@ export class GestureEngine {
         this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: "adapter_unavailable" });
         return { success: false, error: "The local hand detector could not be initialized.", code: "adapter_unavailable" };
       }
-      const failure = classifyCameraFailure(error);
+      const failure = classifyCameraFailure(error, { selectedCamera: Boolean(profile.cameraId) });
       this.setCameraCapabilityStatus(failure.status, failure.code);
       this.stopRecognition("start_failed");
       this.recognitionState = GESTURE_STATES.ERROR;
       this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: failure.code });
-      return { success: false, error: failure.code === "camera_permission_denied" ? "Camera permission was denied." : "Camera capture is unavailable.", code: failure.code };
+      return {
+        success: false,
+        error: failure.error || (failure.code === "camera_permission_denied" ? "Camera permission was denied." : "Camera capture is unavailable."),
+        code: failure.code,
+      };
     }
   }
 

@@ -194,6 +194,52 @@ test("selected account camera persists and is passed to capture only after conse
   assert.equal(engine.getProfile(profile.id).cameraId, null);
 });
 
+test("a disconnected profile camera reports actionable recovery without silently switching devices", async () => {
+  for (const name of ["NotFoundError", "OverconstrainedError", "ConstraintNotSatisfiedError"]) {
+    const { engine, profile } = makeEngine();
+    engine.updateProfile(profile.id, { cameraId: "saved-camera-id" });
+    engine.setRecognitionAdapter({ kind: "test-contract", async detect() { return null; }, stop() {} });
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { mediaDevices: { async getUserMedia(constraints) {
+        assert.deepEqual(constraints.video.deviceId, { exact: "saved-camera-id" });
+        const failure = new Error("selected camera is gone");
+        failure.name = name;
+        throw failure;
+      } } },
+    });
+    globalThis.document = { createElement: () => ({}) };
+
+    const result = await engine.startRecognition(profile.id, { consent: true, mode: "test" });
+
+    assert.equal(result.success, false, name);
+    assert.equal(result.code, "selected_camera_unavailable", name);
+    assert.match(result.error, /Choose a listed camera or System default/u);
+    assert.equal(engine.cameraCapabilityStatus, "unavailable");
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+    assert.equal(engine.getProfile(profile.id).cameraId, "saved-camera-id");
+  }
+});
+
+test("generic camera discovery failures do not claim the selected profile camera is missing", async () => {
+  const { engine, profile } = makeEngine();
+  engine.setRecognitionAdapter({ kind: "test-contract", async detect() { return null; }, stop() {} });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() {
+      const failure = new Error("no devices available");
+      failure.name = "NotFoundError";
+      throw failure;
+    } } },
+  });
+  globalThis.document = { createElement: () => ({}) };
+
+  const result = await engine.startRecognition(profile.id, { consent: true, mode: "test" });
+
+  assert.equal(result.code, "camera_unavailable");
+  assert.doesNotMatch(result.error, /selected camera/u);
+});
+
 test("malformed or unreadable gesture storage blocks profile mutation without replacing saved bytes", () => {
   const memory = makeStorage();
   setAccountScope("gesture-hostile-store");
