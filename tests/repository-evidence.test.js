@@ -173,6 +173,7 @@ test("bounded JSON Schema comparison reports structural contract changes without
       dependentRequiredChanges: 0,
       propertyBoundChanges: 0,
       stringLengthBoundChanges: 0,
+      arrayCardinalityBoundChanges: 0,
       itemsChanges: 0,
       enumChanges: 1,
       constChanges: 0,
@@ -185,6 +186,62 @@ test("bounded JSON Schema comparison reports structural contract changes without
     assert.ok(report.entries.every((entry) => !Object.keys(entry).some((key) => key.startsWith("_schema"))));
     assert.deepEqual(readFileSync(path.join(root, beforePath)), originalBefore);
     assert.deepEqual(readFileSync(path.join(root, afterPath)), originalAfter);
+  });
+});
+
+test("minItems and maxItems use one dedicated aggregate count and do not double-count generic constraints", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    const base = {
+      $schema: dialect,
+      $id: "array-cardinality-contract",
+      type: "array",
+      items: { type: "string" },
+      maxItems: Number.MAX_SAFE_INTEGER,
+    };
+    writeJson(root, "contracts/a-array.schema.json", { ...base, minItems: 0 });
+    writeJson(root, "contracts/z-array.schema.json", { ...base, minItems: 1 });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-array.schema.json", "contracts/z-array.schema.json"],
+    });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantic_diff");
+    assert.equal(comparison.changes.arrayCardinalityBoundChanges, 1);
+    assert.equal(comparison.changes.constraintChanges, 0);
+    assert.equal(comparison.changes.itemsChanges, 0);
+    assert.doesNotMatch(JSON.stringify(report), /array-cardinality-contract|9007199254740991/);
+  });
+});
+
+test("array cardinality bounds reject malformed values and unsupported dialects", () => {
+  withRoot((root) => {
+    const modern = "https://json-schema.org/draft/2020-12/schema";
+    for (const [id, key, value] of [
+      ["negative-items", "minItems", -1],
+      ["fractional-items", "maxItems", 1.5],
+      ["string-items", "minItems", "0"],
+      ["unsafe-items", "maxItems", Number.MAX_SAFE_INTEGER + 1],
+    ]) {
+      writeJson(root, `contracts/a-${id}.schema.json`, { $schema: modern, $id: id, [key]: value });
+      writeJson(root, `contracts/z-${id}.schema.json`, { $schema: modern, $id: id, minItems: 0 });
+    }
+    const unsupported = "http://json-schema.org/draft-03/schema#";
+    writeJson(root, "contracts/a-unsupported-items-dialect.schema.json", { $schema: unsupported, $id: "unsupported-items-dialect", minItems: 0 });
+    writeJson(root, "contracts/z-unsupported-items-dialect.schema.json", { $schema: unsupported, $id: "unsupported-items-dialect", maxItems: 10 });
+    const paths = [
+      "contracts/a-negative-items.schema.json", "contracts/z-negative-items.schema.json",
+      "contracts/a-fractional-items.schema.json", "contracts/z-fractional-items.schema.json",
+      "contracts/a-string-items.schema.json", "contracts/z-string-items.schema.json",
+      "contracts/a-unsafe-items.schema.json", "contracts/z-unsafe-items.schema.json",
+      "contracts/a-unsupported-items-dialect.schema.json", "contracts/z-unsupported-items-dialect.schema.json",
+    ];
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: paths });
+    assert.ok(report.entries.filter(({ path: itemPath }) => /a-(?:negative|fractional|string|unsafe)-items\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_schema_features"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => /z-(?:negative|fractional|string|unsafe)-items\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "supported_profile"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => itemPath.includes("unsupported-items-dialect")).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_format"));
+    assert.ok(report.contractSemanticComparisons.every(({ status }) => status === "unsupported_schema_profile"));
+    assert.doesNotMatch(JSON.stringify(report), /9007199254740992/);
   });
 });
 
