@@ -28,7 +28,7 @@ The running local UI is `http://127.0.0.1:5175/`. Browser verification observed 
 
 Live continuation delta (2026-10-15): coordinator source commit `0e26e54`; PWA install UX and safe post-login redirect changes pass the full Node suite **517/517**, focused PWA/redirect tests **6/6**, changed-file ESLint, `git diff --check`, and production build. Browser inspection verified only the local `/download` entrypoint and manual install guidance toggle. This does not prove the actual browser install event, signed-in redirect callback, account/database/provider/native integration; Steps 02 and 42 remain **In progress**, not complete. Eleven existing specialist chats are active in parallel under task-specific requirements briefs; see the live override and worker table in `HEY_EXECUTION_HANDOFF.md`.
 
-Updated: 2026-10-15
+Updated: 2026-10-16
 Repository branch: `codex/resume-emergency-2026-10-14`  
 Latest verified implementation checkpoint: `5f09406` (source); full Node suite 500/500 passed; model/Fusion/Edge focused suites 73/73 and standalone Fusion suite 34/34 passed; changed-file ESLint, `git diff --check`, and production Vite build passed. Fusion authority now uses owner-bound permission epochs for local routing and authenticated server entitlements at the Edge boundary; deadline exhaustion blocks subsequent provider dispatch. New evidence includes accessible Space tool membership UI, bounded typed tool invocation with per-step authorization, mandate-bound lease renewal (static/mock only), explicit snippet edit proposals, lifecycle fencing for sensitive action previews and undo, teacher answer-key checks at HEY read/export boundaries, and skewed Ultrasparse benchmark cases. No external database/deployment, browser E2E, native, or provider-runtime validation was performed.
 
@@ -41,6 +41,27 @@ Latest verified implementation checkpoint: `5f09406` (source); full Node suite 5
 The active supplied program is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUILD_PROGRAM (3).txt` (932,280 characters; SHA-256 `3C48112DF44CB77ED97E04787097F34D376AB05E5ECD99C59DDB6B7DB3AAE401`), alongside Source A `HEY_FINAL_ABSOLUTE_SOURCE_OF_TRUTH_COMBINED (1).md` (8,429,711 characters; SHA-256 `E617DFE4CA2E9C1DD753B53D3002C9E694BBB1582728D1AEF725D92F11E2B82D`) and newer Source C refinements. Their full indexed source recovery and per-worker specifications are in `docs/requirements/`. The program contains all 47 prompts; its older package-first wording is applied under Source C precedence and the direct instruction to implement in the existing HEY repository. The separate historical 4,210-item concept ledger is not included and Source C says it is not HEY's feature target.
 
 ## Step status
+
+### Latest evidence delta — 2026-10-16, coordinator integrations through `a0df523`
+
+These additions update the detailed per-step records below; no workstream is promoted to `Implemented`. The integrated coordinator suite passes **828/828**, full ESLint passes, the production build succeeds with **2,779 modules**, and built-SPA smoke passes for `/login`, `/download`, and the entry asset. The local app still lacks Supabase URL/public key, so signed-in UI and live services are unverified.
+
+- **Step 02 — Identity / Onboarding:** Signed-in Chat now presents first-run reasons to use HEY with multi-select purposes, optional custom goals, and Skip; values persist per account and read back before being reported saved (`a0df523`; focused onboarding tests 12/12). This does not grant permissions or prove authenticated browser use.
+- **Step 07 — Agent & Expert Fabric:** Tool Library's natural-language dictation entry now checks browser speech-recognition support and queries microphone permission state without opening capture (`3963990`; worker focused tests 25/25). API errors are shown as unknown; real hardware permission behavior and cross-app insertion remain unverified.
+- **Step 11 — Computer Use / OS Control:** Expired preview refresh can now be cancelled while checking; the original request remains recoverable and late preview tokens are cancelled (`d88258e`; chat/VoiceOS focused tests 13/13). This adds no execution authority or OS adapter.
+
+The fresh specialist continuations are concurrent. Completed but not yet integrated worker receipts are Edge lease floor `fc6d7a1`, Gesture calibration `753a830`, provider error-body cancellation `7089b39`, UltraSparse top-k ambiguity `db22001`, and Fusion provider-attempt receipts `c1b9971`; source branches and their verification claims are recorded in `HEY_EXECUTION_HANDOFF.md`. These do not promote a status until coordinator integration checks complete.
+
+### Prior evidence delta — 2026-10-16, coordinator integrations through `6dd5c54`
+
+These additions update the detailed per-step records below; they do not promote a workstream to `Implemented`. The coordinator full suite passes **817/817**, full lint passes, and the final production build succeeded with **2,777 modules**. Built-SPA smoke passed for `/login`, `/download`, and the entry bundle. Local Supabase configuration is still missing, so authenticated UI and live integration are not verified.
+
+- **Step 06 — Model & Provider Fabric:** Dictation's microphone permission probe now attempts to stop each returned track independently and fails closed if cleanup is malformed or incomplete, so recognition never starts after uncertain release (`68dcea8`; 14 focused dictation tests passed). This does not prove real microphone or provider behavior.
+- **Step 07 — Agent & Expert Fabric:** Tool Library now maps the V3 cross-app dictation request to the real Chat entrypoint and provides bounded natural-language catalog search with accessor-safe snapshots (`2b317f9`, hardened in `8939667`; included in 817/817). This does not provide OS-wide text insertion or native permissions.
+- **Step 10 — Device Mesh:** Device claims now require a bounded idempotency key and replay only the same still-active lease; stale/revoked claims fail closed (`f2545cc`, migration `20261016000400`; queue/transport focused tests passed). PostgreSQL execution and live devices remain unverified.
+- **Step 11 — Computer Use / OS Control:** An expired VoiceOS preview can be refreshed only into a new inert preview of the original request; the text is recoverable on failure, account changes are fenced, and refreshed content requires separate review (`546314c`; focused UI/context suite 7/7). No action is executed by refresh; native control remains unavailable.
+- **Steps 29 and 31 — Learning / Education:** Teacher assessment authoring now supports 1–20 questions. The answer key remains Teacher-only and the generated student worksheet excludes answer content (`25abd54`; worker focused suite 51/51, coordinator full suite 817/817). Forge live persistence and signed-in browser use remain unverified.
+- **Steps 02 and 27 — Spaces / Artifacts:** Private Space exports omit account identifiers; imports validate a bounded versioned package, remap IDs, bind to the active account after explicit confirmation, and now have download/file-picker preview, cancel, and import controls (`6dd5c54`, `862f7e6`; combined Space API/UI suite 38/38). This is user-controlled file transfer, not cloud sync; the signed-in browser journey is unverified.
 
 | # | Program subsystem | Status | Repository evidence and remaining proof gap |
 |---:|---|---|---|

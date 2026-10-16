@@ -1,4 +1,66 @@
-## Active continuation — 2026-10-16, current checkpoint
+## Current authoritative handoff — 2026-10-16 (Asia/Baghdad)
+
+Coordinator checkout: `C:\Users\DELL\Documents\Codex\2026-10-14\hey-emergency-continuation-resume-execution-the\work\hey`
+Coordinator branch: `codex/resume-emergency-2026-10-14`
+Integrated source HEAD: `a0df523` (`Add first-run purpose setup to chat`). Remote origin still points to `b98629689c547017f22a4de224bbd229fb6ae5a5`; the current integration batch is not pushed yet. The untracked `docs/requirements/v3-agent-pack/` extraction is intentionally preserved.
+
+### Implementations integrated since the prior checkpoint
+
+| Capability | Worker task / source checkpoint | Coordinator commit | Verified behavior and limit |
+|---|---|---|---|
+| Tool Library natural-language entry | `01a14073-ae0b-7fa2-a145-2d4b3283f087`, `1bde1c0` | `2b317f9`, hardened in `8939667` | Routes the V3 cross-app dictation request to the truthful Chat entrypoint; bounded descriptor-only search rejects getters and oversized input. Browser/microphone consent and actual cross-app insertion are still not proven. |
+| Conversation-bound voice asks | `01a14073-33bf-7403-940b-871cd0de9ebc`, `6f0912e` | `8939667` | Voice asks inherit the current chat ID and retain returned IDs while preserving computer-preview interception. Focused binding tests pass. |
+| Conservative UltraSparse routing | `01a14074-6e4f-79e2-805f-30ce26dab60e`, `2f79794` | `e0fc59a` | Weak/tied lexical matches abstain and preserve the ordinary planner; selector tests reported 81/81 on worker. No live inference claim. |
+| Fusion failure receipts | `01a14074-9f63-7672-9965-154a8394ffca`, `194c06f` | `53763ce` | Failed/interrupted requests report bounded calls and explicitly unknown metering rather than invented spend or a partial answer; focused root tests pass. No live provider call. |
+| Gesture camera selection | `01a14073-de07-7a90-b8bb-08faadea17bc`, `44fd13f` | `5274009` | Enumerates/selects account-scoped cameras without opening capture permission; the selected device is used only after consent. Physical-camera behavior remains unverified. |
+| Expired VoiceOS preview recovery | `01a14074-1024-7e32-a5c1-c134d8e204a7`, `8f86470` | `546314c` | Expired inert previews can request a new preview of the original text; refreshing never executes it. Account fencing and separate review remain. Expiry recovery copy is translated in en/ku/ar. |
+| Multi-question Teacher quiz | `01a14074-2bb4-7b73-af09-a38e11a10c3d`, `4d895e0` | `25abd54` | Teacher can author 1–20 questions; private answers remain in the Teacher key, student worksheet omits them. Forge/UI live flow remains unverified. |
+| Dictation permission-probe cleanup | `01a14073-f7e7-7601-8957-8d8cdfafa1d0`, `1197c74` | `68dcea8` | Every microphone probe track is independently stopped; incomplete or malformed cleanup blocks recognition. Live browser microphone remains unverified. |
+| Idempotent device command claim | `01a14073-c424-70e2-9773-630d488b24ae`, `f0408ac` | `f2545cc` | Bounded per-device key replays the same active lease; stale/revoked claims fail closed. SQL migration is statically tested only; no local PostgreSQL/Supabase execution. |
+| Portable private Space transfer API | `01a14073-9827-7f42-bf35-4eb2faee522d`, `f73c1e3`; durable snapshot source `d13e734` already existed in coordinator content | `6dd5c54` | Export omits account IDs; import validates and remaps IDs, then binds copies to current account after confirmation. |
+| Portable Space transfer UI | Same task, `db7e0ce` | `862f7e6` | Spaces page now downloads JSON and offers size-limited file selection, preview, cancel, and explicit import. No authenticated browser journey is possible with current missing Supabase configuration. |
+| Dictation readiness in Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087`, source `b2c9b46` | `3963990` | Natural-language dictation discovery reports browser speech-recognition support and known microphone permission state without opening the microphone. Permission API errors remain unknown; real device state remains unverified. Focused suite 25/25. |
+| First-run purpose setup | `01a14073-33bf-7403-940b-871cd0de9ebc`, source `2d17a50` | `a0df523` | Signed-in Chat offers multi-select purposes, optional custom goals, and Skip; choices persist per account and do not grant permissions. Focused tests 12/12; live authenticated use remains unverified. |
+| Cancellable expired-preview refresh | Coordinator continuation | `d88258e` | Expired VoiceOS refresh has its own abort controller and visible cancel action; cancellation keeps the original request and drops late previews. English/Kurdish/Arabic copy and source-contract regression added; focused chat/VoiceOS suite 13/13. Live OS execution remains unverified. |
+
+Coordinator verification on integrated source through `a0df523`: full Node suite **828/828**, full `npm run lint`, production build (**2,779 modules**), SPA smoke for `/login`, `/download`, and `/assets/index-hsW1c2Bm.js`, plus `git diff --check`. Other worker evidence: #04 lease floor 26 focused + 818 full, #05 Gesture 56, #09 provider response 55, #10 UltraSparse 87, #11 Fusion 94; each reports lint/build except #09, whose checkout lacked dependencies (syntax checks passed). Build may skip sitemap without `SITE_URL` and emits the known mixed static/dynamic `contextManager.js` warning.
+
+### Existing worker tasks and current state
+
+All 11 specialist task references are preserved. Fresh concurrent continuations for all 11 requested GPT-6 Luna / High where available, isolated branches based on coordinator `a0df523`, distinct implementations, tests and commits. Latest task-list snapshot after dispatch: 8 active, 3 idle/completing prior turns; their follow-ups are delivered and task acceptance should be checked before assuming active work. Completed unmerged worker receipts: #04 `fc6d7a1`, #05 `753a830`, #09 `7089b39`, #10 `db22001`, #11 `c1b9971`. Refresh status and branch receipts before each integration.
+
+| Specialist | Codex task reference | Preserved branch/checkpoint | Latest coordinator integration / next state |
+|---|---|---|---|
+| Frontend Director | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/voice-edit-chat-ui-fbeedd6` / `cb0717e`; `codex/frontend-followup-6dd5c54` / `2d17a50` | Voice binding and first-run purpose setup integrated in `8939667`/`a0df523`; purpose-to-recommendation continuation dispatched. |
+| Onboarding & Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-recovery-durable-port` / `d13e734`; `codex/space-portable-transfer` / `f73c1e3`, UI `db7e0ce` | API/UI integrated in `6dd5c54`/`862f7e6`; recovery/conflict continuation dispatched. |
+| Universal Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-outcome-recovery-fbeedd6` / `4c93178`; discovery `1bde1c0`; readiness `b2c9b46` | Discovery, hardening, and readiness integrated through `3963990`; lifecycle continuation dispatched. |
+| Edge & Everywhere | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-everywhere-delivery-fbeedd6` / `20ee507`; claim `f0408ac`; lease floor `fc6d7a1` | Idempotent claim integrated; 1-second minimum lease floor is a completed, unmerged receipt. Migrations `00300`–`00500` await live DB validation. |
+| Gesture Control | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-recovery-ui-fbeedd6` / `ea35c61`; camera `44fd13f`; calibration `753a830` | Camera selector integrated; low-confidence calibration recovery is a completed, unmerged receipt; new calibration continuation dispatched. |
+| Flow & Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-runtime-fbeedd6` / `f52d2a3`; `codex/flow-runtime-f52d2a3-next` / `1197c74` | Probe cleanup integrated; safe edit-by-voice preview-contract continuation dispatched. |
+| VoiceOS & Computer Control | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-preview-ui-current` / `7d75bd5`; recovery `8f86470` | Refresh cancellation integrated in `d88258e`; worker is adding typed/spoken cancellation and must be reviewed for overlap. |
+| Teacher Experience | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-artifact-lifecycle-fbeedd6` / `5bd4349`; question bank `4d895e0` | Question-bank UI integrated; standalone handout remains in progress after a recent recovery-test failure; accept only after final suite passes. |
+| HEY One Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-hey-one-models` / `d8a195f`; error-body cancellation `7089b39` | Provider error-body cancellation is a completed, unmerged receipt; evaluation-provenance continuation dispatched. |
+| UltraSparse Research | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-planner-parity` / `059aad7`; routing `2f79794`; top-k parity `db22001` | Abstention integrated; top-k tie preservation is a completed, unmerged receipt; benchmark continuation dispatched. |
+| Fusion Multi-Model | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-cancel-persist` / `8322771`; receipt `c1b9971`; spend `194c06f` | Spend-on-failure integrated; provider-attempt attribution is a completed, unmerged receipt; partial-provider behavior continuation dispatched. |
+
+### Live application proof and exact blockers
+
+- Local app URL: `http://127.0.0.1:5175`; launch from the coordinator checkout with `npm run dev -- --host 127.0.0.1 --port 5175`.
+- Actual browser inspection at `/download` rendered the live HEY frontend and truthful target status: web source verified; desktop needs native builds; iOS/Android need native projects. This proves local route rendering only.
+- `/login` disables sign-in because `VITE_SUPABASE_URL` and the public Supabase anon key are absent. No credentials were entered. Authenticated Spaces, Teacher, provider, and real chat flows are therefore **UNVERIFIED** in the browser.
+- Supabase/Forge, provider inference, PostgreSQL migrations, camera/microphone permissions on hardware, native apps, and production deployment remain **UNVERIFIED**. Tests use local fixtures/mocks or static SQL checks where documented.
+
+### Current state and exact next actions
+
+- Source is committed through `a0df523`; integrated full checks pass 828/828, lint, build, and route smoke. The intentionally preserved untracked item is `docs/requirements/v3-agent-pack/`.
+- Update the current task-list snapshot after worker receipts, then repeat the relevant focused/full checks for each integration batch.
+- Review and integrate completed unmerged worker receipts `fc6d7a1`, `753a830`, `7089b39`, `db22001`, and `c1b9971` after diff review and full verification; retain every source branch/worktree.
+- Update `docs/HEY_STEP_STATUS.md` only from code and current tests, and keep every step `In progress`/`Incomplete` until its specified capability chain and real-app evidence are demonstrated.
+- Commit the refreshed handoff and step evidence, push the coordinator branch checkpoint, then continue integrating the active workers.
+
+---
+
+## Superseded continuation snapshot — 2026-10-16
 
 Coordinator branch: `codex/resume-emergency-2026-10-14`; integration HEAD `035ce282ce739dbb62b27eb318cf4dc39baee24d`; latest pushed handoff checkpoint `a7ddb3fdc2b8c5990ac801e7749cff92a17ad68e`. Commit `035ce28` adds the verified post-build SPA route and entry-bundle smoke to CI. Coordinator full Node suite: **793/793**; production build: **2,774 modules**; actual built-app HTTP smoke passed for `/login`, `/download`, and `/assets/index-06y-kbx-.js`; Step 47 focused smoke suite **11/11**, including occupied-port cleanup. Changed-file ESLint and diff check pass. The dev server at `http://127.0.0.1:5175` was restarted after the browser exposed a dead-server error; CUA now visibly renders the real `/download` page. Keep the V3 pack extraction untracked and preserve all worker worktrees.
 
