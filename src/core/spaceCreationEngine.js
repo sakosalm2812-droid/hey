@@ -306,14 +306,19 @@ export class SpaceCreationEngine {
       ? globalThis.window
       : null;
     this.handleStorageEvent = (event) => {
-      if (!event || (event.key !== getAccountStorageKey(STORAGE_KEY, this.accountScope) && event.key !== null)) return;
+      const scope = this.accountScope;
+      if (!event || (event.key !== getAccountStorageKey(STORAGE_KEY, scope) && event.key !== null)) return;
       try {
         if (event.storageArea && globalThis.localStorage && event.storageArea !== globalThis.localStorage) return;
       } catch {
         return;
       }
-      const refreshed = this.refreshFromStorage(this.accountScope, { notify: true });
-      if (refreshed.error) this.loadError = true;
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error && getAccountScope() === scope && this.accountScope === scope) {
+        this.spaces.clear();
+        this.loadError = true;
+        this.notify("storage_sync_error", { accountScope: scope, error: "Space storage could not be read" });
+      }
     };
     this.storageEventTarget?.addEventListener("storage", this.handleStorageEvent);
   }
@@ -345,7 +350,10 @@ export class SpaceCreationEngine {
       }
       return { success: true };
     } catch {
-      this.loadError = true;
+      if (getAccountScope() === scope && this.accountScope === scope) {
+        this.spaces.clear();
+        this.loadError = true;
+      }
       return { error: "Space storage could not be read" };
     }
   }

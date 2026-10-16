@@ -646,7 +646,27 @@ test("Space storage events refresh current-account preferences and ignore invali
     storage.setItem(key, "{ malformed");
     dispatchStorage(key);
     assert.equal(observer.getLayoutPreferences(created.space.id).error, "Space storage could not be read");
+    assert.equal(observer.spaces.size, 0);
+    assert.ok(changes.includes("storage_sync_error"));
     assert.equal(storage.values.get(key), "{ malformed");
+
+    storage.setItem(key, persisted);
+    dispatchStorage(key);
+    assert.equal(observer.loadError, false);
+    assert.deepEqual(observer.getLayoutPreferences(created.space.id).favoriteToolIds, ["tool.focus"]);
+    assert.equal(changes.filter((event) => event === "storage_synced").length, 4);
+
+    setAccountScope("space-layout-sync-other-owner");
+    const other = new SpaceCreationEngine();
+    const otherCreated = other.confirmNaturalLanguagePreview({
+      previewId: other.previewNaturalLanguageRequest({ prompt: "Create a space called Other account" }).previewId,
+      confirm: true,
+    });
+    dispatchStorage(getAccountStorageKey("hey_spaces"));
+    const otherSpaceIds = observer.getSpaces().map((space) => space.id);
+    assert.deepEqual(otherSpaceIds, [otherCreated.space.id]);
+    dispatchStorage(key);
+    assert.deepEqual(observer.getSpaces().map((space) => space.id), [otherCreated.space.id]);
   } finally { setAccountScope(previousScope); }
 }));
 
