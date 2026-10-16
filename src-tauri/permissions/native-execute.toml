@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "allow-native-execute"
-description = "Enables the frontend to invoke the native_execute command, which runs validated native actions (browser, filesystem, terminal) with strict safety guards."
-commands = { allow = ["native_execute"] }
+description = "Enables the frontend to invoke validated native actions and the read-only application postcondition observer."
+commands = { allow = ["native_execute", "native_observe_application"] }

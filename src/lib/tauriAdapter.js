@@ -35,6 +35,9 @@ export function createTauriAdapter() {
     async execute({ capability, input = {} }) {
       return invoke("native_execute", { capability, input });
     },
+    async observeApplication({ appId, processId = null, expectedUrl = null }) {
+      return invoke("native_observe_application", { appId, processId, expectedUrl });
+    },
   };
 }
 

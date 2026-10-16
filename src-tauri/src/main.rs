@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use sysinfo::System;
+use sysinfo::{Pid, System};
 use wait_timeout::ChildExt;
 
 #[derive(Serialize)]
@@ -137,10 +137,17 @@ fn launch_chrome(capability: &str, input: &Value) -> NativeResult {
         Some(path) => path,
         None => return failure(capability, "Google Chrome was not found on this desktop."),
     };
-    let url = input.get("url").and_then(Value::as_str).map(valid_http_url).transpose();
-    let url = match url {
-        Ok(url) => url,
-        Err(error) => return failure(capability, error),
+    let url = if capability == "app.open" {
+        match input.get("url").and_then(Value::as_str) {
+            Some("about:blank") | None => Some("about:blank".to_string()),
+            _ => return failure(capability, "Opening Chrome is limited to a blank page in this approved action."),
+        }
+    } else {
+        let url = input.get("url").and_then(Value::as_str).map(valid_http_url).transpose();
+        match url {
+            Ok(url) => url,
+            Err(error) => return failure(capability, error),
+        }
     };
     let mut command = Command::new(&executable);
     command.arg("--new-window");
@@ -159,6 +166,58 @@ fn launch_chrome(capability: &str, input: &Value) -> NativeResult {
         Ok(Some(status)) => failure(capability, format!("Chrome exited before the request could be accepted: {status}")),
         Err(error) => failure(capability, format!("Chrome launched but could not be verified: {error}")),
     }
+}
+
+fn observe_chrome_application(process_id: Option<u32>, expected_url: Option<&str>) -> NativeResult {
+    let capability = "app.open";
+    let executable = match chrome_executable() {
+        Some(path) if path.exists() => path,
+        _ => return failure(capability, "Google Chrome was not found on this desktop."),
+    };
+    let executable = match fs::canonicalize(&executable) {
+        Ok(path) => path,
+        Err(error) => return failure(capability, format!("Could not resolve the Chrome executable: {error}")),
+    };
+
+    let Some(process_id) = process_id else {
+        return success(capability, serde_json::json!({
+            "appId": "chrome",
+            "installed": true,
+            "executablePath": executable,
+        }));
+    };
+    if expected_url != Some("about:blank") {
+        return failure(capability, "The Chrome observer only accepts the approved blank-page target.");
+    }
+
+    let mut system = System::new_all();
+    system.refresh_all();
+    let Some(process) = system.process(Pid::from_u32(process_id)) else {
+        return failure(capability, "The launched Chrome process is no longer running.");
+    };
+    let Some(process_executable) = process.exe() else {
+        return failure(capability, "The launched process executable could not be observed.");
+    };
+    let process_executable = match fs::canonicalize(process_executable) {
+        Ok(path) => path,
+        Err(error) => return failure(capability, format!("Could not resolve the observed process executable: {error}")),
+    };
+    if process_executable != executable {
+        return failure(capability, "The launched process is not the approved Google Chrome executable.");
+    }
+    let target_argument_present = process.cmd().iter().any(|argument| argument.to_string_lossy().as_ref() == "about:blank");
+    if !target_argument_present {
+        return failure(capability, "The launched Chrome process does not contain the approved blank-page target.");
+    }
+
+    success(capability, serde_json::json!({
+        "appId": "chrome",
+        "processId": process_id,
+        "running": true,
+        "targetArgumentPresent": true,
+        "executablePath": executable,
+        "requestedUrl": "about:blank",
+    }))
 }
 
 fn execute_filesystem(capability: &str, input: &Value) -> NativeResult {
@@ -267,9 +326,17 @@ fn native_execute(capability: String, input: Value) -> NativeResult {
     }
 }
 
+#[tauri::command]
+fn native_observe_application(app_id: String, process_id: Option<u32>, expected_url: Option<String>) -> NativeResult {
+    if app_id != "chrome" {
+        return failure("app.open", "This observer supports Google Chrome only.");
+    }
+    observe_chrome_application(process_id, expected_url.as_deref())
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![native_capabilities, native_execute])
+        .invoke_handler(tauri::generate_handler![native_capabilities, native_execute, native_observe_application])
         .run(tauri::generate_context!())
         .expect("error while running HEY");
 }
