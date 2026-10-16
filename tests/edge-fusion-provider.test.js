@@ -286,6 +286,35 @@ test("aborting while a provider body is streaming cancels its reader and withhol
   assert.equal(JSON.stringify(result).includes("PRIVATE VENDOR RESPONSE BODY"), false);
 });
 
+test("provider HTTP failure bodies are cancelled without parsing or exposing vendor diagnostics", async () => {
+  let cancelCount = 0;
+  let calls = 0;
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode("PRIVATE_VENDOR_DIAGNOSTIC_TOKEN=not-for-client"));
+        },
+        cancel() {
+          cancelCount += 1;
+        },
+      }), { status: 429 });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(cancelCount, 2);
+  assert.notEqual(result.status, "complete");
+  assert.equal("answer" in result, false);
+  assert.equal(JSON.stringify(result).includes("PRIVATE_VENDOR_DIAGNOSTIC_TOKEN"), false);
+});
+
 test("fusion disagreement returns no answer and stale account scope cancels before any provider HTTP call", async (t) => {
   await t.test("providers disagree", async () => {
     const { calls, fetchImpl } = mockProviderFetch((providerId) => [providerId === "openai" ? "42" : "43", 0.9]);

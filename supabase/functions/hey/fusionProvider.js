@@ -237,6 +237,10 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
       redirect: "error",
     });
     if (controller.signal.aborted) throw new Error("Provider request cancelled");
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error("Provider request failed");
+    }
     responseText = await readBoundedResponseText(response, controller.signal);
   } finally {
     clearTimeout(timeout);
@@ -249,8 +253,6 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
   } catch {
     throw new Error("Provider returned malformed data");
   }
-  if (!response.ok) throw new Error("Provider request failed");
-
   const text = readProviderText(provider.id, data);
   if (text.length > 16_000) throw new Error("Provider output too large");
   let parsed;
