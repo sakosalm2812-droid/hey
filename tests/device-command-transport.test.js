@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
+import { createDeviceTransportRequestScope, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
 
 const accountId = "2e4a81a4-2da8-4ae0-bfd6-719484a37795";
 const otherAccountId = "10e7b9e4-765b-4e88-b5d4-5eafc0f39f40";
@@ -20,6 +20,40 @@ async function credential() {
   assert.equal(result.ok, true);
   return result.credential;
 }
+
+test("Edge request scope aborts stalled work at its deadline and on client cancellation", async () => {
+  let pendingSignal;
+  const deadline = createDeviceTransportRequestScope({ timeoutMs: 100 });
+  pendingSignal = deadline.signal;
+  try {
+    await assert.rejects(deadline.race(new Promise(() => {})), (error) => error.code === "DEVICE_TRANSPORT_TIMEOUT");
+    assert.equal(pendingSignal.aborted, true);
+    assert.equal(deadline.timedOut(), true);
+    assert.equal(deadline.callerAborted(), false);
+  } finally { deadline.dispose(); }
+
+  const caller = new AbortController();
+  const cancelled = createDeviceTransportRequestScope({ signal: caller.signal, timeoutMs: 60_000 });
+  try {
+    const pending = cancelled.race(new Promise(() => {}));
+    caller.abort();
+    await assert.rejects(pending, (error) => error.code === "DEVICE_TRANSPORT_ABORTED" && error.name === "AbortError");
+    assert.equal(cancelled.signal.aborted, true);
+    assert.equal(cancelled.callerAborted(), true);
+    assert.equal(cancelled.timedOut(), false);
+  } finally { cancelled.dispose(); }
+
+  assert.throws(() => createDeviceTransportRequestScope({ timeoutMs: 60_001 }), /timeout must be between/);
+});
+
+test("Edge handler binds Supabase fetches and request work to one deadline scope", async () => {
+  const source = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
+  assert.match(source, /createDeviceTransportRequestScope\(\{ signal: request\.signal \}\)/);
+  assert.match(source, /fetch\(input, \{ \.\.\.init, signal: scope\.signal \}\)/);
+  assert.match(source, /scope\.race\(userClient\.auth\.getUser\(\)\)/);
+  assert.match(source, /scope\.race\(handleDeviceTransport\(/);
+  assert.match(source, /finally \{\s*scope\.dispose\(\)/);
+});
 
 test("credential rotation is owner-bound, one-time, random and persists only a digest", async () => {
   const saved = [];

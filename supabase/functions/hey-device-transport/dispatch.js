@@ -2,9 +2,46 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const TOKEN = /^heydev1\.[A-Za-z0-9_-]{43}$/;
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_LEASE_MS = 300_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 function result(ok, body = {}) { return { ok, ...body }; }
 function validUuid(value) { return typeof value === "string" && UUID.test(value); }
+
+export function createDeviceTransportRequestScope({ signal: callerSignal, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
+    throw new RangeError("Device transport request timeout must be between 100 ms and 60 seconds.");
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  let callerAborted = false;
+  let rejectAbort;
+  const aborted = new Promise((_, reject) => { rejectAbort = reject; });
+  void aborted.catch(() => {});
+  const abort = (code, name, message) => {
+    if (controller.signal.aborted) return;
+    if (code === "DEVICE_TRANSPORT_TIMEOUT") timedOut = true;
+    else callerAborted = true;
+    const error = new Error(message);
+    error.name = name;
+    error.code = code;
+    controller.abort(error);
+    rejectAbort(error);
+  };
+  const onCallerAbort = () => abort("DEVICE_TRANSPORT_ABORTED", "AbortError", "Device transport request was cancelled.");
+  const timeout = setTimeout(() => abort("DEVICE_TRANSPORT_TIMEOUT", "TimeoutError", "Device transport request timed out."), timeoutMs);
+  if (callerSignal?.aborted) onCallerAbort();
+  else callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    callerAborted: () => callerAborted,
+    race: (promise) => Promise.race([Promise.resolve(promise), aborted]),
+    dispose() {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
 
 export function normalizeAccountDeviceRequest(body) {
   try {
