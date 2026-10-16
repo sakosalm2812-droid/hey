@@ -162,7 +162,13 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
 
 function getFusionFailureCostSummary(details) {
   try {
-    if (!isPlainDataRecord(details) || !isPlainDataRecord(details.fusion) || !isPlainDataRecord(details.fusion.cost)) return "";
+    if (!isPlainDataRecord(details) || !isPlainDataRecord(details.fusion)) return "";
+    const partial = details.fusion.partialProviderFailure;
+    const partialSummary = isPlainDataRecord(partial) && partial.policy === "require_independent_confirmation" &&
+      partial.disposition === "answer_withheld" && partial.successfulResponses === 1 && partial.failedResponses === 1
+      ? " One provider returned a response, but the other failed. The response was withheld because independent confirmation is required."
+      : "";
+    if (!isPlainDataRecord(details.fusion.cost)) return partialSummary;
     const cost = details.fusion.cost;
     if (!Number.isFinite(cost.providerReportedUsd) || cost.providerReportedUsd < 0 ||
       !Number.isFinite(cost.reservedUsd) || cost.reservedUsd < cost.providerReportedUsd ||
@@ -170,7 +176,7 @@ function getFusionFailureCostSummary(details) {
       cost.reservedUsd > cost.requestCapUsd || !Number.isSafeInteger(cost.callsDispatched) || cost.callsDispatched < 0 || cost.callsDispatched > 4 ||
       !Number.isSafeInteger(cost.callsMetered) || cost.callsMetered < 0 || cost.callsMetered > cost.callsDispatched) return "";
     if (cost.callsDispatched === 0) {
-      return ` No provider call was dispatched; $0.0000 of the $${cost.requestCapUsd.toFixed(2)} request budget was reserved.`;
+      return ` No provider call was dispatched; $0.0000 of the $${cost.requestCapUsd.toFixed(2)} request budget was reserved.${partialSummary}`;
     }
     const attempts = parseFusionProviderAttempts(cost.providerAttempts, cost.callsDispatched, cost.callsMetered);
     const unknownCalls = cost.callsDispatched - cost.callsMetered;
@@ -180,8 +186,8 @@ function getFusionFailureCostSummary(details) {
       ? ` Provider attempts: ${attempts.map((attempt) => `${FUSION_PROVIDER_LABELS[attempt.providerId]} ${attempt.modelId} (${attempt.role}; usage ${attempt.usageStatus})`).join("; ")}.`
       : "";
     return unknownCalls > 0
-      ? `${usage}${reserve}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
-      : `${usage}${reserve}${attemptSummary} Final provider billing may differ.`;
+      ? `${usage}${reserve}${partialSummary}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
+      : `${usage}${reserve}${partialSummary}${attemptSummary} Final provider billing may differ.`;
   } catch {
     return "";
   }

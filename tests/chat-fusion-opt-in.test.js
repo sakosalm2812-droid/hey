@@ -18,6 +18,20 @@ test("Fusion permission, configuration, and disagreement responses stay visible 
   assert.match(getHEYChatError({ status: 503 }, { error: "Provider pricing is not configured." }, true), /pricing is not configured/i);
   assert.match(getHEYChatError({ status: 409 }, { error: "The verification exceeded its configured cost budget." }, true), /cost budget/i);
   assert.match(getHEYChatError({ status: 409 }, { error: "The independent provider check timed out; no answer was delivered." }, true), /timed out/i);
+  const partialFailure = getHEYChatError({ status: 409 }, {
+    error: "The independent provider check could not be completed, so no answer was delivered.",
+    fusion: {
+      partialProviderFailure: {
+        policy: "require_independent_confirmation",
+        disposition: "answer_withheld",
+        successfulResponses: 1,
+        failedResponses: 1,
+      },
+      cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1 },
+    },
+  }, true);
+  assert.match(partialFailure, /One provider returned a response, but the other failed/i);
+  assert.match(partialFailure, /withheld because independent confirmation is required/i);
   assert.match(getHEYChatError({ status: 409 }, {}, true), /No verified response was returned/i);
   assert.match(getHEYChatError({ status: 499 }, {}, true), /cancelled before a verified response/i);
   assert.equal(getHEYChatError({ status: 409 }, { error: "x".repeat(300) }, true).length, 240);

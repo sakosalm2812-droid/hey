@@ -320,6 +320,18 @@ export async function runProviderFusion({
   const outputs = [];
   let primaryFailed = false;
   let independentCheckRequired = mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck;
+  const withPartialProviderFailure = (status, details) => {
+    if (!independentCheckRequired || outputs.length !== 1 || dispatchedCalls !== 2) return result(status, details);
+    return result(status, {
+      ...details,
+      partialProviderFailure: Object.freeze({
+        policy: "require_independent_confirmation",
+        disposition: "answer_withheld",
+        successfulResponses: 1,
+        failedResponses: 1,
+      }),
+    });
+  };
   const checkProviderAuthority = async (model, phase) => {
     if (!authorizeProviderCall) return "allowed";
     const remainingMs = maxDurationMs - (performance.now() - startedAt);
@@ -418,7 +430,7 @@ export async function runProviderFusion({
           : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
       }
       if (error?.providerTimeout && outputs.length && independentCheckRequired) {
-        return result("verification_unavailable", { reason: "provider_timeout", calls: dispatchedCalls, reservedCostUsd });
+        return withPartialProviderFailure("verification_unavailable", { reason: "provider_timeout", calls: dispatchedCalls, reservedCostUsd });
       }
       if (outputs.length) break;
       primaryFailed = true;
@@ -439,10 +451,10 @@ export async function runProviderFusion({
     }
     const parsedOutput = parseProviderOutput(raw, estimate);
     if (!parsedOutput) {
-      return result("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });
+      return withPartialProviderFailure("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });
     }
     if (!parsedOutput.evidence.length) {
-      return result("inconclusive", { reason: "candidate_evidence_missing", calls: dispatchedCalls, reservedCostUsd });
+      return withPartialProviderFailure("inconclusive", { reason: "candidate_evidence_missing", calls: dispatchedCalls, reservedCostUsd });
     }
     if (index === 0 && !primaryFailed) {
       if (mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck || parsedOutput.confidence < minConfidence) {
@@ -453,14 +465,14 @@ export async function runProviderFusion({
       }
     } else if (independentCheckRequired || primaryFailed) {
       if (!hasBoundAnswerEvidence(parsedOutput)) {
-        return result("provider_contract_invalid", {
+        return withPartialProviderFailure("provider_contract_invalid", {
           reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "checker_answer_not_bound_to_evidence",
           calls: dispatchedCalls,
           reservedCostUsd,
         });
       }
       if (!primaryFailed && !hasConfirmedVerificationEvidence(parsedOutput)) {
-        return result("provider_contract_invalid", {
+        return withPartialProviderFailure("provider_contract_invalid", {
           reason: "checker_verification_not_confirmed",
           calls: dispatchedCalls,
           reservedCostUsd,
@@ -476,7 +488,7 @@ export async function runProviderFusion({
 
   if (!outputs.length) return result("provider_unavailable", { calls: dispatchedCalls, reservedCostUsd });
   if (independentCheckRequired && outputs.length < 2) {
-    return result("verification_unavailable", { reason: "independent_provider_failed", calls: dispatchedCalls, reservedCostUsd });
+    return withPartialProviderFailure("verification_unavailable", { reason: "independent_provider_failed", calls: dispatchedCalls, reservedCostUsd });
   }
   const { conflicts, truncated: conflictsTruncated } = findConflicts(outputs);
   const independentlyChecked = outputs.length > 1;

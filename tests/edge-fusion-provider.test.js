@@ -537,6 +537,12 @@ test("Fusion withholds the candidate when verifier evidence does not bind to its
   assert.equal(result.reason, "independent_provider_failed");
   assert.equal(calls.length, 2);
   assert.equal("answer" in result, false);
+  assert.deepEqual(result.partialProviderFailure, {
+    policy: "require_independent_confirmation",
+    disposition: "answer_withheld",
+    successfulResponses: 1,
+    failedResponses: 1,
+  });
 });
 
 test("oversized candidate evidence cannot be sent to the checker or escape as an answer", async () => {
@@ -618,7 +624,8 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /providerReportedUsd: fusion\.costReceipt\.providerReportedUsd/);
   assert.match(route, /reservedUsd: fusion\.costReceipt\.reservedUsd/);
   assert.match(route, /requestCapUsd: fusion\.requestCapUsd/);
-  assert.match(route, /fusion: \{ status: fusion\.status, cost: fusion\.costReceipt \}/);
+  assert.match(route, /cost: fusion\.costReceipt/);
+  assert.match(route, /partialProviderFailure: fusion\.partialProviderFailure/);
 });
 
 test("Edge chat checks cancellation after verification and before persisting, and aborts an in-flight insert", async () => {
@@ -669,6 +676,13 @@ test("a failed checker returns a bounded cost receipt with unknown usage marked 
     { providerId: "gemini", modelId: "fixture-gemini", role: "primary", usageStatus: "unknown" },
     { providerId: "openai", modelId: "fixture-openai", role: "fallback", usageStatus: "reported" },
   ]);
+  assert.deepEqual(result.partialProviderFailure, {
+    policy: "require_independent_confirmation",
+    disposition: "answer_withheld",
+    successfulResponses: 1,
+    failedResponses: 1,
+  });
+  assert.equal("answer" in result, false);
   assert.equal(result.costReceipt.requestCapUsd, pricing.budgetUsd);
   assert.ok(result.costReceipt.reservedUsd >= result.costReceipt.providerReportedUsd);
   assert.ok(result.costReceipt.reservedUsd <= pricing.budgetUsd);
@@ -743,6 +757,36 @@ test("HTTP cancellation aborts the provider fetch and stale output is not return
   assert.equal(result.costReceipt.callsDispatched, 1);
   assert.equal(result.costReceipt.callsMetered, 0);
   assert.ok(result.costReceipt.reservedUsd > 0);
+});
+
+test("cancelling during the checker keeps the measured receipt and withholds the primary answer", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const primaryFetch = mockProviderFetch(() => ["42", 0.9]).fetchImpl;
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    signal: controller.signal,
+    fetchImpl: async (url, init) => {
+      calls += 1;
+      if (!init.body.includes("Untrusted candidate to verify")) return primaryFetch(url, init);
+      return await new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+        controller.abort();
+      });
+    },
+  });
+  const result = await resultPromise;
+  assert.equal(result.status, "cancelled");
+  assert.equal("answer" in result, false);
+  assert.equal(calls, 2);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal(result.costReceipt.callsMetered, 1);
+  assert.equal(result.costReceipt.providerReportedUsd, 0.00009);
 });
 
 test("provider grants are revalidated after provider work before a fused answer can be returned", async (t) => {

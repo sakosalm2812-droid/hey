@@ -273,8 +273,36 @@ test("Fusion returns no partial answer when the independent checker fails", asyn
   assert.equal(response.status, "verification_unavailable");
   assert.equal(response.reason, "independent_provider_failed");
   assert.equal(response.answer, undefined);
+  assert.deepEqual(response.partialProviderFailure, {
+    policy: "require_independent_confirmation",
+    disposition: "answer_withheld",
+    successfulResponses: 1,
+    failedResponses: 1,
+  });
   assert.deepEqual(calls, ["fusion-primary", "fusion-checker"]);
   assert.equal(JSON.stringify(response).includes("private provider failure"), false);
+});
+
+test("Fusion withholds a fallback when the primary fails and reports one success plus one failure", async () => {
+  providers();
+  const response = await runProviderFusion({
+    ...base,
+    mode: FUSION_MODES.FUSION,
+    invoke: async ({ providerId }) => {
+      if (providerId === "fusion-primary") throw new Error("private primary failure");
+      return { text: "42", confidence: 0.95, evidence: evidence(), costUsd: 0.01 };
+    },
+  });
+  assert.equal(response.status, "verification_unavailable");
+  assert.equal(response.reason, "independent_provider_failed");
+  assert.equal(response.answer, undefined);
+  assert.deepEqual(response.partialProviderFailure, {
+    policy: "require_independent_confirmation",
+    disposition: "answer_withheld",
+    successfulResponses: 1,
+    failedResponses: 1,
+  });
+  assert.equal(JSON.stringify(response).includes("private primary failure"), false);
 });
 
 test("a non-cooperative checker is aborted at the provider timeout and no partial answer escapes", async () => {
@@ -298,6 +326,7 @@ test("a non-cooperative checker is aborted at the provider timeout and no partia
   assert.equal(response.status, "verification_unavailable");
   assert.equal(response.reason, "provider_timeout");
   assert.equal(response.answer, undefined);
+  assert.equal(response.partialProviderFailure.disposition, "answer_withheld");
   assert.deepEqual(calls, ["fusion-primary", "fusion-checker"]);
   assert.equal(checkerAborted, true);
 });
