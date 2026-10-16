@@ -78,6 +78,52 @@ test("cancellation and stale account scope deny preview creation", async () => {
   }
 });
 
+test("an AbortSignal cancels an in-flight command preview before it can be returned", async () => {
+  setAccountScope("voice-abort-account");
+  try {
+    const alreadyCancelled = new AbortController();
+    alreadyCancelled.abort();
+    const early = await understandVoiceCommand("open notes", { signal: alreadyCancelled.signal });
+    assert.equal(early.status, "cancelled");
+    assert.equal(early.reason, "request_cancelled");
+    assert.equal(early.preview, null);
+    assert.equal(early.requiresConfirmation, false);
+
+    const cancellation = new AbortController();
+    const pending = understandVoiceCommand("open https://example.com", { signal: cancellation.signal });
+    cancellation.abort();
+    const late = await pending;
+    assert.equal(late.status, "cancelled");
+    assert.equal(late.preview, null);
+    assert.equal(late.preview?.command, undefined);
+  } finally {
+    setAccountScope(null);
+  }
+});
+
+test("voice command cancellation options reject hostile accessors without invoking them", async () => {
+  setAccountScope("voice-abort-validation-account");
+  try {
+    let getterCalls = 0;
+    const options = Object.defineProperty({}, "signal", {
+      enumerable: true,
+      get() { getterCalls += 1; throw new Error("signal getter must not run"); },
+    });
+    const denied = await understandVoiceCommand("open notes", options);
+    assert.equal(denied.status, "denied");
+    assert.equal(denied.reason, "invalid_input");
+    assert.equal(denied.preview, null);
+    assert.equal(getterCalls, 0);
+
+    const malformedSignal = await understandVoiceCommand("open notes", { signal: { aborted: true } });
+    assert.equal(malformedSignal.status, "denied");
+    assert.equal(malformedSignal.reason, "invalid_input");
+    assert.equal(malformedSignal.preview, null);
+  } finally {
+    setAccountScope(null);
+  }
+});
+
 test("classification snapshots caller input before its async boundary and freezes target preview", async () => {
   setAccountScope("voice-snapshot-account");
   try {

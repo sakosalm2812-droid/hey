@@ -22,6 +22,36 @@ function readDataObject(value, name) {
   return result;
 }
 
+function readCancellationSignal(options) {
+  const request = readDataObject(options, "Voice command options");
+  if (Object.keys(request).some((key) => key !== "signal")) throw new TypeError("Voice command options contain unsupported fields.");
+  const signal = request.signal;
+  if (signal === undefined) return () => false;
+  const descriptor = typeof AbortSignal === "function"
+    ? Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")
+    : null;
+  if (!descriptor || typeof descriptor.get !== "function") throw new TypeError("A native AbortSignal is required for cancellation.");
+  try { descriptor.get.call(signal); }
+  catch { throw new TypeError("A native AbortSignal is required for cancellation."); }
+  return () => {
+    try { return descriptor.get.call(signal) === true; }
+    catch { return true; }
+  };
+}
+
+function cancelledPreview(scope, confidence = 0) {
+  return deepFreeze({
+    type: "Ask",
+    confidence,
+    status: "cancelled",
+    reason: "request_cancelled",
+    preview: null,
+    requiresPreview: false,
+    requiresConfirmation: false,
+    accountScope: scope,
+  });
+}
+
 function deepFreeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const key of Object.keys(value)) deepFreeze(value[key]);
@@ -105,19 +135,23 @@ function classifySnapshot({ text, confidence }, scope) {
  * Classify one bounded utterance into an inert, account-bound preview.
  * This function intentionally does not call any OS or application adapter.
  */
-export async function understandVoiceCommand(input) {
+export async function understandVoiceCommand(input, options = {}) {
   const scopeAtStart = getAccountScope();
   let snapshot;
+  let isCancelled;
   try {
+    isCancelled = readCancellationSignal(options);
     snapshot = tokenize(input);
   } catch (error) {
     return deepFreeze({ type: "Ask", confidence: 0, status: "denied", reason: "invalid_input", error: error instanceof Error ? error.message : "Invalid voice input.", preview: null, requiresPreview: true, requiresConfirmation: true, accountScope: scopeAtStart });
   }
+  if (isCancelled()) return cancelledPreview(scopeAtStart, snapshot.confidence);
   if (getAccountScope() !== scopeAtStart) {
     return deepFreeze({ type: "Ask", confidence: snapshot.confidence, status: "denied", reason: "stale_account_scope", preview: null, requiresPreview: true, requiresConfirmation: true, accountScope: scopeAtStart });
   }
   // Keep an explicit async boundary so scope freshness is checked before returning any preview.
   await Promise.resolve();
+  if (isCancelled()) return cancelledPreview(scopeAtStart, snapshot.confidence);
   if (getAccountScope() !== scopeAtStart) {
     return deepFreeze({ type: "Ask", confidence: snapshot.confidence, status: "denied", reason: "stale_account_scope", preview: null, requiresPreview: true, requiresConfirmation: true, accountScope: scopeAtStart });
   }
