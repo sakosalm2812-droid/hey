@@ -84,6 +84,47 @@ test("permission denial produces a stable failure metric without exposing provid
   session.destroy();
 });
 
+test("permission probe attempts every track and fails closed when release is incomplete", async () => {
+  const stopped = [];
+  let starts = 0;
+  const session = createDictationSession({
+    speechProvider: { start() { starts += 1; return {}; }, stop() {} },
+    environment: environmentWithPermission(async () => ({
+      getTracks: () => [
+        { stop() { stopped.push("first"); throw new Error("private track failure"); } },
+        { stop() { stopped.push("second"); } },
+      ],
+    })),
+  });
+
+  const result = await session.start({ consentGiven: true });
+  assert.equal(result.success, false);
+  assert.equal(result.status, "permission_required");
+  assert.equal(result.error, "Microphone access could not be released safely.");
+  assert.deepEqual(stopped, ["first", "second"]);
+  assert.equal(starts, 0);
+  session.destroy();
+});
+
+test("permission probe fails closed for malformed or unreadable track collections", async () => {
+  for (const getTracks of [
+    () => { throw new Error("private stream failure"); },
+    () => ({ length: 0 }),
+  ]) {
+    let starts = 0;
+    const session = createDictationSession({
+      speechProvider: { start() { starts += 1; return {}; }, stop() {} },
+      environment: environmentWithPermission(async () => ({ getTracks })),
+    });
+
+    const result = await session.start({ consentGiven: true });
+    assert.equal(result.success, false);
+    assert.equal(result.error, "Microphone access could not be released safely.");
+    assert.equal(starts, 0);
+    session.destroy();
+  }
+});
+
 test("recognition errors and throwing metrics consumers cannot disrupt or leak dictation", async () => {
   let callbacks;
   let transcript = "";

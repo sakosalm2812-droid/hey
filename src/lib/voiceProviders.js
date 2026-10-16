@@ -67,10 +67,32 @@ export async function requestMicrophonePermission(environment = globalThis) {
   if (!environment.navigator?.mediaDevices?.getUserMedia) return { status: VOICE_STATES.permissionRequired, granted: false, error: "Microphone access is unavailable in this runtime." };
   try {
     const stream = await environment.navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach((track) => track.stop());
+    if (!stopMicrophoneProbeTracks(stream)) {
+      return { status: VOICE_STATES.permissionRequired, granted: false, error: "Microphone access could not be released safely." };
+    }
     return { status: "granted", granted: true };
   } catch (error) {
     return { status: VOICE_STATES.permissionRequired, granted: false, error: error?.name === "NotAllowedError" ? "Microphone permission was denied." : "Microphone access failed." };
+  }
+}
+
+function stopMicrophoneProbeTracks(stream) {
+  try {
+    if (typeof stream?.getTracks !== "function") return false;
+    const tracks = stream.getTracks();
+    if (!Array.isArray(tracks)) return false;
+    let released = true;
+    for (const track of tracks) {
+      try {
+        if (typeof track?.stop !== "function") released = false;
+        else track.stop();
+      } catch {
+        released = false;
+      }
+    }
+    return released;
+  } catch {
+    return false;
   }
 }
 
