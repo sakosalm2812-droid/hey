@@ -154,11 +154,13 @@ function readProviderText(value) {
  * released only by the separate confirm call and is never inserted or sent.
  */
 export function createDictationEditSession(options = {}) {
-  const config = readDataRecord(options, "Dictation edit session options", ["preferences", "applicationId", "rewriteProvider", "rewriteTimeoutMs"]);
+  const config = readDataRecord(options, "Dictation edit session options", ["preferences", "applicationId", "rewriteProvider", "rewriteTimeoutMs", "rewriteDisclosure", "resolveCurrentTarget"]);
   const preferences = config.preferences ?? {};
   const applicationId = config.applicationId;
   const rewriteProvider = config.rewriteProvider;
   const rewriteTimeoutMs = config.rewriteTimeoutMs ?? DEFAULT_REWRITE_TIMEOUT_MS;
+  const disclosure = config.rewriteDisclosure;
+  const resolveCurrentTarget = config.resolveCurrentTarget;
   if (!Number.isSafeInteger(rewriteTimeoutMs) || rewriteTimeoutMs < 1 || rewriteTimeoutMs > MAX_REWRITE_TIMEOUT_MS) {
     throw new TypeError(`rewriteTimeoutMs must be an integer between 1 and ${MAX_REWRITE_TIMEOUT_MS}.`);
   }
@@ -209,7 +211,7 @@ export function createDictationEditSession(options = {}) {
     if (!isCurrent()) return fail("session_ended", "account_changed");
     let request;
     try {
-      request = readDataRecord(input, "Dictation edit request", ["sourceText", "utterance", "targetId", "selectionDigest", "cancelSignal"]);
+      request = readDataRecord(input, "Dictation edit request", ["sourceText", "utterance", "targetId", "selectionDigest", "rewriteConsent", "cancelSignal"]);
       request.sourceText = selectionText(request.sourceText);
       request.utterance = plainText(request.utterance, "Edit utterance");
       request.targetId = boundedIdentity(request.targetId, "Target ID", 160);
@@ -252,6 +254,23 @@ export function createDictationEditSession(options = {}) {
         intent = "rewrite";
         if (!rewrite) return fail("provider_unavailable", "rewrite_provider_unavailable");
         if (typeof AbortController !== "function") return fail("provider_unavailable", "cancellation_unavailable");
+        let providerPolicy;
+        try {
+          providerPolicy = readDataRecord(disclosure, "Rewrite provider disclosure", ["providerId", "providerName", "processingLocation", "retentionSummary", "disclosureVersion"]);
+          for (const key of ["providerId", "providerName", "retentionSummary", "disclosureVersion"]) providerPolicy[key] = boundedIdentity(providerPolicy[key], key, 200);
+          if (providerPolicy.processingLocation !== "local" && providerPolicy.processingLocation !== "external") throw new Error("invalid processing location");
+        } catch { return fail("provider_disclosure_required", "rewrite_provider_disclosure_required"); }
+        if (providerPolicy.processingLocation === "external") {
+          let consent;
+          try { consent = readDataRecord(request.rewriteConsent, "Rewrite consent", ["providerId", "disclosureVersion", "sourceText", "instruction", "applicationId", "targetId", "selectionDigest", "confirmed"]); }
+          catch { return fail("consent_required", "external_rewrite_consent_required"); }
+          if (consent.confirmed !== true || consent.providerId !== providerPolicy.providerId || consent.disclosureVersion !== providerPolicy.disclosureVersion || consent.sourceText !== request.sourceText || consent.instruction !== request.utterance || consent.applicationId !== identity || consent.targetId !== request.targetId || consent.selectionDigest !== request.selectionDigest) return fail("consent_required", "external_rewrite_consent_mismatch");
+          if (typeof resolveCurrentTarget !== "function") return fail("target_verification_unavailable", "current_target_resolver_required");
+          let current;
+          try { current = await resolveCurrentTarget(); } catch { return fail("target_verification_unavailable", "current_target_unavailable"); }
+          if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+          if (!current || current.applicationId !== identity || current.targetId !== request.targetId || current.selectionDigest !== request.selectionDigest || current.currentText !== request.sourceText) return fail("stale_proposal", "target_changed_before_provider_dispatch");
+        }
         const controller = new AbortController();
         controllers.add(controller);
         let rejectSessionEnd;
@@ -303,6 +322,11 @@ export function createDictationEditSession(options = {}) {
         }
         if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
         if (request.cancelSignal?.aborted) return fail("cancelled", "rewrite_cancelled_by_user");
+        if (providerPolicy.processingLocation === "external") {
+          let current;
+          try { current = await resolveCurrentTarget(); } catch { return fail("target_verification_unavailable", "current_target_unavailable"); }
+          if (!current || current.applicationId !== identity || current.targetId !== request.targetId || current.selectionDigest !== request.selectionDigest || current.currentText !== request.sourceText) return fail("stale_proposal", "target_changed_during_provider_request");
+        }
       }
     }
 

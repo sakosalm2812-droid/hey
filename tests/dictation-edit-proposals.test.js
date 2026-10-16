@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import HEY, { createDictationEditSession as publicCreateEditSession } from "../src/core/index.js";
 import { setAccountScope } from "../src/core/accountScope.js";
-import { createDictationEditSession } from "../src/lib/dictationEditProposals.js";
+import { createDictationEditSession as createSession } from "../src/lib/dictationEditProposals.js";
 
 const TARGET_ID = "notes.composer";
 const SELECTION_DIGEST = "sha256:0123456789abcdef";
@@ -14,6 +14,63 @@ const confirmationInput = (currentText, applicationId = null, extra = {}) => ({
   targetId: TARGET_ID,
   selectionDigest: SELECTION_DIGEST,
   ...extra,
+});
+const createDictationEditSession = (options = {}) => createSession({
+  rewriteDisclosure: {
+    providerId: "test-local-provider",
+    providerName: "Test local provider",
+    processingLocation: "local",
+    retentionSummary: "Processed locally for tests.",
+    disclosureVersion: "test-v1",
+  },
+  ...options,
+});
+
+test("external rewrite requires exact consent and checks the current target before and after provider work", async () => {
+  setAccountScope("edit-consent-account");
+  let currentText = "private draft";
+  let providerCalls = 0;
+  const disclosure = {
+    providerId: "hey-provider",
+    providerName: "HEY configured provider",
+    processingLocation: "external",
+    retentionSummary: "Selected text is sent to the configured provider.",
+    disclosureVersion: "rewrite-v1",
+  };
+  let mutateAfterProvider = false;
+  const runtime = createSession({
+    applicationId: "hey.chat",
+    rewriteDisclosure: disclosure,
+    resolveCurrentTarget: async () => ({
+      applicationId: "hey.chat", targetId: TARGET_ID, selectionDigest: SELECTION_DIGEST, currentText,
+    }),
+    rewriteProvider: { proposeRewrite() { providerCalls += 1; if (mutateAfterProvider) currentText = "changed after provider"; return { text: "edited draft" }; } },
+  });
+  const request = proposalInput({ sourceText: "private draft", utterance: "Rewrite this clearly" });
+  assert.equal((await runtime.propose(request)).status, "consent_required");
+  assert.equal(providerCalls, 0);
+  const consent = {
+    providerId: disclosure.providerId,
+    disclosureVersion: disclosure.disclosureVersion,
+    sourceText: "private draft",
+    instruction: "Rewrite this clearly",
+    applicationId: "hey.chat",
+    targetId: TARGET_ID,
+    selectionDigest: SELECTION_DIGEST,
+    confirmed: true,
+  };
+  assert.equal((await runtime.propose({ ...request, rewriteConsent: { ...consent, instruction: "Change the point" } })).status, "consent_required");
+  assert.equal(providerCalls, 0);
+  currentText = "changed before dispatch";
+  assert.equal((await runtime.propose({ ...request, rewriteConsent: consent })).status, "stale_proposal");
+  assert.equal(providerCalls, 0);
+  currentText = "private draft";
+  mutateAfterProvider = true;
+  const result = await runtime.propose({ ...request, rewriteConsent: consent });
+  assert.equal(result.status, "stale_proposal");
+  assert.equal(providerCalls, 1);
+  runtime.destroy();
+  setAccountScope(null);
 });
 
 test("edit sessions snapshot per-app locale and return a one-use rewrite preview", async () => {
@@ -112,7 +169,7 @@ test("hostile request and rewrite provider data are rejected without running get
     return result;
   } } });
 
-  assert.throws(() => createDictationEditSession(hostileOptions), /accessors/);
+  assert.throws(() => createSession(hostileOptions), /accessors/);
   assert.equal(optionReads, 0);
   assert.equal((await runtime.propose(request)).status, "invalid_request");
   assert.equal(requestReads, 0);
@@ -307,6 +364,6 @@ test("rewrite concurrency is bounded per session", async () => {
 });
 
 test("canonical HEY voice API exposes the dictation edit session contract", () => {
-  assert.equal(publicCreateEditSession, createDictationEditSession);
-  assert.equal(HEY.voice.createDictationEditSession, createDictationEditSession);
+  assert.equal(publicCreateEditSession, createSession);
+  assert.equal(HEY.voice.createDictationEditSession, createSession);
 });

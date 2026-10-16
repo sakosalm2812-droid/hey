@@ -1,10 +1,11 @@
 export const CHAT_EDIT_APPLICATION_ID = "hey.chat";
 export const CHAT_EDIT_TARGET_ID = "hey-chat-message-composer";
 
-export async function digestSelection(targetId, selectedText) {
+export async function digestSelection(targetId, selectedText, start, end) {
   if (typeof targetId !== "string" || !targetId || typeof selectedText !== "string" || !selectedText) return null;
   if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return null;
-  const bytes = new TextEncoder().encode(`${targetId}\u0000${selectedText}`);
+  const range = Number.isInteger(start) && Number.isInteger(end) ? `${start}:${end}:` : "";
+  const bytes = new TextEncoder().encode(`${targetId}\u0000${range}${selectedText}`);
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

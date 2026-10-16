@@ -374,6 +374,43 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
   }
 }
 
+export async function rewriteHEYText({ text, instruction, signal, providerProfile = "automatic" } = {}) {
+  if (typeof text !== "string" || !text.trim() || text.length > 4096 ||
+    typeof instruction !== "string" || !instruction.trim() || instruction.length > 4096) {
+    throw new Error("The selected text or edit instruction is invalid.");
+  }
+  if (signal?.aborted) throw new DOMException("The rewrite was cancelled.", "AbortError");
+  const providerRouteRequest = getProviderRouteRequest(providerProfile, false);
+  const session = await getHEYSession();
+  if (!session?.access_token) throw new Error("Sign in to preview a selected-text rewrite.");
+  const currentSession = await getHEYSession();
+  if (!isSameHEYAccount(session, currentSession)) throw new DOMException("The signed-in account changed.", "AbortError");
+  const response = await fetchWithRetry(getHEYApiUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({
+      operation: "dictation_rewrite",
+      requestId: crypto.randomUUID(),
+      message: instruction,
+      selectedText: text,
+      instruction,
+      ...providerRouteRequest,
+    }),
+  }, { timeoutMs: 20_000, retries: 0, signal });
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    throw new Error(getHEYChatError(response, details));
+  }
+  const data = await response.json();
+  if (signal?.aborted) throw new DOMException("The rewrite was cancelled.", "AbortError");
+  const latestSession = await getHEYSession();
+  if (!isSameHEYAccount(session, latestSession)) throw new DOMException("The signed-in account changed.", "AbortError");
+  if (typeof data.text !== "string" || !data.text.trim() || data.text.length > 4096) {
+    throw new Error("HEY could not create a usable rewrite preview.");
+  }
+  return { text: data.text };
+}
+
 export async function createForgeArtifact(description, category, plan) {
   const session = await getHEYSession();
   if (!session?.access_token) throw new Error("Sign in to use Forge.");

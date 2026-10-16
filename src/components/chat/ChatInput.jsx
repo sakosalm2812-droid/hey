@@ -163,7 +163,7 @@ export default function ChatInput({
           </button>
         </div>
       </div>
-      <DictationEditControl inputRef={inputRef} setValue={setValue} disabled={disabled} userId={user?.id} />
+      <DictationEditControl inputRef={inputRef} setValue={setValue} disabled={disabled} userId={user?.id} providerProfile={providerProfile} fusionEnabled={fusionEnabled} />
     </div>
   );
 }
