@@ -6,6 +6,8 @@ const MAX_EDIT_TEXT_LENGTH = 4096;
 const MAX_IN_FLIGHT_PROPOSALS = 2;
 const DEFAULT_REWRITE_TIMEOUT_MS = 15_000;
 const MAX_REWRITE_TIMEOUT_MS = 120_000;
+const DEFAULT_TARGET_RESOLUTION_TIMEOUT_MS = 5_000;
+const MAX_TARGET_RESOLUTION_TIMEOUT_MS = 30_000;
 const TERMINAL_PUNCTUATION = /[.,!?;:…،؛؟۔。？！]+$/u;
 
 function readDataRecord(value, name, allowedKeys) {
@@ -149,20 +151,35 @@ function readProviderText(value) {
   return plainText(record.text, "Rewrite proposal");
 }
 
+function readCurrentTarget(value) {
+  const record = readDataRecord(value, "Current edit target", ["applicationId", "targetId", "selectionDigest", "currentText"]);
+  const required = ["applicationId", "targetId", "selectionDigest", "currentText"];
+  if (required.some((key) => !Object.hasOwn(record, key)) ||
+    typeof record.applicationId !== "string" || typeof record.targetId !== "string" ||
+    typeof record.selectionDigest !== "string" || typeof record.currentText !== "string") {
+    throw new TypeError("Current edit target is incomplete.");
+  }
+  return record;
+}
+
 /**
  * Create a session-bound, preview-only edit contract. The returned text is
  * released only by the separate confirm call and is never inserted or sent.
  */
 export function createDictationEditSession(options = {}) {
-  const config = readDataRecord(options, "Dictation edit session options", ["preferences", "applicationId", "rewriteProvider", "rewriteTimeoutMs", "rewriteDisclosure", "resolveCurrentTarget"]);
+  const config = readDataRecord(options, "Dictation edit session options", ["preferences", "applicationId", "rewriteProvider", "rewriteTimeoutMs", "rewriteDisclosure", "resolveCurrentTarget", "targetResolutionTimeoutMs"]);
   const preferences = config.preferences ?? {};
   const applicationId = config.applicationId;
   const rewriteProvider = config.rewriteProvider;
   const rewriteTimeoutMs = config.rewriteTimeoutMs ?? DEFAULT_REWRITE_TIMEOUT_MS;
+  const targetResolutionTimeoutMs = config.targetResolutionTimeoutMs ?? DEFAULT_TARGET_RESOLUTION_TIMEOUT_MS;
   const disclosure = config.rewriteDisclosure;
   const resolveCurrentTarget = config.resolveCurrentTarget;
   if (!Number.isSafeInteger(rewriteTimeoutMs) || rewriteTimeoutMs < 1 || rewriteTimeoutMs > MAX_REWRITE_TIMEOUT_MS) {
     throw new TypeError(`rewriteTimeoutMs must be an integer between 1 and ${MAX_REWRITE_TIMEOUT_MS}.`);
+  }
+  if (!Number.isSafeInteger(targetResolutionTimeoutMs) || targetResolutionTimeoutMs < 1 || targetResolutionTimeoutMs > MAX_TARGET_RESOLUTION_TIMEOUT_MS) {
+    throw new TypeError(`targetResolutionTimeoutMs must be an integer between 1 and ${MAX_TARGET_RESOLUTION_TIMEOUT_MS}.`);
   }
   const identity = applicationId === undefined || applicationId === null
     ? null
@@ -223,6 +240,61 @@ export function createDictationEditSession(options = {}) {
 
     const currentGeneration = generation;
     if (request.cancelSignal?.aborted) return fail("cancelled", "rewrite_cancelled_by_user");
+    async function resolveTargetSnapshot() {
+      if (typeof resolveCurrentTarget !== "function") return { failure: fail("target_verification_unavailable", "current_target_resolver_required") };
+      if (typeof AbortController !== "function") return { failure: fail("target_verification_unavailable", "cancellation_unavailable") };
+      if (!isCurrent() || currentGeneration !== generation) return { failure: fail("session_ended", "account_changed") };
+      if (request.cancelSignal?.aborted) return { failure: fail("cancelled", "rewrite_cancelled_by_user") };
+
+      const controller = new AbortController();
+      controllers.add(controller);
+      let timeoutId;
+      let timedOut = false;
+      let cancelled = false;
+      let rejectSessionEnd;
+      let rejectCancellation;
+      const sessionEnded = new Promise((_, reject) => { rejectSessionEnd = reject; });
+      const cancellation = new Promise((_, reject) => { rejectCancellation = reject; });
+      const notifySessionEnded = () => rejectSessionEnd(new Error("Dictation edit session ended."));
+      const cancelResolution = () => {
+        cancelled = true;
+        controller.abort();
+        rejectCancellation(new Error("Target verification cancelled."));
+      };
+      sessionEndWaiters.add(notifySessionEnded);
+      request.cancelSignal?.addEventListener("abort", cancelResolution, { once: true });
+      if (request.cancelSignal?.aborted) cancelResolution();
+      const timeout = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(new Error("Current target verification timed out."));
+        }, targetResolutionTimeoutMs);
+      });
+      try {
+        const target = await Promise.race([
+          Promise.resolve().then(() => Reflect.apply(resolveCurrentTarget, undefined, [{ signal: controller.signal }])),
+          timeout,
+          cancellation,
+          sessionEnded,
+        ]);
+        if (!isCurrent() || currentGeneration !== generation) return { failure: fail("session_ended", "account_changed") };
+        if (request.cancelSignal?.aborted) return { failure: fail("cancelled", "rewrite_cancelled_by_user") };
+        try { return { target: readCurrentTarget(target) }; }
+        catch { return { failure: fail("target_verification_unavailable", "invalid_current_target") }; }
+      } catch {
+        if (!isCurrent() || currentGeneration !== generation) return { failure: fail("session_ended", "account_changed") };
+        if (cancelled || request.cancelSignal?.aborted) return { failure: fail("cancelled", "rewrite_cancelled_by_user") };
+        return timedOut
+          ? { failure: fail("target_verification_timeout", "current_target_timed_out") }
+          : { failure: fail("target_verification_unavailable", "current_target_unavailable") };
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        request.cancelSignal?.removeEventListener("abort", cancelResolution);
+        sessionEndWaiters.delete(notifySessionEnded);
+        controllers.delete(controller);
+      }
+    }
     let instruction;
     let intent;
     let proposedText;
@@ -266,9 +338,9 @@ export function createDictationEditSession(options = {}) {
           catch { return fail("consent_required", "external_rewrite_consent_required"); }
           if (consent.confirmed !== true || consent.providerId !== providerPolicy.providerId || consent.disclosureVersion !== providerPolicy.disclosureVersion || consent.sourceText !== request.sourceText || consent.instruction !== request.utterance || consent.applicationId !== identity || consent.targetId !== request.targetId || consent.selectionDigest !== request.selectionDigest) return fail("consent_required", "external_rewrite_consent_mismatch");
           if (typeof resolveCurrentTarget !== "function") return fail("target_verification_unavailable", "current_target_resolver_required");
-          let current;
-          try { current = await resolveCurrentTarget(); } catch { return fail("target_verification_unavailable", "current_target_unavailable"); }
-          if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+          const currentResult = await resolveTargetSnapshot();
+          if (currentResult.failure) return currentResult.failure;
+          const current = currentResult.target;
           if (!current || current.applicationId !== identity || current.targetId !== request.targetId || current.selectionDigest !== request.selectionDigest || current.currentText !== request.sourceText) return fail("stale_proposal", "target_changed_before_provider_dispatch");
         }
         const controller = new AbortController();
@@ -323,8 +395,9 @@ export function createDictationEditSession(options = {}) {
         if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
         if (request.cancelSignal?.aborted) return fail("cancelled", "rewrite_cancelled_by_user");
         if (providerPolicy.processingLocation === "external") {
-          let current;
-          try { current = await resolveCurrentTarget(); } catch { return fail("target_verification_unavailable", "current_target_unavailable"); }
+          const currentResult = await resolveTargetSnapshot();
+          if (currentResult.failure) return currentResult.failure;
+          const current = currentResult.target;
           if (!current || current.applicationId !== identity || current.targetId !== request.targetId || current.selectionDigest !== request.selectionDigest || current.currentText !== request.sourceText) return fail("stale_proposal", "target_changed_during_provider_request");
         }
       }

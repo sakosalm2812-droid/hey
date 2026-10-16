@@ -73,6 +73,111 @@ test("external rewrite requires exact consent and checks the current target befo
   setAccountScope(null);
 });
 
+test("external target verification times out and aborts its resolver without dispatching selected text", async () => {
+  setAccountScope("edit-target-timeout-account");
+  let resolverSignal;
+  let resolveTarget;
+  let providerCalls = 0;
+  const runtime = createSession({
+    applicationId: "hey.chat",
+    targetResolutionTimeoutMs: 10,
+    rewriteDisclosure: {
+      providerId: "hey-provider", providerName: "HEY provider", processingLocation: "external",
+      retentionSummary: "Selected text is sent to the configured provider.", disclosureVersion: "test-timeout-v1",
+    },
+    resolveCurrentTarget({ signal }) {
+      resolverSignal = signal;
+      return new Promise((resolve) => { resolveTarget = resolve; });
+    },
+    rewriteProvider: { proposeRewrite() { providerCalls += 1; return { text: "must not run" }; } },
+  });
+  const result = await runtime.propose(proposalInput({
+    sourceText: "private draft", utterance: "Rewrite this clearly",
+    rewriteConsent: {
+      providerId: "hey-provider", disclosureVersion: "test-timeout-v1", sourceText: "private draft",
+      instruction: "Rewrite this clearly", applicationId: "hey.chat", targetId: TARGET_ID,
+      selectionDigest: SELECTION_DIGEST, confirmed: true,
+    },
+  }));
+  assert.deepEqual(result, { success: false, status: "target_verification_timeout", reason: "current_target_timed_out" });
+  assert.equal(resolverSignal.aborted, true);
+  assert.equal(providerCalls, 0);
+  resolveTarget({ applicationId: "hey.chat", targetId: TARGET_ID, selectionDigest: SELECTION_DIGEST, currentText: "private draft" });
+  runtime.destroy();
+  setAccountScope(null);
+});
+
+test("cancelling or ending a session during target verification settles immediately and fences late snapshots", async () => {
+  for (const ending of ["cancel", "account"]) {
+    setAccountScope(`edit-target-${ending}-start`);
+    let resolverSignal;
+    let resolveTarget;
+    let providerCalls = 0;
+    const runtime = createSession({
+      applicationId: "hey.chat",
+      rewriteDisclosure: {
+        providerId: "hey-provider", providerName: "HEY provider", processingLocation: "external",
+        retentionSummary: "Selected text is sent to the configured provider.", disclosureVersion: `test-${ending}-v1`,
+      },
+      resolveCurrentTarget({ signal }) {
+        resolverSignal = signal;
+        return new Promise((resolve) => { resolveTarget = resolve; });
+      },
+      rewriteProvider: { proposeRewrite() { providerCalls += 1; return { text: "must not run" }; } },
+    });
+    const cancel = new AbortController();
+    const pending = runtime.propose(proposalInput({
+      sourceText: "private draft", utterance: "Rewrite this clearly", cancelSignal: cancel.signal,
+      rewriteConsent: {
+        providerId: "hey-provider", disclosureVersion: `test-${ending}-v1`, sourceText: "private draft",
+        instruction: "Rewrite this clearly", applicationId: "hey.chat", targetId: TARGET_ID,
+        selectionDigest: SELECTION_DIGEST, confirmed: true,
+      },
+    }));
+    while (!resolveTarget) await Promise.resolve();
+    if (ending === "cancel") cancel.abort();
+    else setAccountScope("edit-target-account-switched");
+    const result = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve("still_pending"), 100))]);
+    assert.notEqual(result, "still_pending");
+    assert.equal(result.status, ending === "cancel" ? "cancelled" : "session_ended");
+    assert.equal(resolverSignal.aborted, true);
+    resolveTarget({ applicationId: "hey.chat", targetId: TARGET_ID, selectionDigest: SELECTION_DIGEST, currentText: "private draft" });
+    assert.equal(providerCalls, 0);
+    runtime.destroy();
+  }
+  setAccountScope(null);
+});
+
+test("external target resolver accessors are rejected without executing them or invoking the provider", async () => {
+  setAccountScope("edit-target-accessor-account");
+  let getterCalls = 0;
+  let providerCalls = 0;
+  const invalidTarget = { targetId: TARGET_ID, selectionDigest: SELECTION_DIGEST, currentText: "private draft" };
+  Object.defineProperty(invalidTarget, "applicationId", { enumerable: true, get() { getterCalls += 1; return "hey.chat"; } });
+  const runtime = createSession({
+    applicationId: "hey.chat",
+    rewriteDisclosure: {
+      providerId: "hey-provider", providerName: "HEY provider", processingLocation: "external",
+      retentionSummary: "Selected text is sent to the configured provider.", disclosureVersion: "test-accessor-v1",
+    },
+    resolveCurrentTarget: () => invalidTarget,
+    rewriteProvider: { proposeRewrite() { providerCalls += 1; return { text: "must not run" }; } },
+  });
+  const result = await runtime.propose(proposalInput({
+    sourceText: "private draft", utterance: "Rewrite this clearly",
+    rewriteConsent: {
+      providerId: "hey-provider", disclosureVersion: "test-accessor-v1", sourceText: "private draft",
+      instruction: "Rewrite this clearly", applicationId: "hey.chat", targetId: TARGET_ID,
+      selectionDigest: SELECTION_DIGEST, confirmed: true,
+    },
+  }));
+  assert.equal(result.status, "target_verification_unavailable");
+  assert.equal(getterCalls, 0);
+  assert.equal(providerCalls, 0);
+  runtime.destroy();
+  setAccountScope(null);
+});
+
 test("edit sessions snapshot per-app locale and return a one-use rewrite preview", async () => {
   setAccountScope("edit-account-a");
   const preferences = {
