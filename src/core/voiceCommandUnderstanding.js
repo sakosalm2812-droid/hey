@@ -8,6 +8,8 @@ const SENSITIVE_TERMS = /\b(?:delete|erase|remove|send|submit|purchase|buy|pay|t
 const CANCEL_TERMS = /^(?:cancel|never mind|nevermind|stop|don't do that|do not do that|no,? cancel)[.!\s]*$/i;
 const COMMAND_PREVIEW_LIFETIME_MS = 60_000;
 const MAX_PENDING_COMMAND_PREVIEWS = 128;
+const MAX_COMMAND_PREVIEW_NODES = 160;
+const MAX_COMMAND_PREVIEW_DEPTH = 8;
 const pendingCommandPreviews = new Map();
 
 subscribeAccountScope(() => pendingCommandPreviews.clear());
@@ -113,26 +115,35 @@ function tokenize(input) {
   return { text: request.text.trim(), confidence: request.confidence ?? 1 };
 }
 
-function safePreview(command) {
-  if (!command || typeof command !== "object") return null;
-  // Keep the preview as inert JSON data. It is never dispatched to an adapter.
+function safePreview(command, budget = { remaining: MAX_COMMAND_PREVIEW_NODES }, depth = 0) {
+  if (depth > MAX_COMMAND_PREVIEW_DEPTH || --budget.remaining < 0) throw new RangeError("Command preview exceeds its structural limits.");
+  if (command === null || ["string", "number", "boolean"].includes(typeof command)) return command;
+  if (command === undefined) return null;
+  if (!command || typeof command !== "object") throw new TypeError("Command preview must contain JSON data only.");
+  if (Object.getOwnPropertySymbols(command).length) throw new TypeError("Command preview cannot contain symbols.");
+
+  // Keep the preview as inert bounded JSON data. It is never dispatched to an adapter.
+  if (Array.isArray(command)) {
+    if (command.length > budget.remaining) throw new RangeError("Command preview exceeds its structural limits.");
+    const entries = [];
+    for (let index = 0; index < command.length; index += 1) {
+      const entry = Object.getOwnPropertyDescriptor(command, String(index));
+      if (!entry || !Object.hasOwn(entry, "value") || !entry.enumerable) throw new TypeError("Command preview arrays must be dense plain data.");
+      entries.push(safePreview(entry.value, budget, depth + 1));
+    }
+    return entries;
+  }
+
+  const prototype = Object.getPrototypeOf(command);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError("Command preview must contain plain objects only.");
   const descriptors = Object.getOwnPropertyDescriptors(command);
+  const keys = Object.keys(descriptors);
+  if (keys.length > budget.remaining) throw new RangeError("Command preview exceeds its structural limits.");
   const clone = Object.create(null);
-  for (const key of Object.keys(descriptors)) {
+  for (const key of keys) {
     const descriptor = descriptors[key];
     if (!Object.hasOwn(descriptor, "value") || !descriptor.enumerable) throw new TypeError("Command preview must be plain data.");
-    const value = descriptor.value;
-    if (value === null || ["string", "number", "boolean"].includes(typeof value)) clone[key] = value;
-    else if (Array.isArray(value)) {
-      const entries = [];
-      for (let index = 0; index < value.length; index += 1) {
-        const entry = Object.getOwnPropertyDescriptor(value, String(index));
-        if (!entry || !Object.hasOwn(entry, "value")) throw new TypeError("Command preview arrays must be dense plain data.");
-        if (entry.value && typeof entry.value === "object") entries.push(safePreview(entry.value));
-        else entries.push(entry.value);
-      }
-      clone[key] = entries;
-    } else clone[key] = safePreview(value);
+    clone[key] = safePreview(descriptor.value, budget, depth + 1);
   }
   return clone;
 }
@@ -162,7 +173,12 @@ function classifySnapshot({ text, confidence }, scope) {
   if (ACTION_VERBS.test(normalized)) {
     const parsed = parseNaturalCommand(normalized);
     if (parsed) {
-      const preview = safePreview(parsed);
+      let preview;
+      try {
+        preview = safePreview(parsed);
+      } catch {
+        return deepFreeze({ type: "Command", confidence, status: "denied", reason: "command_preview_limit_exceeded", preview: null, requiresPreview: false, requiresConfirmation: false, accountScope: scope });
+      }
       const needsClarification = parsed.needsClarification === true;
       const sensitive = SENSITIVE_TERMS.test(normalized) || parsed.kind === "workflow";
       return deepFreeze({ type: "Command", confidence, status: needsClarification ? "clarification_required" : "preview_required", reason: needsClarification ? "command_needs_clarification" : sensitive ? "sensitive_action_requires_confirmation" : "action_requires_confirmation", preview: { command: preview, text: normalized, accountScope: scope }, requiresPreview: true, requiresConfirmation: true, accountScope: scope });

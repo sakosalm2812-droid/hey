@@ -102,6 +102,28 @@ test("prompt injection-like utterances remain inert text or a confirmation-gated
   }
 });
 
+test("oversized parsed workflows are denied without returning a partial command preview", async () => {
+  setAccountScope("voice-complex-preview-account");
+  try {
+    const bounded = await understandVoiceCommand("open notes then open mail");
+    assert.equal(bounded.status, "preview_required");
+    assert.equal(bounded.preview.command.kind, "workflow");
+
+    const oversizedCommand = Array.from({ length: 40 }, () => "open notes").join(" then ");
+    const denied = await understandVoiceCommand(oversizedCommand);
+    assert.equal(denied.type, "Command");
+    assert.equal(denied.status, "denied");
+    assert.equal(denied.reason, "command_preview_limit_exceeded");
+    assert.equal(denied.preview, null);
+    assert.equal(denied.previewId, undefined);
+    assert.equal(denied.requiresConfirmation, false);
+    assert.equal(denied.success, undefined);
+    assert.equal(denied.verified, undefined);
+  } finally {
+    setAccountScope(null);
+  }
+});
+
 test("cancellation and stale account scope deny preview creation", async () => {
   setAccountScope("voice-cancel-account");
   try {
