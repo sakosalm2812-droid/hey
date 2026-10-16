@@ -48,6 +48,7 @@ begin
     from jsonb_array_elements(p_artifacts) as batch(item)
     where item ->> 'type' = 'document'
       and item ->> 'project_id' = v_project_id
+      and item -> 'metadata' ->> 'workspaceId' = item ->> 'project_id'
       and item -> 'metadata' ->> 'accountScope' = v_account_scope
       and item -> 'metadata' ->> 'classId' = v_class_id
       and item -> 'metadata' ->> 'journeyId' = p_artifacts -> 0 -> 'metadata' ->> 'journeyId';

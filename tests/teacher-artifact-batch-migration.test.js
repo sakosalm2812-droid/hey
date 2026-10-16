@@ -16,6 +16,7 @@ test("teacher batch RPC runs as invoker and gates signed tenant and class claims
   assert.match(migration, /item -> 'metadata' ->> 'accountscope' = v_account_scope/);
   assert.match(migration, /v_class_ids @> jsonb_build_array\(v_class_id\)/);
   assert.match(migration, /item ->> 'project_id' = v_project_id/);
+  assert.match(migration, /item -> 'metadata' ->> 'workspaceid' = item ->> 'project_id'/);
 });
 
 test("teacher answer keys and student worksheets have distinct database content contracts", () => {
