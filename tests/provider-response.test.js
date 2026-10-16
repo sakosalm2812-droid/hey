@@ -38,6 +38,7 @@ test("grant revocation during a provider response read invalidates the old exact
   });
   const selection = parseProviderSelection({ providerId: "gemini", modelId: "fixture-b" });
   let currentGrants = ["provider.remote", "provider:gemini"];
+  assert.equal(resolveProviderSelection(selection, attempts, currentGrants, prices).status, "selected");
   const read = readProviderJson(new Response(body));
   currentGrants = ["provider.remote"];
   finishBody();
