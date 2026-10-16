@@ -22,8 +22,8 @@ const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
   research: "reasoning",
   math: "reasoning",
 });
-const ROUTING_OVERRIDE_TERMS = "ignore|bypass|override|disable|circumvent|evade";
-const ROUTING_POLICY_TERMS = "permissions?|polic(?:y|ies)|safety|security|authority|guardrails?";
+const ROUTING_OVERRIDE_TERMS = "ignore|bypass|override|disable|circumvent|evade|disregard|forget|suppress";
+const ROUTING_POLICY_TERMS = "permissions?|polic(?:y|ies)|safety|security|authority|guardrails?|rules?|restrictions?|safeguards?|protections?";
 const ADVERSARIAL_ROUTING_TEXT = new RegExp(
   `\\b(?:${ROUTING_OVERRIDE_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_POLICY_TERMS})\\b|\\b(?:${ROUTING_POLICY_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_OVERRIDE_TERMS})\\b`,
   "i",
