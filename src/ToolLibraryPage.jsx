@@ -3,10 +3,11 @@ import { AlertCircle, Check, CheckCircle2, CircleHelp, CircleX, LockKeyhole, Pin
 import { HEY } from "./core/index.js";
 import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
 import { useAuth } from "./AuthContext.jsx";
-import { getAccountScope } from "./core/accountScope.js";
+import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { getToolLibraryPreferenceView } from "./lib/toolLibraryPreferenceView.js";
 import { canGrantPermission } from "./lib/permissionPolicy.js";
 import { resolveAccountPlan } from "./lib/accountRecords.js";
+import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryRecord } from "./lib/toolLibraryReceipts.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
@@ -67,15 +68,6 @@ function typedInputFromValues(schema, values) {
   return input;
 }
 
-function safeReceiptText(value) {
-  try {
-    const serialized = JSON.stringify(value, null, 2);
-    return typeof serialized === "string" ? serialized.slice(0, 4_000) : "No result data was returned.";
-  } catch {
-    return "HEY received result data that could not be displayed safely.";
-  }
-}
-
 function safeToolError(value) {
   return (typeof value === "string" && value.trim() ? value : "HEY could not complete this tool run.")
     .replace(/[\r\n\t]+/g, " ")
@@ -120,8 +112,10 @@ function ToolCard({
   const [runPanelOpen, setRunPanelOpen] = useState(false);
   const [inputValues, setInputValues] = useState(() => initialInputValues(inputSchema));
   const [pendingRun, setPendingRun] = useState(null);
-  const [receipt, setReceipt] = useState(null);
-  const [activity, setActivity] = useState([]);
+  const [receiptState, setReceiptState] = useState(null);
+  const [activityState, setActivityState] = useState(null);
+  const receipt = isToolLibraryRecordVisible(receiptState, accountId, getAccountScope()) ? receiptState : null;
+  const activity = isToolLibraryRecordVisible(activityState, accountId, getAccountScope()) ? activityState.items : [];
   const [running, setRunning] = useState(false);
   const runLock = useRef(false);
   const controllerRef = useRef(null);
@@ -131,18 +125,35 @@ function ToolCard({
     .filter((capability) => capability.error)
     .map((capability) => capability.error);
 
+  const setReceipt = useCallback((next) => {
+    setReceiptState((current) => {
+      const value = typeof next === "function" ? next(isToolLibraryRecordVisible(current, accountId, getAccountScope()) ? current : null) : next;
+      return value ? scopeToolLibraryRecord(accountId, value) : null;
+    });
+  }, [accountId]);
+
   const refreshActivity = useCallback(() => {
     if (!accountId || getAccountScope() !== `account:${accountId}`) {
-      setActivity([]);
+      setActivityState(null);
       return;
     }
     const result = HEY.tools.lifecycleActivity(tool.name, { user });
-    setActivity(result?.success && Array.isArray(result.activity) ? result.activity : []);
+    setActivityState(scopeToolLibraryRecord(accountId, { items: result?.success && Array.isArray(result.activity) ? result.activity : [] }));
   }, [accountId, tool.name, user]);
 
   useEffect(() => {
     refreshActivity();
   }, [refreshActivity]);
+
+  useEffect(() => subscribeAccountScope(() => {
+    controllerRef.current?.abort(new Error("Account scope changed."));
+    controllerRef.current = null;
+    runLock.current = false;
+    setRunning(false);
+    setPendingRun(null);
+    setReceiptState(null);
+    setActivityState(null);
+  }), []);
 
   async function invokePlan(run, confirmed = false) {
     if (runLock.current) return;
@@ -161,6 +172,7 @@ function ToolCard({
       const response = await HEY.tools.executePlan(plan, {
         platform: "web", user, requestId: run.requestId, confirmed, signal: controller.signal,
       });
+      if (controllerRef.current !== controller) return;
       if (!accountId || getAccountScope() !== `account:${accountId}`) {
         setReceipt({ status: "denied", message: "Your signed-in account changed while this tool was running. Its result is hidden; check the destination before running it again.", requestId: run.requestId });
         setPendingRun(null);
@@ -203,13 +215,16 @@ function ToolCard({
       });
       setPendingRun(null);
     } catch (error) {
+      if (controllerRef.current !== controller) return;
       setReceipt({ status: controller.signal.aborted ? "cancelled" : "error", message: controller.signal.aborted ? "Cancellation requested. Check the destination if dispatch may have started." : safeToolError(error instanceof Error ? error.message : null), requestId: run.requestId });
       setPendingRun(null);
     } finally {
-      if (controllerRef.current === controller) controllerRef.current = null;
-      runLock.current = false;
-      setRunning(false);
-      refreshActivity();
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        runLock.current = false;
+        setRunning(false);
+        refreshActivity();
+      }
     }
   }
 
@@ -364,8 +379,8 @@ function ToolCard({
           <p>{receipt.message}</p>{receipt.requestId && <small>Receipt {receipt.requestId}</small>}
           {receipt.retryable && receipt.retryRun && !running && <button type="button" className="tool-library__run-button" onClick={() => { const retryRun = { ...receipt.retryRun, requestId: crypto.randomUUID(), stepId: `retry-${crypto.randomUUID()}` }; setReceipt(null); void invokePlan(retryRun); }}>Retry this run</button>}
           {receipt.status === "authorization_required" && pendingRun && <div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" onClick={allowPermission}>Allow account permission</button><button type="button" className="tool-library__deny-button" onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div>}
-          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{safeReceiptText(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => void invokePlan(pendingRun, true)}>Confirm and run</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
-          {["completed", "unverified"].includes(receipt.status) && receipt.result !== undefined && <pre className="tool-library__result">{safeReceiptText(receipt.result)}</pre>}
+          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{formatToolLibraryReceipt(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => void invokePlan(pendingRun, true)}>Confirm and run</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
+          {["completed", "unverified"].includes(receipt.status) && receipt.result !== undefined && <pre className="tool-library__result">{formatToolLibraryReceipt(receipt.result)}</pre>}
         </div>}
       </div>}
     </article>

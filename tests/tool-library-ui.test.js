@@ -42,4 +42,7 @@ test("Tool Library runs through the canonical plan API and offers only explicitl
   assert.match(pageSource, /stepReceipt\.metadata\?\.retryable === true/);
   assert.match(pageSource, /Retry this run/);
   assert.match(pageSource, /Your signed-in account changed while this tool was running/);
+  assert.match(pageSource, /subscribeAccountScope/);
+  assert.match(pageSource, /controllerRef\.current !== controller/);
+  assert.match(pageSource, /isToolLibraryRecordVisible\(receiptState, accountId, getAccountScope\(\)\)/);
 });
