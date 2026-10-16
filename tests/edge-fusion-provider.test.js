@@ -361,6 +361,43 @@ test("provider HTTP failure bodies are cancelled without parsing or exposing ven
   assert.equal(JSON.stringify(result).includes("PRIVATE_VENDOR_DIAGNOSTIC_TOKEN"), false);
 });
 
+test("provider failure fallback rechecks the exact checker grant before another dispatch", async () => {
+  let revokedCheckerId = null;
+  let cancelCount = 0;
+  const providerCalls = [];
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async (url) => {
+      const providerId = url.includes("api.openai.com") ? "openai" : "gemini";
+      providerCalls.push(providerId);
+      return new Response(new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode("PRIVATE_PRIMARY_FAILURE_DIAGNOSTIC"));
+        },
+        cancel() {
+          cancelCount += 1;
+          revokedCheckerId = providerId === "openai" ? "gemini" : "openai";
+        },
+      }), { status: 429 });
+    },
+    getCurrentEntitlements: async () => revokedCheckerId
+      ? entitlements.filter((grant) => grant !== `provider:${revokedCheckerId}`)
+      : entitlements,
+  });
+  assert.equal(result.status, "denied");
+  assert.equal(result.reason, "provider_permission_revoked");
+  assert.equal(providerCalls.length, 1);
+  assert.notEqual(providerCalls[0], revokedCheckerId);
+  assert.equal(cancelCount, 1);
+  assert.equal("answer" in result, false);
+  assert.equal(JSON.stringify(result).includes("PRIVATE_PRIMARY_FAILURE_DIAGNOSTIC"), false);
+});
+
 test("fusion disagreement returns no answer and stale account scope cancels before any provider HTTP call", async (t) => {
   await t.test("providers disagree", async () => {
     const { calls, fetchImpl } = mockProviderFetch((providerId) => [providerId === "openai" ? "42" : "43", 0.9]);
