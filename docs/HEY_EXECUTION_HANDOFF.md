@@ -1176,3 +1176,26 @@ Current root checkout has no uncommitted tracked source changes; keep `docs/requ
 - **Worker state at wave completion:** all 11 existing specialist task IDs above remain continuation references. All eleven yielded source commits that are now integrated; detailed receipts were directly retrieved for the latest Chat 01, Chat 03 and Chat 11 commits. No worker source diff remains unmerged from this wave. All chats should be followed up concurrently from the new pushed coordinator HEAD for another bounded implementation slice, using GPT-6 Luna where selectable; do not create replacement chats.
 - **Blockers:** no `.env`/`.env.local`, Supabase URL/anon key, deployed Edge Functions, authenticated test account, provider secrets/trusted live pricing, Deno/Postgres/Supabase CLI, Rust native build toolchain or physical camera/device test environment. These block the corresponding live integration claims, not local deterministic implementation work.
 - **Exact next actions:** (1) commit and push this handoff checkpoint on top of `ee257e5`; (2) dispatch a distinct, non-duplicative implementation follow-up to all 11 existing specialist tasks concurrently from the new coordinator SHA; (3) review each commit against current source, integrate only after focused adversarial tests; (4) keep the browser available at `http://127.0.0.1:5175/download` for further real UI evidence; (5) do not mark any of the 47 steps production complete until their required live database/provider/native evidence exists.
+
+## Concurrent continuation wave 4 dispatch — 2026-10-16
+
+- **Base checkpoint for every assignment:** coordinator `70e789174e62eeed2dc42716bdf836914951a386`, branch `codex/resume-emergency-2026-10-14`, pushed to `origin`.
+- **Dispatch:** all eleven existing Codex specialist chats were sent their next bounded implementation assignment concurrently, with model `gpt-6-luna` and medium reasoning requested. Each was told to create an isolated branch from `70e7891`, preserve stronger existing behavior, add adversarial tests, run focused lint/build, and report exact branch/commit/test receipts. No replacement chats were created.
+- **Wave 4 active worker register (new isolated branch/worktree and commit are pending worker setup/report; prior completed branch+SHA for each is documented in the preceding wave 3 table):**
+
+| Specialist | Existing Codex task | Current scoped assignment |
+|---|---|---|
+| 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | Verify/fix the reachable Teacher route and account isolation if still unresolved; otherwise another concrete frontend gap. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | Wire one confirmed Space archive/restore/recovery journey to existing persistence and account fencing. |
+| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | Improve a distinct canonical lifecycle/install/remove/session recovery path. |
+| 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | Fix a distinct device command lease/outbox timeout or cancellation recovery gap. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | Fix one detector/session lifecycle fault while preserving fresh-consent and resource release. |
+| 06 Flow / Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | Continue selected-text voice-edit UI integration with preview-only, fresh target verification, explicit replace/undo and account/cancel fences. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | Close one safe proposal review/expiry/cancel/verification usability gap without bypassing Trust Kernel. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | Improve partial-write recovery/atomicity for the three-artifact Teacher journey while retaining access control and student answer privacy. |
+| 09 HEY One / Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | Improve a distinct provider request/catalog recovery path with exact-model grants and account/cancel fences. |
+| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | Address a distinct adversarial routing false-positive/false-negative with counterexamples and deterministic comparison evidence. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | Address another cost/verification/cancellation edge case in four-provider recovery with per-retry grant fencing. |
+
+- **Current status:** assignments were sent successfully to all eleven IDs. App thread snapshot showed 10 tasks active; task 09 was not present in that one limited snapshot and needs a fresh status check. No new wave 4 commit had appeared at dispatch recording time. Uncommitted worker changes, if any, remain isolated and must be recovered from each task/worktree before integration.
+- **Exact next actions:** check all eleven thread states and branch/worktree SHAs; recover every uncommitted worker diff from its assigned isolated checkout; wait for work through bounded progress checks while continuing integration; review and adversarially test each resulting commit; update this file with each branch, task ID, base, latest SHA, verification and merge state. Keep the current root checkout at the pushed baseline until each worker commit is reviewed. All live backend/provider/native/device/deployment blockers from wave 3 remain unchanged.
