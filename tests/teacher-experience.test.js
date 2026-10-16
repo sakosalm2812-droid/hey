@@ -557,7 +557,12 @@ test("verified lessons are stored through the shared Forge artifact contract wit
 });
 
 test("Teacher activity handout is class-authorized, answer-free, and saved through Forge", async () => {
-  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  let lesson;
+  await withForgeBatchPersistence(async () => {
+    lesson = (await HEY.teacher.createLessonWorksheetJourney({
+      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+    })).lesson;
+  });
   const handout = await buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext());
   assert.equal(handout.content.type, "teacher_activity_handout");
   assert.equal(handout.metadata.classId, "class-1");
@@ -579,13 +584,22 @@ test("Teacher activity handout is class-authorized, answer-free, and saved throu
 });
 
 test("Teacher activity handout denies unauthorized class access and fails when Forge is unavailable", async () => {
-  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  let lesson;
+  await withForgeBatchPersistence(async () => {
+    lesson = (await HEY.teacher.createLessonWorksheetJourney({
+      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+    })).lesson;
+  });
   const originalGetUser = supabaseClient.auth.getUser;
   try {
     supabaseClient.auth.getUser = async () => ({ data: { user: {
       id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-other"] },
     } }, error: null });
-    await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext()), /Authenticated teacher access/);
+    await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext()), /Authenticated teacher access|source lesson failed verification/);
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-2", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext()), /Only the Teacher who authored this lesson/);
     supabaseClient.auth.getUser = originalGetUser;
     const handout = await buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext());
     let failedArtifactId;
@@ -601,6 +615,25 @@ test("Teacher activity handout denies unauthorized class access and fails when F
   } finally {
     supabaseClient.auth.getUser = originalGetUser;
   }
+});
+
+test("Teacher activity handout rejects mismatched or accessor-backed scope before saving", async () => {
+  let lesson;
+  await withForgeBatchPersistence(async () => {
+    lesson = (await HEY.teacher.createLessonWorksheetJourney({
+      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+    })).lesson;
+  });
+  const wrongScope = { ...teacherContext(), currentAccountScope: "account:teacher-2" };
+  await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, wrongScope), /must match the active context/);
+  const wrongClass = { ...teacherContext(), classId: "class-2", currentClassId: "class-2" };
+  await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, wrongClass), /source lesson failed verification/);
+
+  let getterCalls = 0;
+  const hostileContext = teacherContext();
+  Object.defineProperty(hostileContext, "classId", { enumerable: true, get() { getterCalls += 1; return "class-1"; } });
+  await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, hostileContext), /safe, bounded data/);
+  assert.equal(getterCalls, 0);
 });
 
 test("shared artifact save rejects scope mismatches, tampering, and hostile context without persisting", async () => {
@@ -851,6 +884,9 @@ test("saved teacher journeys reopen from persisted rows and reject incomplete or
       assert.equal(reopened.saved.lesson.metadata.journeyId, journeyId);
       assert.match(JSON.stringify(reopened.saved.teacherArtifact.content), /teacherAnswer/);
       assert.doesNotMatch(JSON.stringify(reopened.saved.studentArtifact.content), /teacherAnswer|One quarter is one of four equal parts/);
+      const recoveredHandout = await HEY.teacher.buildActivityHandoutArtifact(reopened.lesson, 0, context);
+      assert.equal(recoveredHandout.content.type, "teacher_activity_handout");
+      assert.doesNotMatch(JSON.stringify(recoveredHandout), /teacherAnswer|expectedLearning/);
 
       await assert.rejects(HEY.teacher.getLessonWorksheetJourney({
         journeyId, context: { ...context, classId: "other-class", currentClassId: "other-class" },

@@ -79,6 +79,10 @@ export default function TeacherExperiencePage() {
   const [lessonForm, setLessonForm] = useState(createEmptyLessonForm);
   const [preview, setPreview] = useState(null);
   const [savedJourney, setSavedJourney] = useState(null);
+  const [activityHandout, setActivityHandout] = useState(null);
+  const [savedActivityHandout, setSavedActivityHandout] = useState(null);
+  const [activityHandoutStatus, setActivityHandoutStatus] = useState("idle");
+  const [activityHandoutError, setActivityHandoutError] = useState("");
   const [recoveryHint, setRecoveryHint] = useState(null);
   const [exports, setExports] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -91,6 +95,10 @@ export default function TeacherExperiencePage() {
   const resetTransientJourney = useCallback(() => {
     setPreview(null);
     setSavedJourney(null);
+    setActivityHandout(null);
+    setSavedActivityHandout(null);
+    setActivityHandoutStatus("idle");
+    setActivityHandoutError("");
     setExports(null);
     setSafetyAcknowledged(false);
     setStatus("idle");
@@ -346,6 +354,106 @@ export default function TeacherExperiencePage() {
     }
   }
 
+  async function prepareActivityHandout(activityIndex) {
+    if (!savedJourney || !preview || !teacherOperationCanStart(busyRef.current, accountId)) return;
+    const operationAccountId = preview.expected.userId;
+    const operationAccountScope = preview.expected.accountScope;
+    busyRef.current = operationAccountId;
+    setActivityHandoutStatus("preparing");
+    setActivityHandoutError("");
+    setActivityHandout(null);
+    setSavedActivityHandout(null);
+    try {
+      const freshAccess = await readCurrentTeacherAccess(operationAccountId);
+      if (!teacherJourneyPersistenceMatches(savedJourney, { ...preview.expected, journeyId: preview.journeyId })
+        || freshAccess.userId !== operationAccountId
+        || !hasActiveContext(preview.expected, freshAccess.classIds)) {
+        throw new Error("Recheck your saved lesson and assigned class before preparing an activity handout.");
+      }
+      const context = {
+        accountScope: preview.expected.accountScope,
+        workspaceId: preview.expected.workspaceId,
+        classId: preview.expected.classId,
+        currentAccountScope: preview.expected.accountScope,
+        currentWorkspaceId: preview.expected.workspaceId,
+        currentClassId: preview.expected.classId,
+      };
+      const artifact = await HEY.teacher.buildActivityHandoutArtifact(savedJourney.lesson, activityIndex, context);
+      if (hasTeacherAnswerKeyField(artifact.content)) throw new Error("The activity handout failed its answer-key separation check.");
+      const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
+      if (confirmedAccess.userId !== operationAccountId || !hasActiveContext(preview.expected, confirmedAccess.classIds)
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        throw new Error("Teacher access changed while preparing the activity handout. Recheck your class and try again.");
+      }
+      setActivityHandout({ artifact, activityIndex, expected: preview.expected });
+      setActivityHandoutStatus("preview-ready");
+    } catch (handoutError) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+        setActivityHandoutError(handoutError?.message || "The activity handout preview could not be prepared.");
+        setActivityHandoutStatus("error");
+      }
+    } finally {
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
+    }
+  }
+
+  async function saveActivityHandout() {
+    if (!activityHandout || !teacherOperationCanStart(busyRef.current, accountId)) return;
+    const { artifact, expected } = activityHandout;
+    const operationAccountId = expected.userId;
+    const operationAccountScope = expected.accountScope;
+    busyRef.current = operationAccountId;
+    setActivityHandoutStatus("saving");
+    setActivityHandoutError("");
+    try {
+      const context = {
+        accountScope: expected.accountScope,
+        workspaceId: expected.workspaceId,
+        classId: expected.classId,
+        currentAccountScope: expected.accountScope,
+        currentWorkspaceId: expected.workspaceId,
+        currentClassId: expected.classId,
+      };
+      const freshAccess = await readCurrentTeacherAccess(operationAccountId);
+      if (freshAccess.userId !== operationAccountId || !hasActiveContext(expected, freshAccess.classIds)
+        || !teacherJourneyPersistenceMatches(savedJourney, { ...expected, journeyId: preview.journeyId })) {
+        throw new Error("Teacher access or the saved lesson changed. Recheck access and prepare a fresh handout.");
+      }
+      const verification = await HEY.teacher.verifyActivityHandoutArtifact(artifact, context);
+      if (!verification.valid || hasTeacherAnswerKeyField(artifact.content)) {
+        throw new Error("The activity handout failed its account, class, source, or answer-key verification.");
+      }
+      const persisted = await HEY.teacher.saveActivityHandoutArtifact(artifact, context);
+      if (!persisted?.id || persisted.type !== "document" || persisted.status !== "draft"
+        || persisted.createdBy !== operationAccountId
+        || persisted.projectId !== expected.workspaceId
+        || persisted.metadata?.artifactContract !== "hey.teacher.activity_handout.v1"
+        || persisted.metadata?.accountScope !== expected.accountScope
+        || persisted.metadata?.workspaceId !== expected.workspaceId
+        || persisted.metadata?.classId !== expected.classId
+        || persisted.metadata?.audience !== "student"
+        || persisted.metadata?.safety?.teacherReviewRequiredBeforeUse !== true
+        || persisted.content?.type !== "teacher_activity_handout"
+        || hasTeacherAnswerKeyField(persisted.content)) {
+        throw new Error("Forge did not return a verified, answer-free activity handout for this class.");
+      }
+      const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
+      if (confirmedAccess.userId !== operationAccountId || !hasActiveContext(expected, confirmedAccess.classIds)
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        throw new Error("Teacher access changed before the saved handout could be shown. Reopen Forge to verify it.");
+      }
+      setSavedActivityHandout(persisted);
+      setActivityHandoutStatus("saved");
+    } catch (handoutError) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+        setActivityHandoutError(handoutError?.message || "Forge could not confirm the activity handout save. Check Forge before retrying.");
+        setActivityHandoutStatus("error");
+      }
+    } finally {
+      if (teacherOperationLockBelongsToAccount(busyRef.current, operationAccountId)) busyRef.current = null;
+    }
+  }
+
   async function recoverSavedJourney() {
     if (!recoveryHint || !teacherOperationCanStart(busyRef.current, accountId)) return;
     const operationAccountId = accountId;
@@ -465,7 +573,8 @@ export default function TeacherExperiencePage() {
     ? access
     : authLoading || accountId ? { status: "checking", classIds: [] } : { status: "identity-missing", classIds: [] };
   const accountIsCurrent = accessIsCurrent && currentAccess.status === "ready";
-  const busy = ["preparing", "saving", "recovering", "exporting"].includes(status);
+  const busy = ["preparing", "saving", "recovering", "exporting"].includes(status)
+    || ["preparing", "saving"].includes(activityHandoutStatus);
 
   return (
     <main className="teacher-experience" aria-labelledby="teacher-experience-title">
@@ -558,6 +667,19 @@ export default function TeacherExperiencePage() {
               <button className="teacher-experience__secondary" type="button" onClick={() => { resetTransientJourney(); setStatus("idle"); }}>Edit lesson</button>
             </div>
             {savedJourney ? <div className="teacher-experience__saved" role="status"><Check size={17} aria-hidden="true" /><div><strong>Forge confirmed the complete lesson set.</strong><span>Lesson, private answer key, and student worksheet readback matched the selected project, class, account, and creator.</span></div></div> : null}
+            {savedJourney ? <section className="teacher-experience__handout" aria-labelledby="teacher-handout-heading">
+              <h3 id="teacher-handout-heading">Separate student activity handout</h3>
+              <p>Prepare one activity from this verified lesson as a separate Forge draft. Teacher review is required before classroom use; this does not distribute it to students.</p>
+              {!activityHandout && !savedActivityHandout ? <div className="teacher-experience__actions">
+                {savedJourney.lesson.content.activities.map((activity, index) => <button key={`${index}-${activity.title}`} type="button" className="teacher-experience__secondary" onClick={() => prepareActivityHandout(index)} disabled={busy}>Prepare “{activity.title}” handout</button>)}
+              </div> : null}
+              {activityHandout ? <article className="teacher-experience__handout-preview"><h4>{activityHandout.artifact.content.title}</h4><p>{activityHandout.artifact.content.subject} · {activityHandout.artifact.content.gradeBand} · {activityHandout.artifact.content.estimatedMinutes} minutes</p><p>{activityHandout.artifact.content.directions}</p>
+                {activityHandout.artifact.content.materials.length ? <><strong>Materials</strong><ul>{activityHandout.artifact.content.materials.map((material) => <li key={material}>{material}</li>)}</ul></> : null}
+                <div className="teacher-experience__actions"><button type="button" className="teacher-experience__primary" onClick={saveActivityHandout} disabled={busy || Boolean(savedActivityHandout)}>{activityHandoutStatus === "saving" ? "Saving handout…" : savedActivityHandout ? "Forge confirmed handout" : "Save separate handout to Forge"}</button>{!savedActivityHandout ? <button type="button" className="teacher-experience__secondary" onClick={() => { setActivityHandout(null); setActivityHandoutError(""); setActivityHandoutStatus("idle"); }} disabled={busy}>Choose another activity</button> : null}</div>
+              </article> : null}
+              {savedActivityHandout ? <div className="teacher-experience__saved" role="status"><Check size={17} aria-hidden="true" /><div><strong>Forge confirmed the separate student handout.</strong><span>Saved to the selected project for the assigned class. Student distribution was not started.</span></div></div> : null}
+              {activityHandoutError ? <div className="teacher-experience__notice teacher-experience__notice--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{activityHandoutError}</p></div> : null}
+            </section> : null}
             {savedJourney && !exports ? <div className="teacher-experience__review">
               <label><input type="checkbox" checked={safetyAcknowledged} onChange={(event) => setSafetyAcknowledged(event.target.checked)} /> I reviewed the safety flags and will verify this material before classroom use.</label>
               <button type="button" className="teacher-experience__primary" onClick={prepareExports} disabled={busy}>{status === "exporting" ? <LoaderCircle className="teacher-experience__spin" size={17} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}{status === "exporting" ? "Checking access and exports…" : "Prepare the three exports"}</button>

@@ -134,6 +134,11 @@
 .teacher-experience__question legend { padding: 0 7px; color: var(--accent, #c4a97d); font-weight: 700; }
 .teacher-experience__remove-question { align-self: end; }
 .teacher-experience__question-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; color: var(--text-secondary, #c4c4ca); font-size: 13px; }
+.teacher-experience__handout { display: grid; gap: 12px; margin-top: 20px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 14px; padding: 16px; background: rgba(0, 0, 0, .12); }
+.teacher-experience__handout h3,
+.teacher-experience__handout h4,
+.teacher-experience__handout p { margin-bottom: 0; }
+.teacher-experience__handout-preview { display: grid; gap: 9px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px; padding: 15px; }
 
 .teacher-experience__primary,
 .teacher-experience__secondary {

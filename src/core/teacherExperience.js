@@ -27,6 +27,7 @@ const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
 const PREPARED_TEACHER_JOURNEYS = new WeakSet();
 const BUILT_TEACHER_ACTIVITY_HANDOUTS = new WeakSet();
+const VERIFIED_PERSISTED_TEACHER_LESSONS = new WeakSet();
 const PERSISTED_TEACHER_READBACK = Symbol("verified persisted Teacher journey readback");
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
@@ -434,8 +435,9 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
 }
 
 export async function buildTeacherActivityHandoutArtifact(lessonArtifact, activityIndex, context) {
-  if (!lessonArtifact || typeof lessonArtifact !== "object" || !BUILT_TEACHER_LESSON_ARTIFACTS.has(lessonArtifact)) {
-    throw new Error("Activity handout requires a lesson built in the active Teacher runtime");
+  if (!lessonArtifact || typeof lessonArtifact !== "object"
+    || !BUILT_TEACHER_LESSON_ARTIFACTS.has(lessonArtifact) && !VERIFIED_PERSISTED_TEACHER_LESSONS.has(lessonArtifact)) {
+    throw new Error("Activity handout requires a lesson built or reloaded in the active Teacher runtime");
   }
   let stableContext;
   try {
@@ -451,17 +453,32 @@ export async function buildTeacherActivityHandoutArtifact(lessonArtifact, activi
     || stableContext.currentClassId !== classId) {
     throw new Error("Activity handout account, workspace, and class must match the active context");
   }
-  const sourceVerification = await verifyTeacherLessonArtifact(lessonArtifact, { accountScope, workspaceId });
+  let stableLessonArtifact;
+  try {
+    const snapshot = snapshotLessonData(lessonArtifact);
+    stableLessonArtifact = {
+      type: snapshot.type,
+      title: snapshot.title,
+      description: snapshot.description,
+      content: snapshot.content,
+      metadata: snapshot.metadata,
+      createdBy: snapshot.createdBy,
+    };
+    assertOnlyDataFields(stableLessonArtifact, "Activity handout source lesson", ARTIFACT_FIELDS);
+  } catch {
+    throw new Error("Activity handout source lesson must contain only safe, bounded data");
+  }
+  const sourceVerification = await verifyTeacherLessonArtifact(stableLessonArtifact, { accountScope, workspaceId, classId });
   if (!sourceVerification.valid) throw new Error("Activity handout source lesson failed verification for the active account and workspace");
-  if (!Number.isInteger(activityIndex) || activityIndex < 0 || activityIndex >= lessonArtifact.content.activities.length) {
+  if (!Number.isInteger(activityIndex) || activityIndex < 0 || activityIndex >= stableLessonArtifact.content.activities.length) {
     throw new RangeError("Choose an activity from the verified lesson");
   }
   const createdBy = await requireTeacherAuthor(accountScope, classId);
-  if (lessonArtifact.createdBy !== createdBy) {
+  if (stableLessonArtifact.createdBy !== createdBy) {
     throw new Error("Only the Teacher who authored this lesson can create its class handout");
   }
 
-  const lesson = lessonArtifact.content;
+  const lesson = stableLessonArtifact.content;
   const activity = lesson.activities[activityIndex];
   const content = Object.freeze({
     type: "teacher_activity_handout",
@@ -498,7 +515,7 @@ export async function buildTeacherActivityHandoutArtifact(lessonArtifact, activi
       provenance: {
         generatedBy: "HEY Teacher Activity Handout Workflow",
         method: "selected_from_verified_teacher_lesson",
-        sourceLessonDigest: lessonArtifact.metadata.verification.contentDigest,
+        sourceLessonDigest: stableLessonArtifact.metadata.verification.contentDigest,
         sourceActivityIndex: activityIndex,
         createdAt,
         factualClaimsVerified: false,
@@ -1216,6 +1233,7 @@ export async function getTeacherLessonWorksheetJourney({ journeyId, context: con
   if (!lessonResult.valid || !assessmentResult.valid || !worksheetResult.valid) {
     throw new Error("Forge returned a saved Teacher journey that failed content verification");
   }
+  VERIFIED_PERSISTED_TEACHER_LESSONS.add(lesson);
   const saved = Object.freeze({ lesson, teacherArtifact, studentArtifact });
   return Object.freeze({ journeyId, lesson, teacherArtifact, studentArtifact, saved, recovered: true });
 }

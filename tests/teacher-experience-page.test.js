@@ -70,6 +70,10 @@ test("real protected entrypoint uses the atomic journey API and keeps retry IDs 
   assert.match(page, /readCurrentTeacherAccess\(preview\.expected\.userId\)/);
   assert.match(page, /hasTeacherAnswerKeyField\(savedJourney\.studentArtifact\.content\)/);
   assert.match(page, /Nothing was written to Forge while preparing this preview/);
+  assert.match(page, /HEY\.teacher\.buildActivityHandoutArtifact\(savedJourney\.lesson, activityIndex, context\)/);
+  assert.match(page, /HEY\.teacher\.verifyActivityHandoutArtifact\(artifact, context\)/);
+  assert.match(page, /HEY\.teacher\.saveActivityHandoutArtifact\(artifact, context\)/);
+  assert.match(page, /Teacher review is required before classroom use; this does not distribute it to students/);
 });
 
 test("active Teacher page fences readiness and drafts to the signed-in account", () => {
