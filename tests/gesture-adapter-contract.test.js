@@ -247,6 +247,38 @@ test("camera permission denial leaves recognition inactive and reports no availa
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
 });
 
+test("camera denial recovery resets the failed session after a non-prompting permission recheck", async () => {
+  const { engine, profile } = makeEngine();
+  installCamera();
+  let permission = "prompt";
+  let cameraRequests = 0;
+  const states = [];
+  engine.subscribe((event, payload) => {
+    if (event === "recognition_state_changed") states.push(payload);
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { cameraRequests += 1; const error = new Error("denied"); error.name = "NotAllowedError"; throw error; } },
+      permissions: { async query() { return { state: permission }; } },
+    },
+  });
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() {} });
+
+  assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "test" })).code, "camera_permission_denied");
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+  assert.equal(cameraRequests, 1);
+  permission = "granted";
+  const capability = await engine.recheckCameraAccess();
+
+  assert.equal(capability.status, "supported");
+  assert.equal(capability.permission, "granted");
+  assert.equal(capability.sessionState, GESTURE_STATES.INACTIVE);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(cameraRequests, 1); // Rechecking permission never opens the camera.
+  assert.equal(states.at(-1)?.reason, "permission_recovered");
+});
+
 test("capability preflight reads camera permission without prompting and reports missing detector honestly", async () => {
   const { engine } = makeEngine();
   let cameraPromptCount = 0;

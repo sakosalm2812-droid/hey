@@ -133,6 +133,17 @@ export default function GestureStudioPage() {
     } finally { setBusy(false); }
   }
 
+  async function recheckCameraAccess() {
+    const nextCapability = await gestureEngine.recheckCameraAccess();
+    setCapability(nextCapability);
+    setSessionState(nextCapability.sessionState);
+    if (nextCapability.status === "supported") {
+      setConsent(false);
+      setError("");
+      setMessage("Camera can be requested again. Reconfirm consent and start recognition when ready.");
+    }
+  }
+
   function stopSession() {
     gestureEngine.stopRecognition("user_stop"); setSessionState(gestureEngine.getRecognitionState()); setConsent(false); setLatestObservation(null); setMessage("Recognition stopped and camera released.");
   }
@@ -222,7 +233,7 @@ export default function GestureStudioPage() {
             {!active && !paused && <><label>Session mode<select value={mode} onChange={(event) => setMode(event.target.value)} disabled={busy}><option value="test">Test only · no actions</option><option value="active" disabled={!canUseActiveMode}>Active · mapped actions</option></select></label><label className="hey-gesture-studio__consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} disabled={busy || !profileId || cameraBlocked}/><span>I consent to camera use for this gesture session.</span></label><button type="button" onClick={startSession} disabled={busy || !consent || !profileId || cameraBlocked}><Camera size={16}/>{busy ? "Starting…" : "Start recognition"}</button></>}
             {active && <><button type="button" onClick={() => gestureEngine.pauseRecognition()}><Pause size={16}/> Pause</button><button type="button" className="secondary" onClick={stopSession}><Square size={16}/> Stop</button></>}
             {paused && <><button type="button" onClick={() => gestureEngine.resumeRecognition()}><Play size={16}/> Resume</button><button type="button" className="secondary" onClick={stopSession}><Square size={16}/> Stop</button></>}
-            {["permission_denied", "revoked"].includes(capability?.status) && <button type="button" className="secondary" onClick={() => { void gestureEngine.getRecognitionCapability().then(setCapability); }}>Recheck camera access</button>}
+            {["permission_denied", "revoked"].includes(capability?.status) && <button type="button" className="secondary" onClick={() => { void recheckCameraAccess(); }}>Recheck camera access</button>}
           </div>
           {(active || paused) && <div className="hey-gesture-studio__preview"><video ref={videoRef} autoPlay muted playsInline aria-label="Live local gesture camera preview"/><p role="status">{paused ? "Paused · camera still active" : mode === "test" ? `Test mode · ${detectedLabel}${latestDetection ? ` · ${Math.round(latestDetection.confidence * 100)}% match confidence` : latestObservation ? ` · ${Math.round(latestObservation.handConfidence * 100)}% hand confidence` : ""}` : "Active mode · local hand detection"}</p></div>}
           <p className="hey-gesture-studio__status" role="status">Session: {sessionState}{capability?.adapterKind ? ` · Detector: ${capability.adapterKind}` : ""}</p>

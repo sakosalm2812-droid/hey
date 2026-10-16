@@ -403,6 +403,15 @@ export class GestureEngine {
     }
   }
 
+  async recheckCameraAccess() {
+    const capability = await this.getRecognitionCapability();
+    if (capability.status === "supported" && this.recognitionState === GESTURE_STATES.ERROR) {
+      this.recognitionState = GESTURE_STATES.INACTIVE;
+      this.notify("recognition_state_changed", { state: this.recognitionState, camera: "inactive", reason: "permission_recovered" });
+    }
+    return { ...capability, sessionState: this.recognitionState };
+  }
+
   setCameraCapabilityStatus(status, reason = null) {
     if (!["supported", "unavailable", "permission_denied", "revoked"].includes(status)) return;
     if (this.cameraCapabilityStatus === status) return;

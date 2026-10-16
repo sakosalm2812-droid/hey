@@ -39,7 +39,9 @@ test("Gesture Studio discloses local camera processing and separate MediaPipe me
 test("Gesture Studio offers camera permission recovery for denied and revoked access", () => {
   assert.match(studioSource, /\["permission_denied", "revoked"\]\.includes\(capability\?\.status\)/);
   assert.match(studioSource, /Recheck camera access/);
-  assert.match(studioSource, /getRecognitionCapability\(\)\.then\(setCapability\)/);
+  assert.match(studioSource, /void recheckCameraAccess\(\)/);
+  assert.match(studioSource, /setConsent\(false\)/);
+  assert.match(studioSource, /Reconfirm consent and start recognition when ready/);
 });
 
 test("Gesture Studio explains camera track loss separately from permission revocation", () => {
