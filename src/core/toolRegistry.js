@@ -122,11 +122,14 @@ function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   if (lifecycle !== undefined && (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle))) {
     throw new TypeError("Tool lifecycle metadata must be a plain object.");
   }
-  if (lifecycle && Object.keys(lifecycle).some((key) => !["start", "stop"].includes(key))) {
+  if (lifecycle && Object.keys(lifecycle).some((key) => !["start", "stop", "retry"].includes(key))) {
     throw new TypeError("Tool lifecycle metadata contains an unsupported action.");
   }
   if (lifecycle?.stop === true && lifecycle.start !== true) {
     throw new TypeError("A stoppable tool must also declare start support.");
+  }
+  if (lifecycle?.retry === true && lifecycle.start !== true) {
+    throw new TypeError("A retryable tool must also declare start support.");
   }
   if (lifecycle && Object.values(lifecycle).some((supported) => typeof supported !== "boolean")) {
     throw new TypeError("Tool lifecycle support declarations must be booleans.");
@@ -532,6 +535,30 @@ export function stopToolLibraryEntry(name, sessionId, context = {}) {
   return { success: true, status: "stopping", sessionId: session.id };
 }
 
+/** Retry a failed account-owned run by starting a fresh run through the same
+ * canonical permission and capability policy checks as an ordinary start. */
+export function retryToolLibraryEntry(name, input, context = {}) {
+  const tool = tools.get(name);
+  if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
+  if (tool.metadata.lifecycle?.retry !== true) {
+    return { success: false, status: "unsupported", error: `Tool ${name} does not declare retry behavior.` };
+  }
+  const identity = resolveToolAccount(context);
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+  const key = sessionKey(identity.accountId, name);
+  const session = activeToolSessions.get(key);
+  if (!session || !["failed", "failed_after_stop"].includes(session.status)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "retry_unavailable", at: new Date().toISOString() });
+    return { success: false, status: "retry_unavailable", error: "Only a failed run can be retried." };
+  }
+  const permissions = declaredToolPermissions(tool.metadata);
+  if (permissions.length !== 1 || !hasPermission(permissions[0], "account", identity.accountId)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "denied", at: new Date().toISOString() });
+    return { success: false, status: "denied", error: "Canonical account permission is required to retry this tool." };
+  }
+  return startToolLibraryEntry(name, input, context);
+}
+
 /** Status, Help, and Permissions are derived only from registered metadata;
  * Activity is account-filtered in-memory history from this registry. */
 export function getToolLifecycleContract(name, context = {}) {
@@ -578,6 +605,7 @@ export function getToolLifecycleContract(name, context = {}) {
     actions: Object.freeze({
       start: lifecycle.start === true,
       stop: lifecycle.stop === true,
+      retry: lifecycle.retry === true,
       status: true,
       permissions: Boolean(permission),
       help: typeof tool.metadata.description === "string" && tool.metadata.description.length > 0,
@@ -783,6 +811,7 @@ export default {
   runToolLibraryEntry,
   startToolLibraryEntry,
   stopToolLibraryEntry,
+  retryToolLibraryEntry,
   getToolLifecycleContract,
   toolLibraryPreferenceStore,
   executeTool,

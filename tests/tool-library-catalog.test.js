@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
-import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, getToolLifecycleContract } from "../src/core/toolRegistry.js";
+import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, getToolLifecycleContract } from "../src/core/toolRegistry.js";
 import { seedPermissions, clearPermissions } from "../src/core/permissionManager.js";
 import { setAccountScope } from "../src/core/accountScope.js";
 
@@ -307,7 +307,7 @@ test("tool lifecycle reports only declared actions and requires canonical accoun
     const denied = startToolLibraryEntry(name, {}, { user: { id: "contract-account" } });
     assert.equal(denied.status, "unsupported", "tools without lifecycle handlers cannot claim start support");
     const contract = getToolLifecycleContract(name, { user: { id: "contract-account" } });
-    assert.deepEqual(contract.actions, { start: false, stop: false, status: true, permissions: true, help: true, activity: true });
+    assert.deepEqual(contract.actions, { start: false, stop: false, retry: false, status: true, permissions: true, help: true, activity: true });
     assert.equal(contract.permissions.granted, false);
     assert.equal(contract.status, "registered");
     assert.equal(stopToolLibraryEntry(name, "not-a-session", { user: { id: "contract-account" } }).status, "unsupported");
@@ -547,6 +547,52 @@ test("a non-cooperative handler is never reported as stopped when it completes a
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(getToolLifecycleContract(name, context).status, "completed_after_stop");
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("failed lifecycle runs can be retried only by the authorized account through current policy", async () => {
+  const name = "test.tool_library.lifecycle_retry";
+  const capability = "test.tool_library.lifecycle_retry_capability";
+  registerCapability({ id: capability, name: "Retry capability", supportedPlatforms: ["web"], platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-retry-owner");
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-retry-owner");
+  let attempts = 0;
+  try {
+    registerTool(name, async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("temporary failure");
+      return { success: true };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, retry: true },
+    });
+    const owner = { platform: "web", user: { id: "lifecycle-retry-owner", plan: "elite", entitlements: ["elite"] } };
+    assert.equal(getToolLifecycleContract(name, owner).actions.retry, true);
+    assert.equal(retryToolLibraryEntry(name, {}, owner).status, "retry_unavailable", "retry cannot launch a tool without a failed run");
+
+    const first = startToolLibraryEntry(name, {}, owner);
+    assert.equal(first.success, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(getToolLifecycleContract(name, owner).status, "failed");
+
+    assert.equal(retryToolLibraryEntry(name, {}, { ...owner, user: { ...owner.user, id: "attacker" } }).status, "denied");
+    assert.equal(retryToolLibraryEntry(name, {}, { ...owner, platform: "ios" }).status, CAPABILITY_STATUS.unsupported);
+    clearPermissions();
+    assert.equal(retryToolLibraryEntry(name, {}, owner).status, "denied", "revoked canonical permission blocks retry");
+    seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-retry-owner");
+
+    const recovered = retryToolLibraryEntry(name, {}, owner);
+    assert.equal(recovered.success, true);
+    assert.notEqual(recovered.sessionId, first.sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(attempts, 2);
+    assert.equal(getToolLifecycleContract(name, owner).status, "completed");
+    assert.deepEqual(getToolLifecycleContract(name, owner).activity.map(({ status }) => status), ["completed", "running", "starting", "denied", "unsupported", "failed", "running", "starting", "retry_unavailable"]);
   } finally {
     unregisterTool(name);
     clearPermissions();
