@@ -585,8 +585,8 @@ export function getToolLifecycleContract(name, context = {}) {
     ? catalogEntry.status
     : CAPABILITY_STATUS.unsupported;
   const requiredPermissions = declaredToolPermissions(tool.metadata);
-  const permissionGranted = requiredPermissions.length === 1 && hasPermission(requiredPermissions[0], "account", identity.accountId);
-  const readiness = availabilityStatus === CAPABILITY_STATUS.unsupported || availabilityStatus === CAPABILITY_STATUS.restricted || requiredPermissions.length !== 1
+  const permissionGranted = requiredPermissions.length > 0 && requiredPermissions.every((requiredPermission) => hasPermission(requiredPermission, "account", identity.accountId));
+  const readiness = availabilityStatus === CAPABILITY_STATUS.unsupported || availabilityStatus === CAPABILITY_STATUS.restricted || requiredPermissions.length === 0
     ? "unavailable"
     : availabilityStatus === CAPABILITY_STATUS.permissionRequired || !permissionGranted
       ? "permission_required"

@@ -376,6 +376,47 @@ test("lifecycle status reports bounded platform and dependency availability with
   }
 });
 
+test("lifecycle permission readiness requires every declared permission and keeps its public shape", () => {
+  const capability = "test.tool_library.multiple_permission_readiness";
+  const names = ["test.tool_library.multiple_permission_tool", "test.tool_library.no_permission_tool"];
+  registerCapability({ id: capability, name: "Multi-permission readiness capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("multiple-permission-account");
+  try {
+    registerTool(names[0], async () => ({ success: true }), {
+      capabilities: [capability],
+      permissions: ["filesystem.read", "browser.read"],
+    });
+    registerTool(names[1], async () => ({ success: true }), { capabilities: [capability] });
+    const context = { user: { id: "multiple-permission-account" }, platform: "web" };
+
+    const noneGranted = getToolLifecycleContract(names[0], context);
+    assert.deepEqual(noneGranted.permissions, { required: "filesystem.read", granted: false });
+    assert.equal(noneGranted.readiness, "permission_required");
+
+    seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], context.user.id);
+    const oneGranted = getToolLifecycleContract(names[0], context);
+    assert.deepEqual(oneGranted.permissions, { required: "filesystem.read", granted: false });
+    assert.equal(oneGranted.readiness, "permission_required");
+
+    seedPermissions([
+      { permission: "filesystem.read", status: "granted", scope: "account" },
+      { permission: "browser.read", status: "granted", scope: "account" },
+    ], context.user.id);
+    const allGranted = getToolLifecycleContract(names[0], context);
+    assert.deepEqual(allGranted.permissions, { required: "filesystem.read", granted: true });
+    assert.deepEqual(Object.keys(allGranted.permissions).sort(), ["granted", "required"]);
+    assert.equal(allGranted.readiness, "ready");
+
+    const noPermission = getToolLifecycleContract(names[1], context);
+    assert.equal(noPermission.permissions, null);
+    assert.equal(noPermission.readiness, "unavailable");
+  } finally {
+    names.forEach(unregisterTool);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
 test("lifecycle start is denied after permission revocation and never dispatches the handler", () => {
   const name = "test.tool_library.revoked_lifecycle";
   const capability = "test.tool_library.revoked_lifecycle_capability";
