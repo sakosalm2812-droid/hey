@@ -2,7 +2,7 @@ import { normalizePlan } from "./accountRecords.js";
 
 const PERMISSION_PLAN_RULES = {
   free: {
-    allowed: ["memory.read", "web.search", "voice.microphone", "proactive.suggestions"],
+    allowed: ["memory.read", "web.search", "voice.microphone", "proactive.suggestions", "system.info"],
   },
   pro: {
     allowed: [
@@ -14,6 +14,7 @@ const PERMISSION_PLAN_RULES = {
       "browser.open_url",
       "browser.navigate",
       "notifications.create",
+      "system.info",
     ],
   },
   elite: {
@@ -36,6 +37,7 @@ const PERMISSION_PLAN_RULES = {
       "window.control",
       "input.control",
       "screen.capture",
+      "system.info",
     ],
   },
 };

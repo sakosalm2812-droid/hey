@@ -59,6 +59,8 @@
 .hey-chat-sidebar-footer strong { color: var(--text-primary); font-size: 12px; }
 .hey-chat-sidebar-footer span:not(.hey-chat-live-dot) { color: var(--text-muted); font-size: 10px; }
 .hey-chat-live-dot { width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--green-accent); box-shadow: 0 0 13px var(--green-accent); }
+.hey-chat-live-dot.is-unavailable { background: var(--coral); box-shadow: 0 0 9px rgba(255,158,122,.55); }
+.hey-chat-live-dot.is-checking { background: var(--text-muted); box-shadow: none; }
 
 .hey-chat-panel { display: flex; flex: 1; min-width: 0; flex-direction: column; overflow: hidden; background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.018)); }
 .hey-chat-header { min-height: 70px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.025); }
@@ -66,6 +68,21 @@
 .hey-chat-title h2 { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 700; }
 .hey-chat-status { gap: 6px; letter-spacing: .08em; }
 .hey-chat-status span { width: 6px; height: 6px; border-radius: 50%; background: var(--green-accent); box-shadow: 0 0 10px var(--green-accent); }
+.hey-chat-status.is-not_configured span,
+.hey-chat-status.is-unavailable span { background: var(--coral); box-shadow: 0 0 10px rgba(255,158,122,.55); }
+.hey-chat-status.is-checking span { background: var(--text-muted); box-shadow: none; }
+.hey-chat-service-status { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 15px; min-height: 42px; padding: 8px 18px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,.1); }
+.hey-chat-service-item { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.hey-chat-service-item i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.hey-chat-service-item strong { color: var(--text-secondary); font-weight: 600; }
+.hey-chat-service-item.is-connected i,
+.hey-chat-service-item.is-ready i { background: var(--green-accent); box-shadow: 0 0 9px var(--green-accent); }
+.hey-chat-service-item.is-unavailable i,
+.hey-chat-service-item.is-not_configured i { background: var(--coral); box-shadow: 0 0 9px rgba(255,158,122,.55); }
+.hey-chat-service-explainer { flex: 1 1 240px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+.hey-chat-service-retry { min-height: 28px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 10px; cursor: pointer; }
+.hey-chat-service-retry:hover { border-color: var(--accent); color: var(--text-primary); }
+.hey-chat-service-retry:disabled { cursor: wait; opacity: .6; }
 .hey-chat-header-actions { gap: 9px; }
 .hey-chat-adaptive { gap: 6px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); font-size: 11px; }
 .hey-chat-icon-button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--border); border-radius: 11px; background: var(--glass-bg); color: var(--text-secondary); cursor: pointer; }
@@ -83,6 +100,7 @@
 .hey-chat-message.user .hey-chat-message-body { text-align: right; }
 .hey-chat-message-label { margin: 3px 0 7px; font-size: 9px; }
 .hey-chat-message-copy { color: var(--text-primary); font-size: 14px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hey-chat-verification { margin-top: 8px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
 .hey-chat-message.user .hey-chat-message-copy { display: inline-block; padding: 12px 15px; border: 1px solid var(--border); border-radius: 18px 18px 5px 18px; background: linear-gradient(135deg, var(--accent-glow-soft), rgba(255,255,255,.06)); text-align: left; }
 .hey-chat-message-actions { display: flex; gap: 3px; margin-top: 8px; opacity: 0; transition: opacity .2s var(--ease); }
 .hey-chat-message:hover .hey-chat-message-actions,
@@ -153,6 +171,7 @@
 .hey-dictation__result-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hey-dictation__active-label { color: #ffaaaa; font-size: 10px; }
 .hey-dictation__transcript { margin: 0; padding: 9px 10px; border-radius: 9px; background: rgba(0,0,0,.16); color: var(--text-primary); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hey-dictation__transcript-editor { width: 100%; min-height: 72px; resize: vertical; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; background: rgba(0,0,0,.16); color: var(--text-primary); font: inherit; font-size: 12px; line-height: 1.6; }
 .hey-dictation__unsupported { color: var(--text-muted); }
 @keyframes hey-dictation-pulse { 50% { opacity: .4; } }
 .hey-chat-input-shell { display: flex; align-items: end; gap: 10px; min-height: 58px; padding: 9px 10px 9px 16px; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: linear-gradient(145deg, rgba(255,255,255,.13), rgba(255,255,255,.045)); box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 12px 35px rgba(0,0,0,.15); backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%); }
@@ -179,6 +198,10 @@
 .hey-chat-input-actions .hey-chat-send:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
 .hey-chat-disclaimer { margin: 9px 0 0; text-align: center; font-size: 9px; letter-spacing: .04em; text-transform: none; }
 .hey-chat-drawer-backdrop { display: none; }
+.hey-dictation-edit { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-2); color: var(--text-secondary); font-size: 12px; }
+.hey-dictation-edit > p { margin: 4px 0 10px; }
+.hey-dictation-edit__preview { display: grid; gap: 8px; }
+.hey-dictation-edit__preview blockquote { margin: 0; padding: 10px 12px; white-space: pre-wrap; border-left: 2px solid var(--accent); background: var(--surface-1); color: var(--text-primary); }
 
 @media (max-width: 900px) {
   .hey-chat-page { min-height: calc(100vh - 124px); }

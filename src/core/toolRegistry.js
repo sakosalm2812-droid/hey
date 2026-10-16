@@ -12,6 +12,8 @@ const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
 const invocationPlans = new WeakMap();
+let capabilityAvailabilityResolver = null;
+let capabilityAvailabilityResolverOwner = null;
 export const toolLibraryPreferenceStore = createToolLibraryPreferenceStore({
   isToolRegistered: (name) => tools.has(name),
 });
@@ -31,6 +33,13 @@ subscribeAccountScope((previousScope) => {
 
 function cloneMetadata(metadata) {
   return cloneMetadataValue(metadata, new WeakSet());
+}
+
+function declaredToolPermissions(metadata) {
+  const values = [];
+  if (metadata.permission !== undefined) values.push(metadata.permission);
+  if (Array.isArray(metadata.permissions)) values.push(...metadata.permissions);
+  return [...new Set(values)];
 }
 
 function cloneMetadataValue(value, ancestors) {
@@ -151,6 +160,18 @@ export function registerOwnedTool(name, handler, metadata, ownerToken) {
     throw new TypeError("An opaque tool owner token is required.");
   }
   return registerToolWithOwner(name, handler, metadata, ownerToken);
+}
+
+/** Bind catalog discovery to the trusted runtime adapter owner. */
+export function setToolCapabilityAvailabilityResolver(resolver, ownerToken) {
+  if (typeof resolver !== "function" || !ownerToken || (typeof ownerToken !== "object" && typeof ownerToken !== "function")) {
+    throw new TypeError("A capability resolver and opaque owner token are required.");
+  }
+  if (capabilityAvailabilityResolverOwner && capabilityAvailabilityResolverOwner !== ownerToken) {
+    throw new Error("The tool capability resolver is already owned by another runtime.");
+  }
+  capabilityAvailabilityResolver = resolver;
+  capabilityAvailabilityResolverOwner = ownerToken;
 }
 
 export function unregisterTool(name) {
@@ -280,6 +301,12 @@ export function listToolCatalog({ platform = "web", adapter = null } = {}) {
           available: false,
           error: "Tool capability declaration is invalid.",
         };
+      }
+      if (!adapter && capabilityAvailabilityResolver) {
+        try { return capabilityAvailabilityResolver(capability, platform); }
+        catch {
+          return { capability, platform, status: CAPABILITY_STATUS.unsupported, available: false, error: "Runtime capability availability could not be verified." };
+        }
       }
       return getCapabilityAvailability(capability, platform, adapter);
     });
@@ -498,9 +525,39 @@ export function getToolLifecycleContract(name, context = {}) {
   if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
   const identity = resolveToolAccount(context);
   if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+  let platform = "web";
+  try {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(context, "platform");
+    if (platformDescriptor) {
+      if (!Object.hasOwn(platformDescriptor, "value") || typeof platformDescriptor.value !== "string" || !platformDescriptor.value.trim() || platformDescriptor.value.length > 32) {
+        return { success: false, status: "invalid_context", error: "A plain supported platform value is required." };
+      }
+      platform = platformDescriptor.value.trim();
+    }
+  } catch {
+    return { success: false, status: "invalid_context", error: "Tool availability could not be read safely." };
+  }
   const lifecycle = tool.metadata.lifecycle || {};
   const permission = tool.metadata.permission || tool.metadata.permissions?.[0] || null;
   const session = activeToolSessions.get(sessionKey(identity.accountId, name));
+  const catalogEntry = listToolCatalog({ platform }).find((entry) => entry.name === name);
+  const availabilityStatus = Object.values(CAPABILITY_STATUS).includes(catalogEntry?.status)
+    ? catalogEntry.status
+    : CAPABILITY_STATUS.unsupported;
+  const requiredPermissions = declaredToolPermissions(tool.metadata);
+  const permissionGranted = requiredPermissions.length > 0 && requiredPermissions.every((requiredPermission) => hasPermission(requiredPermission, "account", identity.accountId));
+  const readiness = availabilityStatus === CAPABILITY_STATUS.unsupported || availabilityStatus === CAPABILITY_STATUS.restricted || requiredPermissions.length === 0
+    ? "unavailable"
+    : availabilityStatus === CAPABILITY_STATUS.permissionRequired || !permissionGranted
+      ? "permission_required"
+      : "ready";
+  const availabilityReason = availabilityStatus === CAPABILITY_STATUS.supported
+    ? null
+    : availabilityStatus === CAPABILITY_STATUS.permissionRequired
+      ? "A required platform permission has not been granted."
+      : availabilityStatus === CAPABILITY_STATUS.restricted
+        ? "This capability is restricted by current policy."
+        : "Platform support or a required runtime dependency is unavailable.";
   return {
     success: true,
     name,
@@ -513,7 +570,19 @@ export function getToolLifecycleContract(name, context = {}) {
       activity: true,
     }),
     status: session?.status || "registered",
-    permissions: permission ? Object.freeze({ required: permission, granted: hasPermission(permission, "account", identity.accountId) }) : null,
+    readiness,
+    availability: Object.freeze({
+      platform,
+      status: availabilityStatus,
+      available: availabilityStatus === CAPABILITY_STATUS.supported,
+      reason: availabilityReason,
+      capabilities: Object.freeze((catalogEntry?.capabilities || []).map(({ capability, status, available }) => Object.freeze({
+        capability,
+        status,
+        available: available === true,
+      }))),
+    }),
+    permissions: permission ? Object.freeze({ required: permission, granted: permissionGranted }) : null,
     help: typeof tool.metadata.description === "string" ? tool.metadata.description : "",
     activity: Object.freeze((toolSessionActivity.get(identity.accountId) || []).filter((item) => item.name === name).map(({ id, name: toolName, status, at }) => Object.freeze({ id, name: toolName, status, at }))),
     sessionId: session?.id || null,

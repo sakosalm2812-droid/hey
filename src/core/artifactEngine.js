@@ -43,6 +43,12 @@ const ARTIFACT_UPDATE_FIELDS = new Set([
   "tags",
 ]);
 
+function canonicalArtifactJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalArtifactJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalArtifactJson(value[key])}`).join(",")}}`;
+}
+
 class ArtifactEngine {
   constructor() {
     this.artifacts = new Map();
@@ -76,8 +82,13 @@ class ArtifactEngine {
     this.initializeVersionGraph(artifact.id);
 
     try {
-      await this.persistArtifact(artifact);
+      await this.persistArtifact(artifact, { confirmWrite: params.requirePersistence === true });
     } catch (err) {
+      if (params.requirePersistence === true) {
+        this.artifacts.delete(artifact.id);
+        this.versionGraphs.delete(artifact.id);
+        throw new Error("Forge did not confirm durable artifact persistence", { cause: err });
+      }
       console.warn('Failed to persist artifact:', err);
     }
 
@@ -89,6 +100,98 @@ class ArtifactEngine {
     });
 
     return artifact;
+  }
+
+  async createTeacherArtifactBatch(paramsList) {
+    if (!Array.isArray(paramsList) || paramsList.length !== 3) {
+      throw new TypeError("A teacher lesson journey must contain exactly three artifacts");
+    }
+    const artifacts = paramsList.map((params) => ({
+      id: params.id || crypto.randomUUID(),
+      projectId: params.projectId,
+      type: params.type,
+      title: params.title,
+      description: params.description,
+      content: params.content || {},
+      metadata: params.metadata || {},
+      status: ARTIFACT_STATUS.DRAFT,
+      version: 1,
+      parentVersionId: null,
+      branchName: "main",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: params.createdBy,
+      tags: params.tags || [],
+    }));
+    const artifactIds = artifacts.map(({ id }) => id);
+    if (new Set(artifactIds).size !== 3 || artifacts.some((artifact) => artifact.type !== "document")) {
+      throw new TypeError("Teacher journey artifact identities and types must be unique documents");
+    }
+    const payload = artifacts.map((artifact) => ({
+      id: artifact.id,
+      project_id: artifact.projectId,
+      type: artifact.type,
+      title: artifact.title,
+      description: artifact.description,
+      content: artifact.content,
+      metadata: artifact.metadata,
+      status: artifact.status,
+      version: artifact.version,
+      parent_version_id: artifact.parentVersionId,
+      branch_name: artifact.branchName,
+      created_at: artifact.createdAt,
+      updated_at: artifact.updatedAt,
+      created_by: artifact.createdBy,
+      tags: artifact.tags,
+    }));
+
+    const { data: authData, error: authError } = await supabaseClient.auth.getUser();
+    if (authError || !authData?.user?.id) {
+      const failure = new Error("Authenticated teacher identity was not confirmed for the artifact batch", { cause: authError });
+      failure.artifactIds = artifactIds;
+      throw failure;
+    }
+
+    let data;
+    let error;
+    try {
+      ({ data, error } = await supabaseClient.rpc("hey_create_teacher_artifacts_batch", { p_artifacts: payload }));
+    } catch (cause) {
+      const failure = new Error("Forge did not confirm the atomic teacher artifact batch", { cause });
+      failure.artifactIds = artifactIds;
+      throw failure;
+    }
+    const confirmed = Array.isArray(data) && data.length === artifacts.length && artifacts.every((artifact) => {
+      const row = data.find((candidate) => candidate.id === artifact.id);
+      return row?.project_id === artifact.projectId
+        && row?.created_by === authData.user.id
+        && row?.type === artifact.type
+        && row?.title === artifact.title
+        && row?.description === artifact.description
+        && row?.metadata?.accountScope === artifact.metadata?.accountScope
+        && row?.metadata?.classId === artifact.metadata?.classId
+        && canonicalArtifactJson(row?.content) === canonicalArtifactJson(artifact.content)
+        && canonicalArtifactJson(row?.metadata) === canonicalArtifactJson(artifact.metadata)
+        && canonicalArtifactJson(row?.tags || []) === canonicalArtifactJson(artifact.tags || []);
+    });
+    if (error || !confirmed) {
+      const failure = new Error("Forge did not confirm the atomic teacher artifact batch", { cause: error });
+      failure.artifactIds = artifactIds;
+      throw failure;
+    }
+
+    const persistedArtifacts = artifacts.map((artifact) => this.deserializeArtifact(data.find((row) => row.id === artifact.id)));
+    persistedArtifacts.forEach((artifact) => {
+      this.artifacts.set(artifact.id, artifact);
+      this.initializeVersionGraph(artifact.id);
+      publish("artifact.created", { artifactId: artifact.id, projectId: artifact.projectId });
+      recordAudit({
+        action: "artifact.created",
+        status: "completed",
+        metadata: { artifactId: artifact.id, type: artifact.type, projectId: artifact.projectId },
+      });
+    });
+    return persistedArtifacts;
   }
 
   async getArtifact(artifactId) {
@@ -544,7 +647,8 @@ class ArtifactEngine {
     this.versionGraphs.set(artifactId, graph);
   }
 
-  getVersionGraph(artifactId) {
+  async getVersionGraph(artifactId) {
+    if (!await this.getArtifact(artifactId)) return { nodes: [], edges: [] };
     const graph = this.versionGraphs.get(artifactId);
     if (!graph) return { nodes: [], edges: [] };
 
@@ -685,8 +789,8 @@ class ArtifactEngine {
     };
   }
 
-  async persistArtifact(artifact) {
-    await supabaseClient
+  async persistArtifact(artifact, { confirmWrite = false } = {}) {
+    let query = supabaseClient
       .from('hey_artifacts')
       .upsert({
         id: artifact.id,
@@ -707,6 +811,16 @@ class ArtifactEngine {
       }, {
         onConflict: 'id',
       });
+    if (confirmWrite) query = query.select('id, project_id, metadata').single();
+    const { data, error } = await query;
+    if (error) throw error;
+    if (confirmWrite && (data?.id !== artifact.id
+      || data?.project_id !== artifact.projectId
+      || data?.metadata?.accountScope !== artifact.metadata?.accountScope
+      || data?.metadata?.classId !== artifact.metadata?.classId)) {
+      throw new Error("Forge persistence confirmation did not match the artifact account boundary");
+    }
+    return data;
   }
 
   async persistVersion(artifactId, version, previous = null) {
@@ -735,6 +849,10 @@ export const artifactEngine = new ArtifactEngine();
 
 export async function createArtifact(params) {
   return artifactEngine.createArtifact(params);
+}
+
+export async function createTeacherArtifactBatch(paramsList) {
+  return artifactEngine.createTeacherArtifactBatch(paramsList);
 }
 
 export async function getArtifact(artifactId) {
@@ -801,7 +919,7 @@ export async function listArtifacts(projectId, type) {
   return artifactEngine.listArtifacts(projectId, type);
 }
 
-export function getVersionGraph(artifactId) {
+export async function getVersionGraph(artifactId) {
   return artifactEngine.getVersionGraph(artifactId);
 }
 
@@ -809,6 +927,7 @@ export { ARTIFACT_TYPES, ARTIFACT_STATUS };
 
 export default {
   createArtifact,
+  createTeacherArtifactBatch,
   getArtifact,
   updateArtifact,
   createVersion,

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Pencil, Plus, RotateCw, Save, Search, Wrench, X } from "lucide-react";
+import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw, Search, Wrench, X } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
-import { spaceDetailsMatchAccount, spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
+import { spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import "./SpacesPage.css";
 
 function formatDate(value) {
@@ -15,103 +15,6 @@ function membershipAccountIsCurrent(accountRef, accountId, scope) {
   return accountRef.current === accountId && getAccountScope() === scope;
 }
 
-function SpaceDetailsEditor({ space, accountId, accountRef, onSaved }) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(space.name);
-  const [description, setDescription] = useState(space.description || "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const scope = `account:${accountId}`;
-  const isCurrent = membershipAccountIsCurrent(accountRef, accountId, scope);
-  const baseId = `space-details-${encodeURIComponent(space.id)}`;
-
-  useEffect(() => {
-    setEditing(false);
-    setName(space.name);
-    setDescription(space.description || "");
-    setSaving(false);
-    setError("");
-    setNotice("");
-  }, [accountId, space.id, space.name, space.description]);
-
-  const cancel = () => {
-    setName(space.name);
-    setDescription(space.description || "");
-    setEditing(false);
-    setSaving(false);
-    setError("");
-    setNotice("");
-  };
-
-  const save = async (event) => {
-    event.preventDefault();
-    if (!isCurrent || saving) {
-      setError("Your account changed. Reopen this Space before saving.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    setNotice("");
-    await Promise.resolve();
-    if (!membershipAccountIsCurrent(accountRef, accountId, scope)) {
-      setSaving(false);
-      setError("Your account changed. Your Space was not updated; reopen it to continue.");
-      return;
-    }
-    try {
-      const result = HEY.spaces.updateDetails({
-        accountScope: scope,
-        spaceId: space.id,
-        expectedRevision: space.detailsRevision ?? 0,
-        name,
-        description,
-      });
-      if (!membershipAccountIsCurrent(accountRef, accountId, scope)) return;
-      if (spaceDetailsMatchAccount(result, accountId, getAccountScope(), space.id)) {
-        setEditing(false);
-        setNotice("Space details saved.");
-        onSaved();
-        return;
-      }
-      if (result?.code === "stale_revision" && result.current?.accountScope === scope && result.current.spaceId === space.id) {
-        setName(result.current.name);
-        setDescription(result.current.description || "");
-        setError("These details changed elsewhere. The latest values are loaded; review them and save again.");
-      } else {
-        setError(result?.error || "Space details could not be saved. Try again.");
-      }
-    } catch {
-      if (membershipAccountIsCurrent(accountRef, accountId, scope)) setError("Space details could not be saved. Try again.");
-    } finally {
-      if (membershipAccountIsCurrent(accountRef, accountId, scope)) setSaving(false);
-    }
-  };
-
-  return (
-    <div className="spaces-page__details-editor">
-      {!editing ? (
-        <button type="button" className="spaces-page__edit-details" onClick={() => { setName(space.name); setDescription(space.description || ""); setEditing(true); setError(""); setNotice(""); }} disabled={!isCurrent}>
-          <Pencil size={14} aria-hidden="true" /> Edit details
-        </button>
-      ) : (
-        <form className="spaces-page__details-form" onSubmit={save}>
-          <label htmlFor={`${baseId}-name`}>Space name</label>
-          <input id={`${baseId}-name`} value={name} maxLength={HEY.spaces.limits.maxNameLength} required disabled={saving || !isCurrent} onChange={(event) => setName(event.target.value)} />
-          <label htmlFor={`${baseId}-description`}>Description</label>
-          <textarea id={`${baseId}-description`} value={description} maxLength={HEY.spaces.limits.maxDescriptionLength} rows={2} disabled={saving || !isCurrent} onChange={(event) => setDescription(event.target.value)} />
-          <div className="spaces-page__details-actions">
-            <button type="button" className="spaces-page__secondary" onClick={cancel} disabled={saving}>Cancel</button>
-            <button type="submit" className="spaces-page__primary" disabled={saving || !isCurrent || !name.trim()}>{saving ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Save size={15} aria-hidden="true" />} Save details</button>
-          </div>
-        </form>
-      )}
-      {error && <p className="spaces-page__membership-error" role="alert">{error}</p>}
-      {notice && <p className="spaces-page__notice" role="status"><Check size={14} aria-hidden="true" /> {notice}</p>}
-    </div>
-  );
-}
-
 function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus, retryTools }) {
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
@@ -121,8 +24,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
   const requestRef = useRef(0);
 
   const activeScope = `account:${accountId}`;
-  const accountIsCurrent = membershipAccountIsCurrent(accountRef, accountId, activeScope);
-  const currentLayout = accountIsCurrent && membership.status === "ready" && membership.accountId === accountId
+  const currentLayout = membership.status === "ready" && membership.accountId === accountId
     ? membership.layout
     : null;
   const filteredTools = useMemo(() => {
@@ -203,7 +105,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
   const controlId = `space-tools-${encodeURIComponent(space.id)}`;
   const searchId = `${controlId}-search`;
   const membershipLoading = membership.status === "loading" && membership.accountId === accountId;
-  const membershipError = !accountIsCurrent || membership.status === "error" || membership.status === "account_required";
+  const membershipError = membership.status === "error" || membership.status === "account_required";
 
   return (
     <div className="spaces-page__membership">
@@ -228,7 +130,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
             Tool membership organizes this Space. It does not grant permission or make a tool executable.
           </p>
           {membershipLoading && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading this Space&apos;s tools…</p>}
-          {membershipError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{!accountIsCurrent ? "Your account changed. Space tools are hidden until this account is active again." : error || "Tools in this Space could not be loaded."}</p><button type="button" className="spaces-page__secondary" onClick={loadMembership}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
+          {membershipError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{error || "Tools in this Space could not be loaded."}</p><button type="button" className="spaces-page__secondary" onClick={loadMembership}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
           {!membershipLoading && !membershipError && toolsStatus === "loading" && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading registered tools…</p>}
           {!membershipLoading && !membershipError && toolsStatus === "error" && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>Registered tools could not be loaded.</p><button type="button" className="spaces-page__secondary" onClick={retryTools}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
           {!membershipLoading && !membershipError && toolsStatus === "ready" && tools.length === 0 && <p className="spaces-page__empty-membership" role="status">No registered tools are available to add yet.</p>}
@@ -269,9 +171,8 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
 }
 
 export default function SpacesPage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const accountId = user?.id || "";
-  const accountIsCurrent = Boolean(accountId && getAccountScope() === `account:${accountId}`);
   const accountRef = useRef(accountId);
   useLayoutEffect(() => {
     accountRef.current = accountId;
@@ -285,20 +186,14 @@ export default function SpacesPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [templateId, setTemplateId] = useState("empty");
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState("");
   const [creating, setCreating] = useState(false);
   const [creationPhase, setCreationPhase] = useState("");
   const [notice, setNotice] = useState("");
-  const [noticeAccountId, setNoticeAccountId] = useState("");
 
   const refreshSpaces = useCallback(() => {
-    if (!accountId || accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) {
-      setSpaces([]);
-      setLoadedAccountId("");
-      return false;
-    }
+    if (accountRef.current !== accountId) return false;
     try {
       const nextSpaces = HEY.spaces.getPrivateSpaces();
       if (!Array.isArray(nextSpaces)) throw new TypeError("Invalid Spaces response");
@@ -316,7 +211,7 @@ export default function SpacesPage() {
 
   const loadToolCatalog = useCallback(async () => {
     const requestedAccountId = accountId;
-    setToolCatalogStatus(requestedAccountId ? "loading" : "account_required");
+    setToolCatalogStatus("loading");
     setToolCatalogAccountId("");
     setToolCatalog([]);
     await Promise.resolve();
@@ -341,13 +236,7 @@ export default function SpacesPage() {
     setLoading(true);
     setLoadError("");
     await Promise.resolve();
-    if (!accountId || accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) {
-      setSpaces([]);
-      setLoadedAccountId("");
-      setLoadError("Your account changed. Spaces are hidden until the signed-in account finishes loading.");
-      setLoading(false);
-      return;
-    }
+    if (accountRef.current !== accountId) return;
     refreshSpaces();
     setLoading(false);
   }, [accountId, refreshSpaces]);
@@ -361,7 +250,6 @@ export default function SpacesPage() {
     setToolCatalogAccountId("");
     setToolCatalogStatus("loading");
     setPrompt("");
-    setTemplateId("empty");
     setPreview(null);
     setPreviewError("");
     setNotice("");
@@ -393,21 +281,21 @@ export default function SpacesPage() {
 
   const createPreview = async (event) => {
     event.preventDefault();
-    if (!accountIsCurrent || accountRef.current !== accountId || creating) return;
+    if (!accountId || accountRef.current !== accountId || creating) return;
     setPreview(null);
     setPreviewError("");
     setNotice("");
     setCreating(true);
     setCreationPhase("preview");
     await Promise.resolve();
-    if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) {
+    if (accountRef.current !== accountId) {
       setCreating(false);
       setCreationPhase("");
       return;
     }
     try {
-      const result = HEY.spaces.previewNaturalLanguageCreation({ prompt, templateId });
-      if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
+      const result = HEY.spaces.previewNaturalLanguageCreation({ prompt });
+      if (accountRef.current !== accountId) return;
       if (!result || result.error || result.action !== "create_private_space" || result.requiresConfirmation !== true || result.permissionsChanged !== false || result.space?.visibility !== "private" || result.space?.sharing !== "off" || typeof result.previewId !== "string" || typeof result.space?.name !== "string") {
         setPreviewError(result?.error || "A safe preview could not be created. Check the description and try again.");
         return;
@@ -416,7 +304,7 @@ export default function SpacesPage() {
     } catch {
       setPreviewError("A safe preview could not be created. Try again.");
     } finally {
-      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) {
+      if (accountRef.current === accountId) {
         setCreating(false);
         setCreationPhase("");
       }
@@ -424,14 +312,14 @@ export default function SpacesPage() {
   };
 
   const confirmPreview = async () => {
-    if (!accountIsCurrent || !spacePreviewMatchesAccount(preview, accountId, accountRef.current) || preview.accountScope !== `account:${accountId}` || creating) return;
+    if (!spacePreviewMatchesAccount(preview, accountId, accountRef.current) || creating) return;
     const pending = preview;
     setCreating(true);
     setCreationPhase("confirm");
     setPreviewError("");
     setNotice("");
     await Promise.resolve();
-    if (!spacePreviewMatchesAccount(pending, accountId, accountRef.current) || getAccountScope() !== `account:${accountId}` || pending.accountScope !== `account:${accountId}`) {
+    if (!spacePreviewMatchesAccount(pending, accountId, accountRef.current)) {
       setCreating(false);
       setCreationPhase("");
       setPreview(null);
@@ -439,7 +327,7 @@ export default function SpacesPage() {
     }
     try {
       const result = HEY.spaces.confirmNaturalLanguageCreation({ previewId: pending.previewId, confirm: true });
-      if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
+      if (accountRef.current !== accountId) return;
       if (!result?.success || !result.space?.id || result.space.accountScope !== `account:${accountId}`) {
         setPreviewError(result?.error || "The Space was not created. Review the description and try again.");
         setPreview(null);
@@ -448,15 +336,14 @@ export default function SpacesPage() {
       setPreview(null);
       setPrompt("");
       refreshSpaces();
-      setNoticeAccountId(accountId);
       setNotice(`Created “${result.space.name}”.`);
     } catch {
-      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) {
+      if (accountRef.current === accountId) {
         setPreview(null);
         setPreviewError("The Space could not be created. Create a fresh preview and try again.");
       }
     } finally {
-      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) {
+      if (accountRef.current === accountId) {
         setCreating(false);
         setCreationPhase("");
       }
@@ -469,8 +356,8 @@ export default function SpacesPage() {
     setNotice("");
   };
 
-  const accountDataLoading = authLoading || loading || (accountIsCurrent && loadedAccountId !== accountId);
-  const currentSpaces = loadedAccountId === accountId && accountIsCurrent ? spaces : [];
+  const accountDataLoading = loading || loadedAccountId !== accountId;
+  const currentSpaces = loadedAccountId === accountId ? spaces : [];
 
   return (
     <section className="spaces-page" aria-labelledby="spaces-title">
@@ -483,18 +370,7 @@ export default function SpacesPage() {
         <span className="spaces-page__privacy"><LockKeyhole size={15} aria-hidden="true" /> Private by default</span>
       </header>
 
-      {authLoading && <p className="spaces-page__status" role="status">Checking your sign-in…</p>}
-      {!authLoading && !accountId && <p className="spaces-page__status" role="status">Sign in to create and view your private Spaces.</p>}
-      {accountId && !accountIsCurrent && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={19} aria-hidden="true" /><p>Your signed-in account is changing. Space data is hidden until it finishes loading.</p><button type="button" className="spaces-page__secondary" onClick={loadSpaces}><RotateCw size={15} aria-hidden="true" /> Reload</button></div>}
-
       <form className="spaces-page__create" onSubmit={createPreview}>
-        <label htmlFor="space-template">Starting point</label>
-        <select id="space-template" value={templateId} disabled={creating || !accountIsCurrent} onChange={(event) => { setTemplateId(event.target.value); setPreview(null); setPreviewError(""); }}>
-          <option value="empty">Empty Space</option>
-          <option value="planning">Planning template</option>
-          <option value="research">Research template</option>
-          <option value="custom">Custom Space</option>
-        </select>
         <label htmlFor="space-prompt">What should this Space be for?</label>
         <p id="space-prompt-help" className="spaces-page__hint">For example: “Create a private space called Weekend planning”</p>
         <textarea
@@ -505,12 +381,12 @@ export default function SpacesPage() {
           maxLength={HEY.spaces.limits.maxPromptLength}
           rows={3}
           placeholder="Create a private space called…"
-          disabled={creating || !accountIsCurrent}
+          disabled={creating || !accountId}
           required
         />
         <div className="spaces-page__form-footer">
           <span>{prompt.length}/{HEY.spaces.limits.maxPromptLength}</span>
-          <button type="submit" className="spaces-page__primary" disabled={creating || loading || !accountIsCurrent || !prompt.trim()}>
+          <button type="submit" className="spaces-page__primary" disabled={creating || loading || !accountId || !prompt.trim()}>
             {creating ? <LoaderCircle size={17} className="spaces-page__spin" aria-hidden="true" /> : <Plus size={17} aria-hidden="true" />}
             Preview Space
           </button>
@@ -519,7 +395,7 @@ export default function SpacesPage() {
 
       {creating && <p className="spaces-page__status" role="status" aria-live="polite">{creationPhase === "confirm" ? "Creating your private Space…" : "Preparing your preview…"}</p>}
 
-      {preview && accountIsCurrent && preview.accountId === accountId && preview.accountScope === `account:${accountId}` && (
+      {preview && preview.accountId === accountId && (
         <section className="spaces-page__preview" aria-labelledby="space-preview-title" aria-live="polite">
           <div className="spaces-page__preview-heading">
             <div><p className="spaces-page__eyebrow">Review before creating</p><h2 id="space-preview-title">Space preview</h2></div>
@@ -527,8 +403,6 @@ export default function SpacesPage() {
           </div>
           <dl className="spaces-page__preview-details">
             <div><dt>Name</dt><dd>{preview.space.name}</dd></div>
-            <div><dt>Starting point</dt><dd>{preview.template?.label || "Empty Space"}</dd></div>
-            {preview.space.description && <div><dt>Template notes</dt><dd>{preview.space.description}</dd></div>}
             <div><dt>Visibility</dt><dd>Private</dd></div>
             <div><dt>Sharing</dt><dd>Off</dd></div>
             <div><dt>Permissions</dt><dd>Unchanged</dd></div>
@@ -544,22 +418,20 @@ export default function SpacesPage() {
       )}
 
       {previewError && <p className="spaces-page__alert" role="alert"><AlertCircle size={17} aria-hidden="true" /> {previewError}</p>}
-      {notice && noticeAccountId === accountId && accountIsCurrent && <p className="spaces-page__notice" role="status"><Check size={17} aria-hidden="true" /> {notice}</p>}
+      {notice && <p className="spaces-page__notice" role="status"><Check size={17} aria-hidden="true" /> {notice}</p>}
 
       <section className="spaces-page__list-section" aria-labelledby="spaces-list-title">
         <div className="spaces-page__list-heading"><div><h2 id="spaces-list-title">Your Spaces</h2><p>Only Spaces saved to the signed-in account appear here.</p></div>
           {!accountDataLoading && !loadError && <span className="spaces-page__count" aria-live="polite">{currentSpaces.length} {currentSpaces.length === 1 ? "Space" : "Spaces"}</span>}
         </div>
-        {!authLoading && !accountId && <div className="spaces-page__empty" role="status"><LockKeyhole size={23} aria-hidden="true" /><div><h3>Sign in required</h3><p>Your private Spaces are available after you sign in.</p></div></div>}
         {accountDataLoading && <p className="spaces-page__status" role="status" aria-live="polite"><LoaderCircle size={18} className="spaces-page__spin" aria-hidden="true" /> Loading your Spaces…</p>}
-        {!accountDataLoading && accountIsCurrent && loadError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={19} aria-hidden="true" /><p>{loadError}</p><button type="button" className="spaces-page__secondary" onClick={loadSpaces}><RotateCw size={15} aria-hidden="true" /> Try again</button></div>}
-        {!accountDataLoading && !loadError && accountIsCurrent && currentSpaces.length === 0 && <div className="spaces-page__empty" role="status"><Layers3 size={23} aria-hidden="true" /><div><h3>No Spaces yet</h3><p>Describe a Space above to see a preview before you create it.</p></div></div>}
-        {!accountDataLoading && !loadError && accountIsCurrent && currentSpaces.length > 0 && <ul className="spaces-page__list">{currentSpaces.map((space) => <li className="spaces-page__card" key={`${accountId}:${space.id}`}>
+        {!accountDataLoading && loadError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={19} aria-hidden="true" /><p>{loadError}</p><button type="button" className="spaces-page__secondary" onClick={loadSpaces}><RotateCw size={15} aria-hidden="true" /> Try again</button></div>}
+        {!accountDataLoading && !loadError && currentSpaces.length === 0 && <div className="spaces-page__empty" role="status"><Layers3 size={23} aria-hidden="true" /><div><h3>No Spaces yet</h3><p>Describe a Space above to see a preview before you create it.</p></div></div>}
+        {!accountDataLoading && !loadError && currentSpaces.length > 0 && <ul className="spaces-page__list">{currentSpaces.map((space) => <li className="spaces-page__card" key={space.id}>
           <div className="spaces-page__card-icon" aria-hidden="true"><Layers3 size={18} /></div>
           <div className="spaces-page__card-copy"><h3>{space.name}</h3><p>{space.description || "Private Space"}</p></div>
           <span className="spaces-page__private-label"><LockKeyhole size={13} aria-hidden="true" /> Private</span>
           <time dateTime={space.createdAt}>{formatDate(space.createdAt)}</time>
-          <SpaceDetailsEditor space={space} accountId={accountId} accountRef={accountRef} onSaved={refreshSpaces} />
           <SpaceToolMembership
             space={space}
             accountId={accountId}

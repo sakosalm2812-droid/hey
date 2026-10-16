@@ -91,9 +91,10 @@ async function callProvider(messages: Array<Record<string, string>>, maxTokens: 
     const remaining = Math.max(500, Math.min(18_000, deadline - Date.now()));
     try {
       const response = provider.id === "gemini"
-        ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${provider.key}`, {
+        ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-goog-api-key": provider.key },
+          redirect: "error",
           body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: messages.map((message) => `${message.role}: ${message.content}`).join("\n\n") }] }], generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 } }),
         }, remaining)
         : await fetchWithTimeout(provider.id === "openai" ? "https://api.openai.com/v1/chat/completions" : provider.id === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions", {
@@ -180,6 +181,11 @@ function jsonResponse(body: unknown, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function getAuthToken(request: Request) {
@@ -329,9 +335,10 @@ Deno.serve(async (request) => {
       try {
         let response: Response;
         if (attempt.id === "gemini") {
-          response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${attempt.model}:generateContent?key=${attempt.key}`, {
+          response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(attempt.model)}:generateContent`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "x-goog-api-key": attempt.key },
+            redirect: "error",
             body: JSON.stringify({
               contents: [{ role: "user", parts: [
                 { inlineData: { mimeType, data: base64 } },
@@ -606,6 +613,8 @@ Deno.serve(async (request) => {
   if (fusionRequested) {
     const fusion = await runFusionChatRequest({
       requested: true,
+      requestId: payload.requestId,
+      requestText: message,
       accountId: user.id,
       entitlements: profile.entitlements,
       attempts: getProviderAttempts(),
@@ -635,13 +644,18 @@ Deno.serve(async (request) => {
       const error = fusion.status === "denied" ? "Your account is not permitted to use model fusion."
         : fusion.status === "conflict" || fusion.status === "inconclusive" ? "The providers did not independently confirm a safe answer."
         : fusion.status === "cancelled" ? "The fusion request was cancelled."
-        : fusion.status === "invalid_request" ? "The fusion request exceeds the supported context limits."
+        : fusion.status === "invalid_request" ? fusion.reason === "fusion_request_id_invalid"
+          ? "The fusion request could not be bound safely."
+          : "The fusion request exceeds the supported context limits."
         : fusion.status === "verification_unavailable" ? "The independent provider check could not be completed, so no answer was delivered."
         : fusion.status === "time_budget_exhausted" ? "The model verification exceeded its time limit, so no answer was delivered."
         : fusion.status === "budget_exhausted" ? "The model verification exceeded its configured cost budget, so no answer was delivered."
         : fusion.status === "provider_contract_invalid" ? "A provider returned invalid verification evidence, so no answer was delivered."
         : "Model fusion is unavailable until its provider permissions and pricing are configured.";
       return jsonResponse({ error }, status);
+    }
+    if (fusion.provenance?.status !== "verified" || fusion.provenance.checker?.confirmed !== true) {
+      return jsonResponse({ error: "The providers could not independently confirm an answer. No answer was delivered." }, 409);
     }
 
     // Revalidate the authenticated identity after all upstream calls and before storing or delivering output.
@@ -654,7 +668,12 @@ Deno.serve(async (request) => {
     providerMetadata = {
       provider: fusion.providers.map((provider) => provider.providerId).join(","),
       model: fusion.providers.map((provider) => provider.modelId).join(","),
-      fusion: { independentlyChecked: true, confidence: fusion.confidence },
+      fusion: {
+        status: "verified",
+        independentlyChecked: true,
+        confidence: fusion.confidence,
+        provenance: fusion.provenance,
+      },
     };
   } else {
     let providerResult;
@@ -672,6 +691,11 @@ Deno.serve(async (request) => {
   const answer = sources.length
     ? `${response}\n\nSources:\n${sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
     : response;
+
+  if (fusionRequested) {
+    const fusionMetadata = providerMetadata.fusion as Record<string, unknown>;
+    providerMetadata.fusion = { ...fusionMetadata, responseSha256: await sha256Hex(answer) };
+  }
 
   const metadata = {
     ...providerMetadata,

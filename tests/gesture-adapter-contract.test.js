@@ -199,7 +199,7 @@ test("profile edits and mappings cannot alter action authority or select device 
   assert.equal(engine.executeBinding(engine.bindings.get(safeBinding.id), { id: "G01", confidence: 1 }), false);
 
   const events = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => events.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => events.push(event));
   engine.recognitionState = GESTURE_STATES.ACTIVE;
   engine.activeProfileId = profile.id;
   engine.bindings.set("forged", {
@@ -217,14 +217,15 @@ test("profile edits and mappings cannot alter action authority or select device 
 });
 
 test("gesture calibration samples are bounded and caller-supplied scores never claim detector validation", () => {
-  const { engine } = makeEngine();
+  const { engine, profile } = makeEngine();
   const custom = engine.createCustomGesture({ name: "Open hand alias", gestureId: "G01", action: "summon", actionType: "ui" });
   const added = engine.addGestureSample(custom.id, [0, 0.25, -0.5, 1]);
   assert.equal(added.samples.length, 1);
   assert.match(engine.addGestureSample(custom.id, [0, 2]).error, /bounded vector/u);
   assert.throws(() => engine.addGestureSample(custom.id, [NaN]), /plain JSON/u);
   const result = engine.testCustomGesture(custom.id, { truePositives: 10_000, falsePositives: 0 });
-  assert.equal(result.status, "unavailable");
+  assert.equal(result.status, "samples_required");
+  assert.throws(() => engine.createBinding({ profileId: profile.id, gestureId: custom.id, action: "summon", actionType: "ui" }), /three real detector samples/u);
   assert.equal(engine.getCustomGesture(custom.id).tested, false);
   assert.throws(() => engine.createCustomGesture({ name: "Danger", gestureId: "G01", action: "device.execute", actionType: "device" }), /allowlisted/u);
 });
@@ -309,6 +310,63 @@ test("hostile permission query accessors fail preflight closed without requestin
   assert.equal(cameraPromptCount, 0);
 });
 
+test("local detector preparation is consent-gated and camera stays closed when model startup fails", async () => {
+  const { engine, profile } = makeEngine();
+  let cameraPromptCount = 0;
+  let prepareCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() { cameraPromptCount += 1; throw new Error("unexpected prompt"); } } },
+  });
+  globalThis.document = { createElement: () => ({}) };
+  globalThis.requestAnimationFrame = () => 1;
+  engine.setRecognitionAdapter({
+    isReady() { return false; },
+    async prepare() { prepareCount += 1; throw Object.assign(new Error("model missing"), { code: "gesture_adapter_unavailable" }); },
+    async detect() { return null; },
+  });
+
+  const capability = await engine.getRecognitionCapability();
+  assert.equal(capability.adapterInstalled, true);
+  assert.equal(capability.adapterReady, false);
+  assert.equal(capability.recognitionStatus, "adapter_initialization_required");
+  assert.equal((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal(prepareCount, 0);
+
+  const result = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(result.code, "adapter_unavailable");
+  assert.equal(prepareCount, 1);
+  assert.equal(cameraPromptCount, 0);
+  assert.equal(engine.cameraCapabilityStatus, "supported");
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+});
+
+test("an unavailable detector can be retried after the user fixes the local runtime", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  let prepares = 0;
+  engine.setRecognitionAdapter({
+    async prepare() {
+      prepares += 1;
+      if (prepares === 1) throw new Error("Local model asset unavailable.");
+      return true;
+    },
+    async detect() { return null; },
+  });
+
+  const failed = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(failed.code, "adapter_unavailable");
+  assert.equal(camera.stopped, 0);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+
+  const retried = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(retried.success, true);
+  assert.equal(prepares, 2);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+  engine.stopRecognition("test_cleanup");
+  assert.equal(camera.stopped, 1);
+});
+
 test("account switch during capability query prevents the later camera request", async () => {
   const { engine, profile } = makeEngine();
   engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });
@@ -367,14 +425,136 @@ test("supported adapter lifecycle is visible, pausable, revocable, and stopped w
   assert.throws(() => engine.updateProfile(profile.id, { sensitivity: 0.4 }), /Stop gesture recognition/u);
   assert.equal(engine.pauseRecognition(), true);
   assert.equal(engine.resumeRecognition(), true);
-  camera.listeners.get("ended")(); // Camera permission/device revocation.
+  camera.listeners.get("ended")(); // The capture track ended while the permission state remained unknown.
 
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
   assert.equal(camera.stopped, 1);
   assert.equal(adapterStops, 1);
   assert.equal(detectCalls, 0); // Test camera never supplied a ready frame.
   assert(states.some((state) => state.camera === "active" && state.visible === true));
-  assert(states.some((state) => state.reason === "permission_revoked"));
+  assert(states.some((state) => state.reason === "camera_track_ended"));
+});
+
+test("browser camera journey requires consent, rejects a stale paused frame, then executes one authorized UI action", async () => {
+  const { engine, profile } = makeEngine();
+  engine.updateProfile(profile.id, { holdMs: 200 });
+  const bindings = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const scheduledFrames = [];
+  const trackListeners = new Map();
+  let cameraRequests = 0;
+  let cameraStops = 0;
+  let detectorStops = 0;
+  let resolveStaleDetection;
+  let detectorStarted;
+  const firstDetectionStarted = new Promise((resolve) => { detectorStarted = resolve; });
+  const video = {
+    readyState: 2,
+    srcObject: null,
+    async play() {},
+    pause() {},
+  };
+  const track = {
+    readyState: "live",
+    stop() { cameraStops += 1; this.readyState = "ended"; },
+    addEventListener(name, listener) { trackListeners.set(name, listener); },
+  };
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  const canvas = {
+    getContext() {
+      return {
+        drawImage() {},
+        getImageData() { return { width: 640, height: 480, data: new Uint8ClampedArray(640 * 480 * 4) }; },
+      };
+    },
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { cameraRequests += 1; return stream; } },
+      permissions: { async query() { return { state: "granted" }; } },
+    },
+  });
+  globalThis.document = { createElement(kind) { return kind === "video" ? video : canvas; } };
+  globalThis.requestAnimationFrame = (callback) => { scheduledFrames.push(callback); return scheduledFrames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+
+  let detectionCount = 0;
+  engine.setRecognitionAdapter({
+    kind: "browser-contract-detector",
+    detect() {
+      detectionCount += 1;
+      if (detectionCount === 1) {
+        detectorStarted();
+        return new Promise((resolve) => { resolveStaleDetection = resolve; });
+      }
+      return { id: "G01", confidence: 0.99 };
+    },
+    stop() { detectorStops += 1; },
+  });
+  const actions = [];
+  const unsubscribe = subscribe("gesture.action_requested", (event) => actions.push(event));
+
+  assert.equal((await engine.getRecognitionCapability()).recognitionStatus, "adapter_ready");
+  assert.equal(cameraRequests, 0); // Capability inspection is read-only.
+  assert.equal((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal(cameraRequests, 0); // No camera request before explicit consent.
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  assert.equal(cameraRequests, 1);
+  await firstDetectionStarted;
+  assert.equal(engine.pauseRecognition(), true);
+  resolveStaleDetection({ id: "G01", confidence: 0.99 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(actions, []); // The in-flight pre-pause result is stale.
+  assert.equal(engine.resumeRecognition(), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 110)); // Respect the runtime's 100 ms frame sampling limit.
+  const nextFrame = scheduledFrames.shift();
+  assert.equal(typeof nextFrame, "function");
+  nextFrame();
+  for (let sample = 0; sample < 4; sample += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    const stableFrame = scheduledFrames.shift();
+    assert.equal(typeof stableFrame, "function");
+    stableFrame();
+  }
+  for (let attempt = 0; attempt < 50 && actions.length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].binding.id, bindings.id);
+  assert.equal(actions[0].action.type, "ui");
+  assert.equal(actions[0].action.action, "summon");
+
+  engine.stopRecognition("user_stop");
+  unsubscribe();
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(cameraStops, 1);
+  assert.equal(detectorStops, 1);
+  trackListeners.get("ended")(); // An old track callback cannot revoke a stopped session.
+  assert.equal(engine.cameraCapabilityStatus, "supported");
+});
+
+test("browser detector errors release camera resources and report a stale-safe adapter error", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  camera.video.readyState = 2;
+  const canvas = {
+    getContext: () => ({
+      drawImage() {},
+      getImageData: () => ({ width: 640, height: 480, data: new Uint8ClampedArray(640 * 480 * 4) }),
+    }),
+  };
+  const createElement = globalThis.document.createElement;
+  globalThis.document.createElement = (kind) => kind === "canvas" ? canvas : createElement(kind);
+  engine.setRecognitionAdapter({ async detect() { throw new Error("detector failed"); } });
+  const adapterErrors = [];
+  engine.subscribe((event, value) => { if (event === "recognition_adapter_error") adapterErrors.push(value); });
+
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  for (let attempt = 0; attempt < 50 && engine.getRecognitionState() !== GESTURE_STATES.INACTIVE; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(camera.stopped, 1);
+  assert.equal(adapterErrors.length, 1);
+  assert.equal(adapterErrors[0].error, "detector failed");
 });
 
 test("a detector that exceeds its frame deadline aborts the session and releases the camera", async () => {
@@ -402,7 +582,7 @@ test("a detector that exceeds its frame deadline aborts the session and releases
   });
   engine.gestureCooldowns.set(`${profile.id}:G01`, Date.now());
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
 
   try {
     assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
@@ -428,31 +608,104 @@ test("detector deadlines reject invalid and unbounded configuration", () => {
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: Infinity }), RangeError);
 });
 
-test("gesture cooldown is bounded, suppresses repeated frames, and resets on pause and stop", () => {
+test("gesture hold and cooldown suppress fleeting and repeated frames, then reset on pause and stop", () => {
   const { engine, profile } = makeEngine();
+  const activeProfile = { ...profile, holdMs: 200 };
   const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
+  const originalNow = Date.now;
+  let now = 1000;
   engine.recognitionState = GESTURE_STATES.ACTIVE;
   engine.activeProfileId = profile.id;
 
   try {
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    Date.now = () => now;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1100;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
     assert.equal(executed.length, 1);
     assert.equal(engine.gestureCooldowns.size, 1);
 
     assert.equal(engine.pauseRecognition(), true);
     assert.equal(engine.gestureCooldowns.size, 0);
     assert.equal(engine.resumeRecognition(), true);
-    engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
+    now = 2000;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 2100;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 2200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
     assert.equal(executed.length, 2);
 
     engine.stopRecognition("test_cleanup");
     assert.equal(engine.gestureCooldowns.size, 0);
     assert.equal(binding.enabled, true);
   } finally {
+    Date.now = originalNow;
+    unsubscribe();
+    engine.stopRecognition("test_cleanup");
+  }
+});
+
+test("test mode reports a steady gesture but never requests its mapped action", () => {
+  const { engine, profile } = makeEngine();
+  const activeProfile = { ...profile, holdMs: 200 };
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.recognitionMode = "test";
+  engine.activeProfileId = profile.id;
+  const requests = [];
+  const detections = [];
+  const offRequest = subscribe("gesture.action_requested", (event) => requests.push(event));
+  const offDetection = subscribe("gesture.test_detection", (event) => detections.push(event));
+  const originalNow = Date.now;
+  let now = 1_000;
+  try {
+    Date.now = () => now;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1_100;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1_200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    assert.equal(detections.length, 1);
+    assert.equal(requests.length, 0);
+    assert.equal(engine.gestureCooldowns.size, 0);
+  } finally {
+    Date.now = originalNow;
+    offRequest(); offDetection();
+    engine.stopRecognition("test_cleanup");
+  }
+});
+
+test("low-confidence or interrupted frames reset the gesture hold before action", () => {
+  const { engine, profile } = makeEngine();
+  const activeProfile = { ...profile, holdMs: 200 };
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  engine.recognitionState = GESTURE_STATES.ACTIVE;
+  engine.activeProfileId = profile.id;
+  const executed = [];
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
+  const originalNow = Date.now;
+  let now = 1000;
+  Date.now = () => now;
+  try {
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1100;
+    engine.handleGestureDetection({ id: "G01", confidence: 0.5 }, activeProfile);
+    now = 1200;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1300;
+    engine.handleGestureDetection(null, activeProfile);
+    now = 1400;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    now = 1600;
+    engine.handleGestureDetection({ id: "G01", confidence: 1 }, activeProfile);
+    assert.equal(executed.length, 1);
+  } finally {
+    Date.now = originalNow;
     unsubscribe();
     engine.stopRecognition("test_cleanup");
   }
@@ -496,7 +749,7 @@ test("a frame completing after pause and resume cannot trigger an action", async
   engine.setRecognitionAdapter({ detect() { detectStarted(); return pending; } });
   engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const executed = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => executed.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => executed.push(event));
 
   try {
     assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
@@ -552,16 +805,38 @@ test("browser camera permission revocation stops the session and unregisters its
   assert.equal(engine.gestureCooldowns.size, 0);
 });
 
+test("an ended camera track stops recognition without misreporting permission revocation", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  const states = [];
+  const off = engine.subscribe((event, payload) => {
+    if (event === "recognition_state_changed") states.push(payload);
+  });
+  engine.setRecognitionAdapter({ async detect() { return null; } });
+
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  const ended = camera.listeners.get("ended");
+  assert.equal(typeof ended, "function");
+  camera.videoTrack.readyState = "ended";
+  ended();
+
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.cameraCapabilityStatus, "supported");
+  assert.equal(camera.stopped, 1);
+  assert.equal(states.at(-1)?.reason, "camera_track_ended");
+  off();
+});
+
 test("gesture bindings cannot publish an action outside their active consented session", () => {
   const { engine, profile } = makeEngine();
   const binding = engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
   const events = [];
-  const unsubscribe = subscribe("gesture.action_executed", (event) => events.push(event));
+  const unsubscribe = subscribe("gesture.action_requested", (event) => events.push(event));
 
   engine.handleGestureDetection({ id: "G01", confidence: 1 }, profile);
 
   unsubscribe();
-  clearEventListeners("gesture.action_executed");
+  clearEventListeners("gesture.action_requested");
   assert.equal(binding.enabled, true);
   assert.deepEqual(events, []);
 });

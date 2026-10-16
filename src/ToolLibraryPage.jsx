@@ -5,6 +5,7 @@ import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
 import { getToolLibraryPreferenceView } from "./lib/toolLibraryPreferenceView.js";
+import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
 const STATUS_DETAILS = {
@@ -265,6 +266,12 @@ export default function ToolLibraryPage() {
         </label>
         <p>Platform: <strong>Web</strong></p>
       </div>
+
+      <section className="tool-library__preference-panel" aria-labelledby="gesture-tool-card-title">
+        <h2 id="gesture-tool-card-title">Gesture Studio</h2>
+        <p>Configure camera-based local hand controls, calibrate account profiles, and test supported gestures before enabling safe actions.</p>
+        <Link className="tool-library__retry" to="/gestures">Open Gesture Studio</Link>
+      </section>
 
       <section className="tool-library__preference-panel" aria-labelledby="tool-library-views-title">
         <div className="tool-library__preference-toolbar">

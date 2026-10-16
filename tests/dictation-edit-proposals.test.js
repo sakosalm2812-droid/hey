@@ -213,6 +213,26 @@ test("a rewrite result arriving after account change is discarded", async () => 
   setAccountScope(null);
 });
 
+test("a stalled rewrite provider is aborted and returns a recoverable timeout without a proposal", async () => {
+  let resolveRewrite;
+  let providerSignal;
+  const runtime = createDictationEditSession({
+    rewriteTimeoutMs: 10,
+    rewriteProvider: { proposeRewrite(input) {
+      providerSignal = input.signal;
+      return new Promise((resolve) => { resolveRewrite = resolve; });
+    } },
+  });
+  const result = await runtime.propose(proposalInput({ sourceText: "private draft", utterance: "Rewrite this more clearly" }));
+
+  assert.deepEqual(result, { success: false, status: "provider_timeout", reason: "rewrite_provider_timed_out" });
+  assert.equal(providerSignal.aborted, true);
+  resolveRewrite({ text: "late rewrite must be discarded" });
+  assert.equal(runtime.confirm({}, confirmationInput("private draft")).status, "invalid_proposal");
+  runtime.destroy();
+  assert.throws(() => createDictationEditSession({ rewriteTimeoutMs: 120_001 }), /rewriteTimeoutMs/);
+});
+
 test("rewrite concurrency is bounded per session", async () => {
   const releases = [];
   let started = 0;

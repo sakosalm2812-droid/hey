@@ -1,5 +1,5 @@
-import { createArtifact as createForgeArtifact } from "./artifactEngine.js";
-import { canReadTeacherArtifact } from "./teacherArtifactAccess.js";
+import { createArtifact as createForgeArtifact, createTeacherArtifactBatch } from "./artifactEngine.js";
+import { canReadTeacherArtifact, canWriteTeacherArtifact } from "./teacherArtifactAccess.js";
 
 const REQUEST_FIELDS = new Set([
   "title", "subject", "gradeBand", "durationMinutes", "learningObjectives",
@@ -14,16 +14,16 @@ const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
 const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "teacherAnswer", "points"]);
 const WORKSHEET_QUESTION_FIELDS = new Set(["prompt", "points"]);
 const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
-const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "classId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
+const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "classId", "journeyId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
 const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
 const WORKSHEET_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "promptsPresent", "sourceAssessmentBound", "teacherKeySeparated"]);
-const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "classId", "currentAccountScope", "currentWorkspaceId", "currentClassId"]);
-const SAVE_OPTION_FIELDS = new Set(["createArtifact"]);
+const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "classId", "journeyCreatedAt", "currentAccountScope", "currentWorkspaceId", "currentClassId"]);
 const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
+const PREPARED_TEACHER_JOURNEYS = new WeakSet();
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "studentName", "learnerName", "studentId", "learnerId", "studentEmail",
@@ -663,7 +663,7 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
         generatedBy: "HEY Teacher Worksheet Workflow",
         method: "derived_from_teacher_assessment_without_answer_key",
         sourceAssessmentDigest: content.sourceAssessmentDigest,
-        createdAt: new Date().toISOString(),
+        createdAt: stableContext.journeyCreatedAt || new Date().toISOString(),
         factualClaimsVerified: false,
       },
       safety: {
@@ -786,7 +786,7 @@ export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, w
  * of the artifact's embedded scope. This stores lesson-planning content only;
  * it does not send the lesson to Cosmos memory or claim database durability.
  */
-async function saveTeacherArtifact(artifact, context, options, builtArtifacts, verifyArtifact, label, contract, tags) {
+async function prepareTeacherArtifactSave(artifact, context, builtArtifacts, verifyArtifact, label, contract, tags, journey = {}) {
   if (!artifact || typeof artifact !== "object" || !builtArtifacts.has(artifact)) {
     const article = label === "assessment" ? "an" : "a";
     throw new Error(`Only ${article} ${label} artifact built in the active Teacher runtime can be saved`);
@@ -797,7 +797,6 @@ async function saveTeacherArtifact(artifact, context, options, builtArtifacts, v
     stableArtifact = snapshotLessonData(artifact);
     stableContext = snapshotLessonData(context);
     assertOnlyDataFields(stableContext, "Teacher artifact save context", SAVE_CONTEXT_FIELDS);
-    assertOnlyDataFields(options, "Teacher artifact save options", SAVE_OPTION_FIELDS);
   } catch {
     throw new Error(`${label} artifact failed verification for the active account and workspace`);
   }
@@ -808,18 +807,16 @@ async function saveTeacherArtifact(artifact, context, options, builtArtifacts, v
     || label === "assessment" && stableContext.currentClassId !== classId) {
     throw new Error(`${label} artifact account and workspace must match the active context`);
   }
-  const createArtifact = options.createArtifact ?? createForgeArtifact;
-  if (typeof createArtifact !== "function") throw new TypeError("Shared artifact creator must be a function");
-
   const verification = await verifyArtifact(artifact, { accountScope, workspaceId, classId });
   if (!verification.valid) throw new Error(`${label} artifact failed verification for the active account and workspace`);
-  if (label === "assessment" && !await canReadTeacherArtifact(stableArtifact, { accountScope, classId })) {
-    throw new Error("Authenticated teacher access to this account and class is required to save the answer key");
+  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope, classId })) {
+    throw new Error(`Authenticated teacher access to this account${classId ? " and class" : ""} is required to save the ${label} artifact`);
   }
   freezeDeep(stableArtifact);
 
   const { content, metadata } = stableArtifact;
-  return createArtifact({
+  return {
+    ...(journey.id ? { id: journey.id } : {}),
     projectId: workspaceId,
     type: "document",
     title: stableArtifact.title,
@@ -831,30 +828,119 @@ async function saveTeacherArtifact(artifact, context, options, builtArtifacts, v
       accountScope,
       workspaceId,
       ...(classId ? { classId } : {}),
+      ...(journey.journeyId ? { journeyId: journey.journeyId } : {}),
     },
     tags,
-  });
+    requirePersistence: true,
+  };
 }
 
-export async function saveTeacherLessonArtifact(artifact, context, options = {}) {
+async function saveTeacherArtifact(artifact, context, builtArtifacts, verifyArtifact, label, contract, tags) {
+  const params = await prepareTeacherArtifactSave(artifact, context, builtArtifacts, verifyArtifact, label, contract, tags);
+  return createForgeArtifact(params);
+}
+
+export async function saveTeacherLessonArtifact(artifact, context) {
   return saveTeacherArtifact(
-    artifact, context, options, BUILT_TEACHER_LESSON_ARTIFACTS, verifyTeacherLessonArtifact,
+    artifact, context, BUILT_TEACHER_LESSON_ARTIFACTS, verifyTeacherLessonArtifact,
     "lesson", "hey.teacher.lesson.v1", ["teacher", "lesson-plan"],
   );
 }
 
-export async function saveTeacherAssessmentArtifact(artifact, context, options = {}) {
+export async function saveTeacherAssessmentArtifact(artifact, context) {
   return saveTeacherArtifact(
-    artifact, context, options, BUILT_TEACHER_ASSESSMENT_ARTIFACTS, verifyTeacherAssessmentArtifact,
+    artifact, context, BUILT_TEACHER_ASSESSMENT_ARTIFACTS, verifyTeacherAssessmentArtifact,
     "assessment", "hey.teacher.assessment.v1", ["teacher", "assessment", "answer-key"],
   );
 }
 
-export async function saveTeacherWorksheetArtifact(artifact, context, options = {}) {
+export async function saveTeacherWorksheetArtifact(artifact, context) {
   return saveTeacherArtifact(
-    artifact, context, options, BUILT_TEACHER_WORKSHEET_ARTIFACTS, verifyTeacherWorksheetArtifact,
+    artifact, context, BUILT_TEACHER_WORKSHEET_ARTIFACTS, verifyTeacherWorksheetArtifact,
     "worksheet", "hey.teacher.worksheet.v1", ["teacher", "student-worksheet"],
   );
+}
+
+/** Build all three scoped documents for a teacher to review before any Forge write occurs. */
+export async function prepareTeacherLessonWorksheetJourney({ lesson: lessonInput, assessment: assessmentInput, context } = {}) {
+  const lesson = await buildTeacherLessonArtifact(lessonInput);
+  const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput, context);
+  const worksheet = await buildTeacherWorksheetArtifact(assessment, context);
+  const journey = Object.freeze({ lesson, teacherArtifact: assessment, studentArtifact: worksheet });
+  PREPARED_TEACHER_JOURNEYS.add(journey);
+  return journey;
+}
+
+async function deriveJourneyArtifactId(journeyId, kind) {
+  if (!globalThis.crypto?.subtle) throw new Error("Web Crypto SHA-256 is required for recoverable teacher journeys");
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${journeyId}:${kind}`));
+  const bytes = new Uint8Array(digest).slice(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Build and atomically persist the teacher lesson, answer key, and class-scoped student worksheet. */
+export async function createTeacherLessonWorksheetJourney({ lesson: lessonRequest, assessment: assessmentRequest, context: contextRequest, journeyId: requestedJourneyId } = {}) {
+  let lessonInput;
+  let assessmentInput;
+  let context;
+  try {
+    lessonInput = snapshotLessonData(lessonRequest);
+    assessmentInput = snapshotLessonData(assessmentRequest);
+    context = snapshotLessonData(contextRequest);
+  } catch {
+    throw new Error("Teacher journey inputs must contain only safe, bounded data");
+  }
+  const journeyId = requestedJourneyId ?? crypto.randomUUID();
+  if (typeof journeyId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(journeyId)) {
+    throw new TypeError("journeyId must be a UUID so an interrupted journey can be retried safely");
+  }
+  const journeyCreatedAt = context.journeyCreatedAt || lessonInput.createdAt || assessmentInput.createdAt || new Date().toISOString();
+  if (!Number.isFinite(Date.parse(journeyCreatedAt))) throw new TypeError("journeyCreatedAt must be a valid date");
+  const stableContext = { ...context, journeyCreatedAt: new Date(journeyCreatedAt).toISOString() };
+  let journeyArtifactIds = [];
+
+  try {
+    const lesson = await buildTeacherLessonArtifact({ ...lessonInput, createdAt: stableContext.journeyCreatedAt });
+    const assessment = await buildTeacherAssessmentArtifact(lesson, { ...assessmentInput, createdAt: stableContext.journeyCreatedAt }, stableContext);
+    const worksheet = await buildTeacherWorksheetArtifact(assessment, stableContext);
+    const [lessonId, answerKeyId, worksheetId] = await Promise.all([
+      deriveJourneyArtifactId(journeyId, "lesson"),
+      deriveJourneyArtifactId(journeyId, "answer-key"),
+      deriveJourneyArtifactId(journeyId, "worksheet"),
+    ]);
+    journeyArtifactIds = [lessonId, answerKeyId, worksheetId];
+    const [lessonParams, answerKeyParams, worksheetParams] = await Promise.all([
+      prepareTeacherArtifactSave(lesson, stableContext, BUILT_TEACHER_LESSON_ARTIFACTS, verifyTeacherLessonArtifact,
+        "lesson", "hey.teacher.lesson.v1", ["teacher", "lesson-plan"], { id: lessonId, journeyId }),
+      prepareTeacherArtifactSave(assessment, stableContext, BUILT_TEACHER_ASSESSMENT_ARTIFACTS, verifyTeacherAssessmentArtifact,
+        "assessment", "hey.teacher.assessment.v1", ["teacher", "assessment", "answer-key"], { id: answerKeyId, journeyId }),
+      prepareTeacherArtifactSave(worksheet, stableContext, BUILT_TEACHER_WORKSHEET_ARTIFACTS, verifyTeacherWorksheetArtifact,
+        "worksheet", "hey.teacher.worksheet.v1", ["teacher", "student-worksheet"], { id: worksheetId, journeyId }),
+    ]);
+    const [savedLesson, savedTeacherArtifact, savedStudentArtifact] = await createTeacherArtifactBatch([
+      lessonParams, answerKeyParams, worksheetParams,
+    ]);
+    return Object.freeze({
+      journeyId,
+      lesson,
+      teacherArtifact: assessment,
+      studentArtifact: worksheet,
+      saved: Object.freeze({ lesson: savedLesson, teacherArtifact: savedTeacherArtifact, studentArtifact: savedStudentArtifact }),
+    });
+  } catch (error) {
+    if (error && typeof error === "object") {
+      error.journeyId = journeyId;
+      error.recovery = Object.freeze({
+        journeyId,
+        journeyCreatedAt: stableContext.journeyCreatedAt,
+        artifactIds: error.artifactIds || journeyArtifactIds,
+      });
+    }
+    throw error;
+  }
 }
 
 export async function exportTeacherLessonMarkdown(artifact, { accountScope, workspaceId, safetyReview } = {}) {
@@ -865,6 +951,9 @@ export async function exportTeacherLessonMarkdown(artifact, { accountScope, work
     stableSafetyReview = safetyReview === undefined ? undefined : snapshotLessonData(safetyReview);
   } catch {
     throw new Error("Lesson artifact failed verification for the active account and workspace");
+  }
+  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope })) {
+    throw new Error("Authenticated teacher access to this account is required to export the lesson");
   }
   const verification = await verifyTeacherLessonArtifact(stableArtifact, { accountScope, workspaceId });
   if (!verification.valid) throw new Error("Lesson artifact failed verification for the active account and workspace");
@@ -955,6 +1044,9 @@ export async function exportTeacherWorksheetMarkdown(artifact, { accountScope, w
   if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_WORKSHEET_ARTIFACTS.has(artifact)) {
     throw new Error("Only a worksheet artifact built in the active Teacher runtime can be exported");
   }
+  if (!await canWriteTeacherArtifact(artifact, { accountScope, classId: artifact.metadata.classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to export the student worksheet");
+  }
   const verification = await verifyTeacherWorksheetArtifact(artifact, { accountScope, workspaceId });
   if (!verification.valid) throw new Error("Worksheet artifact failed verification for the active account and workspace");
   let stableArtifact;
@@ -1006,4 +1098,6 @@ export default {
   verifyTeacherWorksheetArtifact,
   saveTeacherWorksheetArtifact,
   exportTeacherWorksheetMarkdown,
+  prepareTeacherLessonWorksheetJourney,
+  createTeacherLessonWorksheetJourney,
 };

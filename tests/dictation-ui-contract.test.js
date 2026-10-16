@@ -36,6 +36,18 @@ test("transcribed words stay local until the user inserts them and are never sub
   assert.match(chatPage, /skipNextDraftPersistenceRef\.current = true/);
 });
 
+test("stopped dictation can be corrected locally before explicit insertion", async () => {
+  const control = await source("../src/components/chat/DictationControl.jsx");
+  assert.match(control, /isActive\s*\? <p[^:]*:\s*<textarea/s);
+  assert.match(control, /aria-label=\{t\("chat\.dictation\.reviewTranscript"\)\}/);
+  assert.match(control, /value=\{transcript\}/);
+  assert.match(control, /onChange=\{\(event\) => setTranscript\(event\.target\.value\.slice\(0, 8000\)\)\}/);
+  assert.match(control, /onClick=\{insertTranscript\}[^>]*disabled=\{disabled\}/);
+  assert.match(control, /function stopAndDiscard\(\)[\s\S]*?setTranscript\(""\)/);
+  assert.match(control, /scopeRef\.current = nextScope;[\s\S]*?setTranscript\(""\)/);
+  assert.doesNotMatch(control, /sessionStorage|localStorage/);
+});
+
 test("dictation exposes keyboard, microphone, cancellation, unsupported and account-change states", async () => {
   const control = await source("../src/components/chat/DictationControl.jsx");
   const chatInput = await source("../src/components/chat/ChatInput.jsx");

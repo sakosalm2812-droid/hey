@@ -1,6 +1,6 @@
-import { registerOwnedTool } from "./toolRegistry.js";
+import { registerOwnedTool, setToolCapabilityAvailabilityResolver } from "./toolRegistry.js";
 import { OS_CAPABILITIES, createBrowserOSAdapter, unsupportedCapability } from "./osAdapter.js";
-import { getCapability } from "./capabilityRegistry.js";
+import { getCapability, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { createTauriAdapter } from "../lib/tauriAdapter.js";
 
 const browserAdapter = typeof navigator !== "undefined" ? createBrowserOSAdapter() : null;
@@ -27,6 +27,11 @@ export function setComputerAdapter(adapter) {
   return activeAdapter;
 }
 
+/** Read capability availability against the adapter that will receive execution. */
+export function getComputerCapabilityAvailability(capability, platform = activeAdapter?.platform || browserAdapter?.platform || "web") {
+  return getCapabilityAvailability(capability, platform, activeAdapter);
+}
+
 function browserTool(capability, input, context = {}) {
   if (activeAdapter && activeAdapter !== browserAdapter && activeAdapter.capabilities?.includes(capability)) {
     return activeAdapter.execute({ capability, input, context });
@@ -39,13 +44,26 @@ function browserTool(capability, input, context = {}) {
 }
 
 export function registerComputerTools() {
+  setToolCapabilityAvailabilityResolver((capability, platform) => getCapabilityAvailability(capability, platform, activeAdapter), COMPUTER_TOOL_OWNER);
   registerOwnedTool("computer.system_info", computerToolHandlers.get(OS_CAPABILITIES.systemInfo), {
     category: "system",
+    description: "Check this browser's device readiness using its reported platform, language, connection hint, screen, and resource hints. Values depend on browser support and do not confirm internet reachability.",
     capabilities: [OS_CAPABILITIES.systemInfo],
     permissions: ["system.info"],
     permission: "system.info",
     riskLevel: "low",
     inputSchema: { type: "object", properties: {} },
+    outputSchema: {
+      type: "object",
+      required: ["success", "platform", "data", "verified"],
+      properties: {
+        success: { type: "boolean" },
+        platform: { type: "string", maxLength: 32 },
+        data: { type: "object", additionalProperties: true },
+        verified: { type: "boolean" },
+      },
+      additionalProperties: true,
+    },
     source: "browser_adapter",
   }, COMPUTER_TOOL_OWNER);
 

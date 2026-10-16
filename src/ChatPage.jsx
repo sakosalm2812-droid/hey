@@ -18,6 +18,7 @@ import {
 import { useAuth } from "./AuthContext.jsx";
 import {
   askHEY,
+  checkHEYAIReadiness,
   getHEYConversationMessages,
   listHEYConversations,
 } from "./lib/heyAI.js";
@@ -61,6 +62,8 @@ function ChatWorkspace() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatError, setChatError] = useState("");
   const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [supabaseStatus, setSupabaseStatus] = useState("checking");
+  const [aiReadiness, setAIReadiness] = useState({ status: "checking", message: "Checking the HEY AI endpoint." });
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [copiedMessage, setCopiedMessage] = useState("");
   const [executionStatus, setExecutionStatus] = useState("");
@@ -96,8 +99,10 @@ function ChatWorkspace() {
   async function refreshConversations() {
     try {
       setConversations(await listHEYConversations());
+      setSupabaseStatus("connected");
     } catch {
-      setChatError("Your reply was sent, but conversations could not refresh.");
+      setSupabaseStatus("unavailable");
+      setChatError("Your reply was sent, but Supabase could not refresh conversations.");
     }
   }
 
@@ -140,6 +145,12 @@ function ChatWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
+    const healthController = new AbortController();
+    checkHEYAIReadiness({ signal: healthController.signal }).then((result) => {
+      if (!cancelled) setAIReadiness(result);
+    }).catch(() => {
+      if (!cancelled) setAIReadiness({ status: "unavailable", message: "HEY AI health check was interrupted." });
+    });
 
     async function loadConversations() {
       setConversationsLoading(true);
@@ -148,6 +159,7 @@ function ChatWorkspace() {
         if (cancelled) return;
 
         setConversations(items);
+        setSupabaseStatus("connected");
         if (!items.length) return;
 
         const latestMessages = await getHEYConversationMessages(items[0].id);
@@ -156,7 +168,10 @@ function ChatWorkspace() {
           setMessages(latestMessages.length ? latestMessages : [welcomeMessage]);
         }
       } catch {
-        if (!cancelled) setChatError("Could not load your conversations.");
+        if (!cancelled) {
+          setSupabaseStatus("unavailable");
+          setChatError("Supabase could not load your conversations. Check the connection and try again.");
+        }
       } finally {
         if (!cancelled) setConversationsLoading(false);
       }
@@ -165,8 +180,28 @@ function ChatWorkspace() {
     loadConversations();
     return () => {
       cancelled = true;
+      healthController.abort();
     };
   }, [user?.id]);
+
+  async function retryServiceChecks() {
+    setAIReadiness({ status: "checking", message: "Checking the HEY AI endpoint." });
+    setSupabaseStatus("checking");
+    const [aiResult, conversationResult] = await Promise.allSettled([
+      checkHEYAIReadiness(),
+      listHEYConversations(),
+    ]);
+    if (aiResult.status === "fulfilled") setAIReadiness(aiResult.value);
+    else setAIReadiness({ status: "unavailable", message: "HEY AI health check could not be completed." });
+    if (conversationResult.status === "fulfilled") {
+      setSupabaseStatus("connected");
+      setConversations(conversationResult.value);
+      setChatError((current) => current.startsWith("Supabase could not") ? "" : current);
+    } else {
+      setSupabaseStatus("unavailable");
+      setChatError("Supabase could not load your conversations. Check the connection and try again.");
+    }
+  }
 
   async function openConversation(id) {
     if (isSending) return;
@@ -178,7 +213,8 @@ function ChatWorkspace() {
       setChatError("");
       setHistoryOpen(false);
     } catch {
-      setChatError("Could not open that conversation.");
+      setSupabaseStatus("unavailable");
+      setChatError("Supabase could not open that conversation. Check the connection and try again.");
     }
   }
 
@@ -214,12 +250,14 @@ function ChatWorkspace() {
     activeRequestControllerRef.current = controller;
 
     try {
+      let fusionVerification = null;
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
         confirmed,
         fusion: requestedFusion,
         signal: controller.signal,
+        onFusionVerification: (verification) => { fusionVerification = verification; },
         onExecutionResult: (execution, originalMessage) => {
           if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
           else setPendingExecution(null);
@@ -227,7 +265,11 @@ function ChatWorkspace() {
       });
       if (controller.signal.aborted) return;
 
-      setMessages((current) => [...current, { role: "hey", text: response }]);
+      setMessages((current) => [...current, {
+        role: "hey",
+        text: response,
+        ...(fusionVerification ? { verification: fusionVerification } : {}),
+      }]);
       await refreshConversations();
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -360,9 +402,9 @@ function ChatWorkspace() {
           <div className="hey-chat-core-mark"><Bot size={17} /></div>
           <div>
             <strong>HEY Core</strong>
-            <span>Conversation available here</span>
+            <span>{supabaseStatus === "connected" ? "Cloud conversations connected" : supabaseStatus === "checking" ? "Checking cloud conversations" : "Cloud conversations unavailable"}</span>
           </div>
-          <span className="hey-chat-live-dot" />
+          <span className={`hey-chat-live-dot is-${supabaseStatus}`} />
         </div>
       </aside>
 
@@ -410,7 +452,7 @@ function ChatWorkspace() {
           </div>
 
           <div className="hey-chat-title">
-            <span className="hey-chat-status"><span /> {isSending ? "Thinking" : "Ready"}</span>
+            <span className={`hey-chat-status ${isSending ? "is-active" : `is-${aiReadiness.status}`}`}><span /> {isSending ? "Thinking" : aiReadiness.status === "ready" ? "Backend configured" : "Service check"}</span>
             <h2>{mode === "voice" ? "Voice conversation" : "Personal intelligence"}</h2>
           </div>
 
@@ -422,6 +464,21 @@ function ChatWorkspace() {
             </button>
           </div>
         </header>
+
+        <div className="hey-chat-service-status" aria-label="Service readiness" aria-live="polite">
+          <span className={`hey-chat-service-item is-${supabaseStatus}`} data-status={supabaseStatus}>
+            <i aria-hidden="true" /> Supabase <strong>{supabaseStatus === "connected" ? "connected" : supabaseStatus === "checking" ? "checking" : "unavailable"}</strong>
+          </span>
+          <span className={`hey-chat-service-item is-${aiReadiness.status}`} data-status={aiReadiness.status} title={aiReadiness.message}>
+            <i aria-hidden="true" /> HEY AI <strong>{aiReadiness.status === "ready" ? "configured" : aiReadiness.status === "checking" ? "checking" : aiReadiness.status === "not_configured" ? "not configured" : "unavailable"}</strong>
+          </span>
+          <span className="hey-chat-service-explainer">HEY AI status checks backend configuration; provider reachability is confirmed when you send a message.</span>
+          {(supabaseStatus !== "connected" || aiReadiness.status !== "ready") && (
+            <button type="button" className="hey-chat-service-retry" onClick={retryServiceChecks} disabled={supabaseStatus === "checking" || aiReadiness.status === "checking"}>
+              Check again
+            </button>
+          )}
+        </div>
 
         {mode === "voice" ? (
           <div className="hey-voice-duo">
@@ -470,6 +527,7 @@ function ChatWorkspace() {
                     onPin={() => pinMessage(item.text)}
                     pinned={pinnedMessages.includes(item.text)}
                     copied={copiedMessage === item.text}
+                    verification={item.verification}
                   >
                     {item.text}
                   </ChatMessage>

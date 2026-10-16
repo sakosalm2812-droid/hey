@@ -103,7 +103,6 @@ test("dictation requires explicit consent and forwards text without invoking a s
 test("unsupported dictation fails before asking for microphone permission", async () => {
   let permissionRequests = 0;
   const session = createDictationSession({
-    speechProvider: null,
     environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: async () => { permissionRequests += 1; return { getTracks: () => [] }; } } } },
   });
 

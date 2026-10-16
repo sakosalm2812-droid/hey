@@ -34,9 +34,10 @@ You are the core intelligence behind a futuristic AI operating system.
 `;
 
 function getHEYApiUrl() {
-  return import.meta.env.VITE_HEY_API_URL ||
-    (import.meta.env.VITE_SUPABASE_URL
-      ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/hey`
+  const env = import.meta.env || {};
+  return env.VITE_HEY_API_URL ||
+    (env.VITE_SUPABASE_URL
+      ? `${env.VITE_SUPABASE_URL}/functions/v1/hey`
       : '/api/hey');
 }
 
@@ -55,6 +56,62 @@ export function isSameHEYAccount(requestSession, currentSession) {
   return Boolean(requestSession?.user?.id) && requestSession.user.id === currentSession?.user?.id;
 }
 
+function isPlainDataRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Reflect.ownKeys(value).every((key) => {
+    if (typeof key !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return Boolean(descriptor && "value" in descriptor && descriptor.enumerable);
+  });
+}
+
+async function sha256Hex(value) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId, requestText } = {}) {
+  if (!isPlainDataRecord(value) || value.status !== "verified" || value.independentlyChecked !== true ||
+    !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1 ||
+    typeof answer !== "string" || !answer.trim() || typeof requestText !== "string" || !requestText.trim() || typeof requestId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) ||
+    typeof value.responseSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(value.responseSha256) ||
+    !isPlainDataRecord(value.provenance) || value.provenance.status !== "verified" ||
+    value.provenance.requestId !== requestId || typeof value.provenance.requestSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(value.provenance.requestSha256) || typeof value.provenance.answerSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(value.provenance.answerSha256)) return null;
+  try {
+    if (await sha256Hex(answer) !== value.responseSha256.toLowerCase() ||
+      await sha256Hex(requestText.trim()) !== value.provenance.requestSha256.toLowerCase()) return null;
+  } catch {
+    return null;
+  }
+  const { primary, checker } = value.provenance;
+  if (!isPlainDataRecord(primary) || !isPlainDataRecord(checker) ||
+    primary.role !== "primary" || checker.role !== "checker" ||
+    typeof primary.providerId !== "string" || !primary.providerId || typeof primary.modelId !== "string" || !primary.modelId ||
+    typeof checker.providerId !== "string" || !checker.providerId || typeof checker.modelId !== "string" || !checker.modelId ||
+    primary.providerId === checker.providerId || primary.answerClaimId !== "answer" || checker.answerClaimId !== "answer" ||
+    checker.verificationClaimId !== "verification" || checker.confirmed !== true) return null;
+  return Object.freeze({
+    status: "verified",
+    requestId,
+    requestSha256: value.provenance.requestSha256.toLowerCase(),
+    responseSha256: value.responseSha256.toLowerCase(),
+    confidence: value.confidence,
+    primary: Object.freeze({ role: "primary", providerId: primary.providerId, modelId: primary.modelId }),
+    checker: Object.freeze({ role: "checker", providerId: checker.providerId, modelId: checker.modelId }),
+  });
+}
+
+export async function parseFusionVerificationMetadata(value, options = {}) {
+  try {
+    return await parseFusionVerificationMetadataUnsafe(value, options);
+  } catch {
+    return null;
+  }
+}
+
 export function getHEYChatError(response, details = {}, fusion = false) {
   if (response.status === 401) return "Your session expired. Please sign in again.";
   if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
@@ -65,6 +122,32 @@ export function getHEYChatError(response, details = {}, fusion = false) {
     ? "Model fusion is unavailable right now. No answer was delivered."
     : "HEY could not reach its AI provider. Check the server configuration and try again.";
   return details.error || "HEY could not send this message.";
+}
+
+export async function checkHEYAIReadiness({ signal, timeoutMs = 8_000 } = {}) {
+  const healthUrl = `${getHEYApiUrl().replace(/\/+$/, "")}/health`;
+  let response;
+  try {
+    response = await fetchWithTimeout(healthUrl, { method: "GET" }, timeoutMs, signal);
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return { status: "unavailable", message: "HEY AI health endpoint could not be reached." };
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    return { status: "unavailable", message: "HEY AI returned an invalid health response." };
+  }
+
+  if (response.ok && payload?.status === "ready") {
+    return { status: "ready", message: "Required backend configuration is present." };
+  }
+  if (response.status === 503 && payload?.status === "not_ready") {
+    return { status: "not_configured", message: "Required Supabase or AI provider configuration is missing." };
+  }
+  return { status: "unavailable", message: "HEY AI health could not be confirmed." };
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
@@ -126,7 +209,7 @@ async function getExecutionIdentity(session) {
   };
 }
 
-export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, confirmed = false, fusion = false, signal } = {}) {
+export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onFusionVerification, confirmed = false, fusion = false, signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
     const brainResult = processInput(message);
@@ -147,7 +230,10 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
       addConversationMessage({ role: "assistant", content: answer });
       return answer;
     }
-    const response = await fetchWithRetry(getHEYApiUrl(), {
+    const requestId = crypto.randomUUID();
+    let response;
+    try {
+      response = await fetchWithRetry(getHEYApiUrl(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -157,7 +243,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
       },
       body: JSON.stringify(withFusionRequestOptIn({
         message,
-        requestId: crypto.randomUUID(),
+        requestId,
         system: `${HEY_SYSTEM}\n\n${brainResult.instruction}`,
         context: brainResult.context,
         memory: brainResult.memory,
@@ -173,7 +259,11 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         responseStyle: brainResult.responseStyle,
         conversationId,
       }, fusion))
-    }, { signal })
+      }, { signal });
+    } catch (error) {
+      if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
+      throw new Error("HEY AI could not be reached. Check your connection and try again.", { cause: error });
+    }
 
     if (!response.ok) {
       const details = await response.json().catch(() => ({}));
@@ -187,12 +277,26 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
       throw new DOMException("The signed-in account changed while this request was running.", "AbortError");
     }
 
-    if (data.conversationId && onConversationId) {
-      onConversationId(data.conversationId);
+    const fusionVerification = fusion
+      ? await parseFusionVerificationMetadata(data.fusion, { answer: data.response, requestId, requestText: message })
+      : null;
+    if (fusion) {
+      if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
+      const currentAfterVerification = await getHEYSession();
+      if (!isSameHEYAccount(session, currentAfterVerification)) {
+        throw new DOMException("The signed-in account changed while this request was running.", "AbortError");
+      }
     }
-
+    if (fusion && !fusionVerification) {
+      throw new Error("Model fusion did not return verified provider provenance. No answer was delivered.");
+    }
     if (typeof data.response !== "string" || !data.response.trim()) {
       throw new Error(fusion ? "Model fusion did not return a verified answer. No answer was delivered." : "HEY did not return a response. Please try again.");
+    }
+    if (fusion) onFusionVerification?.(fusionVerification);
+
+    if (data.conversationId && onConversationId) {
+      onConversationId(data.conversationId);
     }
     const answer = data.response;
     const qualityReport = evaluateResponse(answer, brainResult.safety);
@@ -238,8 +342,10 @@ export async function createForgeArtifact(description, category, plan) {
 }
 
 export async function listHEYConversations() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) return [];
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error("Supabase could not verify your session.", { cause: sessionError });
+  const session = sessionData?.session;
+  if (!session?.user) throw new Error("Your Supabase session is unavailable.");
 
   const { data, error } = await supabase
     .from("hey_conversations")

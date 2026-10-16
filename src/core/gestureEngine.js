@@ -1,7 +1,9 @@
-import { publish } from "./eventBus.js";
+import { publish, subscribe } from "./eventBus.js";
 import { recordAudit } from "./auditLog.js";
 import { getSetting } from "./settingsRegistry.js";
 import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
+import { grantPermission, revokePermission } from "./permissionManager.js";
+import { createBundledHandGestureAdapter } from "../lib/bundledHandGestureAdapter.js";
 
 const GESTURES = Object.freeze({
   G01: { id: "G01", name: "open_palm_held", description: "Summon HEY/overview" },
@@ -151,14 +153,16 @@ function validateGestureProfile(value, expectedId) {
   return profile;
 }
 
-function validateGestureBinding(value, expectedId, profiles) {
+function validateGestureBinding(value, expectedId, profiles, customGestures = new Map()) {
   const binding = copyGestureJson(value, "Gesture mapping");
   const allowed = new Set([
     "id", "profileId", "gestureId", "action", "actionType", "target", "scope", "riskLevel",
     "requiresConfirmation", "parameters", "enabled", "createdAt", "updatedAt", "collisionChecked", "testResults",
   ]);
   if (Object.keys(binding).some((key) => !allowed.has(key)) || binding.id !== expectedId
-    || !profiles.has(binding.profileId) || !Object.hasOwn(GESTURES, binding.gestureId)
+    || !profiles.has(binding.profileId)
+    || (!Object.hasOwn(GESTURES, binding.gestureId) && !customGestures.has(binding.gestureId))
+    || (customGestures.has(binding.gestureId) && customGestures.get(binding.gestureId).templates.length < 3)
     || binding.scope !== profiles.get(binding.profileId)?.scope
     || binding.target !== null || binding.riskLevel !== "low" || binding.requiresConfirmation !== false
     || typeof binding.enabled !== "boolean" || binding.collisionChecked !== false || binding.testResults !== null
@@ -177,12 +181,13 @@ function validateCustomGesture(value, expectedId) {
   const gesture = copyGestureJson(value, "Custom gesture mapping");
   const allowed = new Set([
     "id", "name", "gestureId", "samples", "signature", "action", "actionType", "scope", "riskLevel",
-    "requiresConfirmation", "createdAt", "updatedAt", "tested", "testResults",
+    "requiresConfirmation", "createdAt", "updatedAt", "tested", "testResults", "templates",
   ]);
   if (Object.keys(gesture).some((key) => !allowed.has(key)) || gesture.id !== expectedId
     || typeof gesture.name !== "string" || !gesture.name.trim() || gesture.name.length > 80
     || !Object.hasOwn(GESTURES, gesture.gestureId) || !Array.isArray(gesture.samples)
     || gesture.samples.length > MAX_CUSTOM_GESTURE_SAMPLES || gesture.signature !== null
+    || (gesture.templates !== undefined && (!Array.isArray(gesture.templates) || gesture.templates.length > MAX_CUSTOM_GESTURE_SAMPLES))
     || gesture.riskLevel !== "low" || gesture.requiresConfirmation !== false
     || !Object.values(SCOPES).includes(gesture.scope)
     || typeof gesture.createdAt !== "string" || !Number.isFinite(Date.parse(gesture.createdAt))
@@ -199,6 +204,17 @@ function validateCustomGesture(value, expectedId) {
       throw new TypeError("Stored gesture calibration sample is invalid.");
     }
   }
+  for (const template of gesture.templates || []) {
+    if (!template || typeof template.id !== "string" || !template.id.trim()
+      || typeof template.timestamp !== "string" || !Number.isFinite(Date.parse(template.timestamp))
+      || !Array.isArray(template.data) || template.data.length !== 63
+      || template.data.some((number) => typeof number !== "number" || !Number.isFinite(number) || number < -1 || number > 1)
+      || !["left", "right", "unknown"].includes(template.handedness)
+      || !Number.isFinite(template.confidence) || template.confidence < 0 || template.confidence > 1) {
+      throw new TypeError("Stored detector calibration template is invalid.");
+    }
+  }
+  gesture.templates = gesture.templates || [];
   return gesture;
 }
 
@@ -244,6 +260,11 @@ export class GestureEngine {
     this.activeProfileId = null;
     this.frameCanvas = null;
     this.lastFrameAt = 0;
+    this.pendingGesture = null;
+    this.recognitionMode = "active";
+    this.latestDetectorObservation = null;
+    this.testCustomGestureId = null;
+    this.cameraPermissionGranted = false;
     this.detectionTimeoutMs = detectionTimeoutMs;
     this.detectionEpoch = 0;
     this.gestureCooldowns = new Map();
@@ -289,8 +310,13 @@ export class GestureEngine {
         return [normalized.id, normalized];
       }));
       if (profiles.size !== envelope.profiles.length) throw new TypeError("Stored gesture profile IDs must be unique.");
+      const customGestures = new Map(envelope.customGestures.map((gesture) => {
+        const normalized = validateCustomGesture(gesture, gesture?.id);
+        return [normalized.id, normalized];
+      }));
+      if (customGestures.size !== envelope.customGestures.length) throw new TypeError("Stored custom gesture IDs must be unique.");
       const bindings = new Map(envelope.bindings.map((binding) => {
-        const normalized = validateGestureBinding(binding, binding?.id, profiles);
+        const normalized = validateGestureBinding(binding, binding?.id, profiles, customGestures);
         return [normalized.id, normalized];
       }));
       if (bindings.size !== envelope.bindings.length) throw new TypeError("Stored gesture mapping IDs must be unique.");
@@ -298,11 +324,6 @@ export class GestureEngine {
         const actual = [...bindings.values()].filter((binding) => binding.profileId === profile.id).map((binding) => binding.id).sort();
         if ([...profile.bindings].sort().join("\u0000") !== actual.join("\u0000")) throw new TypeError("Stored gesture profile bindings do not match their mappings.");
       }
-      const customGestures = new Map(envelope.customGestures.map((gesture) => {
-        const normalized = validateCustomGesture(gesture, gesture?.id);
-        return [normalized.id, normalized];
-      }));
-      if (customGestures.size !== envelope.customGestures.length) throw new TypeError("Stored custom gesture IDs must be unique.");
       if (getAccountScope() !== scope) return { success: false, status: "account_changed" };
       this.profiles = profiles;
       this.bindings = bindings;
@@ -337,8 +358,9 @@ export class GestureEngine {
       if (this.profiles.size > MAX_GESTURE_PROFILES || this.bindings.size > MAX_GESTURE_BINDINGS || this.customGestures.size > MAX_CUSTOM_GESTURES) return false;
       const profiles = [...this.profiles.values()].map((profile) => validateGestureProfile(profile, profile.id));
       const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
-      const bindings = [...this.bindings.values()].map((binding) => validateGestureBinding(binding, binding.id, profileMap));
       const customGestures = [...this.customGestures.values()].map((gesture) => validateCustomGesture(gesture, gesture.id));
+      const customGestureMap = new Map(customGestures.map((gesture) => [gesture.id, gesture]));
+      const bindings = [...this.bindings.values()].map((binding) => validateGestureBinding(binding, binding.id, profileMap, customGestureMap));
       const serialized = JSON.stringify({ version: GESTURE_PROFILE_STORE_VERSION, scope, profiles, bindings, customGestures });
       if (serialized.length > MAX_GESTURE_PROFILE_STORE_LENGTH || getAccountScope() !== scope) return false;
       storage = this.storageProvider();
@@ -421,16 +443,50 @@ export class GestureEngine {
     this.setCameraCapabilityStatus(status);
 
     const adapterInstalled = Boolean(this.recognitionAdapter && typeof this.recognitionAdapter.detect === "function");
+    let adapterReady = adapterInstalled;
+    try {
+      if (adapterInstalled && typeof this.recognitionAdapter.isReady === "function") adapterReady = this.recognitionAdapter.isReady() === true;
+    } catch { adapterReady = false; }
+    const supportedGestureIds = this.recognitionAdapter?.kind === "mediapipe-hands-bundled"
+      ? ["G01", "G02", "G12", "G15", "G16"]
+      : [];
     return {
       status,
       cameraSupported,
       permission,
       adapterInstalled,
-      recognitionStatus: cameraSupported && adapterInstalled && status === "supported" ? "adapter_ready" : "unavailable",
+      adapterReady,
+      adapterKind: this.recognitionAdapter?.kind || null,
+      supportedGestureIds,
+      recognitionStatus: !cameraSupported || !adapterInstalled || status !== "supported"
+        ? "unavailable"
+        : adapterReady ? "adapter_ready" : "adapter_initialization_required",
       consentRequired: true,
       permissionPrompted: false,
       sessionState: this.recognitionState,
     };
+  }
+
+  getPreviewStream() {
+    this.refreshAccountScope();
+    return this.recognitionState === GESTURE_STATES.ACTIVE || this.recognitionState === GESTURE_STATES.PAUSED
+      ? this.mediaStream
+      : null;
+  }
+
+  getRecognitionMode() {
+    return this.recognitionMode;
+  }
+
+  getLatestDetectorObservation() {
+    this.refreshAccountScope();
+    const observation = this.latestDetectorObservation;
+    if (!observation || observation.accountScope !== getAccountScope()
+      || observation.profileId !== this.activeProfileId
+      || Date.now() - observation.timestamp > 1000
+      || this.recognitionMode !== "test"
+      || this.recognitionAdapter?.kind !== "mediapipe-hands-bundled") return null;
+    return copyGestureJson(observation, "Detector observation");
   }
 
   createProfile(input = {}) {
@@ -521,10 +577,15 @@ export class GestureEngine {
     const profile = this.profiles.get(id);
     if (!profile) return null;
     const safeUpdates = copyGestureJson(updates, "Gesture profile update");
-    const allowed = new Set(["name", "sensitivity", "cooldownMs"]);
+    const allowed = new Set(["name", "sensitivity", "confidence", "holdMs", "cooldownMs", "handedness", "dominantHand"]);
     if (Object.keys(safeUpdates).some((key) => !allowed.has(key))) throw new TypeError("Gesture profile update contains a protected or unsupported field.");
     if (Object.hasOwn(safeUpdates, "cooldownMs")) validateGestureCooldownMs(safeUpdates.cooldownMs);
     if (Object.hasOwn(safeUpdates, "sensitivity")) validateSensitivity(safeUpdates.sensitivity);
+    if (Object.hasOwn(safeUpdates, "confidence") && (typeof safeUpdates.confidence !== "number" || !Number.isFinite(safeUpdates.confidence) || safeUpdates.confidence < 0.7 || safeUpdates.confidence > 0.99)) throw new RangeError("Gesture confidence must be between 0.7 and 0.99.");
+    if (Object.hasOwn(safeUpdates, "holdMs") && (!Number.isSafeInteger(safeUpdates.holdMs) || safeUpdates.holdMs < 200 || safeUpdates.holdMs > 1500)) throw new RangeError("Gesture hold time must be between 200 and 1500 milliseconds.");
+    for (const key of ["handedness", "dominantHand"]) {
+      if (Object.hasOwn(safeUpdates, key) && !["left", "right", "both"].includes(safeUpdates[key])) throw new TypeError("Gesture handedness is invalid.");
+    }
     if (Object.hasOwn(safeUpdates, "name") && (typeof safeUpdates.name !== "string" || !safeUpdates.name.trim() || safeUpdates.name.length > 80)) throw new TypeError("Gesture profile name is invalid.");
     const updated = { ...profile, ...safeUpdates, updatedAt: new Date().toISOString() };
     this.profiles.set(id, updated);
@@ -559,7 +620,10 @@ export class GestureEngine {
     if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Gesture mapping contains unsupported fields.");
     const profile = this.profiles.get(input.profileId);
     if (!profile) throw new TypeError("Gesture mapping must reference an active account profile.");
-    if (!Object.hasOwn(GESTURES, input.gestureId)) throw new TypeError("Gesture mapping must use a recognized gesture.");
+    if (!Object.hasOwn(GESTURES, input.gestureId) && !this.customGestures.has(input.gestureId)) throw new TypeError("Gesture mapping must use a recognized or trained gesture.");
+    if (this.customGestures.has(input.gestureId) && this.customGestures.get(input.gestureId).templates.length < 3) {
+      throw new TypeError("A custom gesture needs at least three real detector samples before it can be mapped.");
+    }
     validateSafeUiMapping(input.actionType, input.action);
     if ((input.riskLevel ?? "low") !== "low" || input.requiresConfirmation === true) throw new TypeError("Gesture mappings cannot set risk or confirmation authority.");
     if ([...this.bindings.values()].some((binding) => binding.profileId === profile.id && binding.gestureId === input.gestureId)) {
@@ -622,7 +686,10 @@ export class GestureEngine {
     const nextGestureId = safeUpdates.gestureId ?? binding.gestureId;
     const nextAction = safeUpdates.action ?? binding.action;
     const nextActionType = safeUpdates.actionType ?? binding.actionType;
-    if (!Object.hasOwn(GESTURES, nextGestureId)) throw new TypeError("Gesture mapping must use a recognized gesture.");
+    if (!Object.hasOwn(GESTURES, nextGestureId) && !this.customGestures.has(nextGestureId)) throw new TypeError("Gesture mapping must use a recognized or trained gesture.");
+    if (this.customGestures.has(nextGestureId) && this.customGestures.get(nextGestureId).templates.length < 3) {
+      throw new TypeError("A custom gesture needs at least three real detector samples before it can be mapped.");
+    }
     validateSafeUiMapping(nextActionType, nextAction);
     if (safeUpdates.enabled !== undefined && typeof safeUpdates.enabled !== "boolean") throw new TypeError("Gesture mapping enabled state must be boolean.");
     if ([...this.bindings.values()].some((other) => other.id !== id && other.profileId === binding.profileId && other.gestureId === nextGestureId)) {
@@ -669,7 +736,7 @@ export class GestureEngine {
     return { available: Boolean(adapter), kind: adapter?.kind || null };
   }
 
-  async startRecognition(profileId, { consent = false } = {}) {
+  async startRecognition(profileId, { consent = false, mode = "active" } = {}) {
     this.refreshAccountScope();
     const startingAccountScope = getAccountScope();
     if (!getAccountScope().startsWith("account:") || !["default", "loaded", "saved"].includes(this.storageStatus)) {
@@ -677,10 +744,12 @@ export class GestureEngine {
     }
     const profile = this.profiles.get(profileId);
     if (!profile) return { success: false, error: "Profile not found", code: "profile_not_found" };
+    if (this.recognitionState === GESTURE_STATES.ERROR) this.recognitionState = GESTURE_STATES.INACTIVE;
     if (this.recognitionState !== GESTURE_STATES.INACTIVE) {
       return { success: false, error: "Gesture recognition is already active.", code: "already_active" };
     }
     if (consent !== true) return { success: false, error: "Explicit camera consent is required.", code: "consent_required" };
+    if (!new Set(["active", "test"]).has(mode)) return { success: false, error: "Gesture recognition mode is unsupported.", code: "invalid_mode" };
     if (!this.recognitionAdapter) {
       return { success: false, error: "No gesture recognition adapter is available on this platform.", code: "adapter_unavailable" };
     }
@@ -702,9 +771,37 @@ export class GestureEngine {
     this.recognitionAbortController = abortController;
     this.activeProfileId = profileId;
     this.recognitionState = GESTURE_STATES.CALIBRATING;
-    this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "requesting" });
+    this.recognitionMode = mode;
+    this.latestDetectorObservation = null;
+    this.testCustomGestureId = null;
+    this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", detector: "initializing", mode });
 
+    let detectorInitializing = false;
     try {
+      if (typeof this.recognitionAdapter.prepare === "function") {
+        detectorInitializing = true;
+        const adapterReady = await this.recognitionAdapter.prepare({ signal: abortController.signal, profile });
+        if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
+          return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+        }
+        if (adapterReady === false) throw Object.assign(new Error("Gesture detector could not be initialized."), { code: "gesture_adapter_unavailable" });
+        detectorInitializing = false;
+      }
+
+      if (getAccountScope() !== startingAccountScope || !this.profiles.has(profileId)) {
+        this.stopRecognition("account_changed");
+        return { success: false, error: "Gesture session ended after the account changed.", code: "account_changed" };
+      }
+
+      grantPermission("camera", "session", {
+        source: "gesture_studio",
+        accountScope: startingAccountScope,
+        profileId,
+        mode,
+        localProcessing: true,
+      });
+      this.cameraPermissionGranted = true;
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "requesting", detector: "ready", mode });
       const stream = await globalThis.navigator.mediaDevices.getUserMedia({
         video: {
           deviceId: profile.cameraId ? { exact: profile.cameraId } : undefined,
@@ -737,7 +834,7 @@ export class GestureEngine {
       const videoTrack = stream.getVideoTracks?.()[0];
       if (!videoTrack || videoTrack.readyState === "ended") throw new Error("Camera track is unavailable.");
       videoTrack.addEventListener?.("ended", () => {
-        if (generation === this.recognitionGeneration) this.stopRecognition("permission_revoked");
+        if (generation === this.recognitionGeneration) this.stopRecognition("camera_track_ended");
       }, { once: true });
 
       const permissionAllowed = await this.watchCameraPermission(generation);
@@ -757,17 +854,25 @@ export class GestureEngine {
 
       this.recognitionState = GESTURE_STATES.ACTIVE;
       this.setCameraCapabilityStatus("supported");
-      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "active", visible: true, processing: "local_adapter" });
+      this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "active", visible: true, processing: "local_adapter", mode });
       
       this.startDetectionLoop(profileId);
       
       publish("gesture.recognition_started", { profileId });
       recordAudit({ action: "gesture.recognition_started", status: "completed", metadata: { profileId } });
       
-      return { success: true, profileId, camera: "active", visible: true, adapter: this.recognitionAdapter.kind || "custom" };
+      return { success: true, profileId, camera: "active", visible: true, mode, adapter: this.recognitionAdapter.kind || "custom" };
     } catch (error) {
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+      }
+      let errorCode = "";
+      try { errorCode = typeof error?.code === "string" ? error.code : ""; } catch { /* Host errors can be accessor-backed. */ }
+      if (detectorInitializing || errorCode === "gesture_adapter_unavailable") {
+        this.stopRecognition("adapter_initialization_failed");
+        this.recognitionState = GESTURE_STATES.ERROR;
+        this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: "adapter_unavailable" });
+        return { success: false, error: "The local hand detector could not be initialized.", code: "adapter_unavailable" };
       }
       const failure = classifyCameraFailure(error);
       this.setCameraCapabilityStatus(failure.status, failure.code);
@@ -832,6 +937,11 @@ export class GestureEngine {
             && detectionEpoch === this.detectionEpoch
             && this.recognitionState === GESTURE_STATES.ACTIVE) {
             this.handleGestureDetection(gesture, profile);
+          } else if (!gesture
+            && generation === this.recognitionGeneration
+            && detectionEpoch === this.detectionEpoch
+            && this.recognitionState === GESTURE_STATES.ACTIVE) {
+            this.pendingGesture = null;
           }
         } catch (error) {
           if (!signal.aborted) {
@@ -873,7 +983,15 @@ export class GestureEngine {
     let result;
     try {
       result = await Promise.race([
-        Promise.resolve(this.recognitionAdapter.detect(frame, profile, { signal, maxFrameSize: { width: 640, height: 480 } })),
+        Promise.resolve(this.recognitionAdapter.detect(frame, profile, {
+          signal,
+          maxFrameSize: { width: 640, height: 480 },
+          customGestures: [...this.customGestures.values()]
+            .filter((gesture) => this.recognitionMode === "test"
+              ? gesture.id === this.testCustomGestureId
+              : [...this.bindings.values()].some((binding) => binding.enabled && binding.profileId === profile.id && binding.gestureId === gesture.id))
+            .map((gesture) => ({ id: gesture.id, templates: gesture.templates })),
+        })),
         new Promise((resolve) => {
           abortHandler = () => resolve(null);
           signal?.addEventListener?.("abort", abortHandler, { once: true });
@@ -891,14 +1009,42 @@ export class GestureEngine {
       if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId);
       if (abortHandler) signal?.removeEventListener?.("abort", abortHandler);
     }
-    if (signal?.aborted || !result || typeof result !== "object" || Array.isArray(result)) return null;
+    if (signal?.aborted) return null;
+    const observation = (() => {
+      try { return this.recognitionAdapter.getLatestObservation?.() || null; }
+      catch { return null; }
+    })();
+    this.latestDetectorObservation = null;
+    if (this.recognitionAdapter.kind === "mediapipe-hands-bundled" && observation && typeof observation === "object"
+      && Array.isArray(observation.pose) && observation.pose.length === 63
+      && observation.pose.every((number) => Number.isFinite(number) && number >= -1 && number <= 1)
+      && ["left", "right", "unknown"].includes(observation.handedness)
+      && Number.isFinite(observation.handConfidence) && observation.handConfidence >= 0 && observation.handConfidence <= 1
+      && Number.isSafeInteger(observation.timestamp) && Date.now() - observation.timestamp <= 1000) {
+      this.latestDetectorObservation = {
+        accountScope: getAccountScope(),
+        profileId: profile.id,
+        timestamp: observation.timestamp,
+        pose: [...observation.pose],
+        handedness: observation.handedness,
+        handConfidence: observation.handConfidence,
+      };
+    }
+    if (this.latestDetectorObservation) {
+      this.notify("gesture_frame_observed", {
+        profileId: profile.id,
+        handedness: this.latestDetectorObservation.handedness,
+        handConfidence: this.latestDetectorObservation.handConfidence,
+      });
+    }
+    if (!result || typeof result !== "object" || Array.isArray(result)) return null;
     const prototype = Object.getPrototypeOf(result);
     const id = Object.getOwnPropertyDescriptor(result, "id");
     const confidence = Object.getOwnPropertyDescriptor(result, "confidence");
     if ((prototype !== Object.prototype && prototype !== null)
       || !id || !Object.hasOwn(id, "value")
       || !confidence || !Object.hasOwn(confidence, "value")
-      || typeof id.value !== "string" || !GESTURES[id.value]
+      || typeof id.value !== "string" || (!GESTURES[id.value] && !this.customGestures.has(id.value))
       || !Number.isFinite(confidence.value) || confidence.value < profile.confidence || confidence.value > 1) return null;
     return { id: id.value, confidence: confidence.value, timestamp: new Date().toISOString() };
   }
@@ -906,6 +1052,28 @@ export class GestureEngine {
   handleGestureDetection(gesture, profile) {
     this.refreshAccountScope();
     if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.activeProfileId !== profile?.id) return;
+    if (!gesture || (!Object.hasOwn(GESTURES, gesture.id) && !this.customGestures.has(gesture.id))
+      || !Number.isFinite(gesture.confidence) || gesture.confidence < profile.confidence || gesture.confidence > 1) {
+      this.pendingGesture = null;
+      return;
+    }
+
+    const now = Date.now();
+    const pending = this.pendingGesture;
+    if (!pending || pending.id !== gesture.id || now - pending.lastAt > 250) {
+      this.pendingGesture = { id: gesture.id, startedAt: now, lastAt: now };
+      return;
+    }
+    pending.lastAt = now;
+    if (now - pending.startedAt < profile.holdMs) return;
+    this.pendingGesture = null;
+
+    if (this.recognitionMode === "test") {
+      const detected = copyGestureJson({ id: gesture.id, confidence: gesture.confidence, timestamp: new Date().toISOString() }, "Gesture test detection");
+      this.notify("gesture_test_detection", { profileId: profile.id, gesture: detected });
+      publish("gesture.test_detection", { profileId: profile.id, gesture: detected });
+      return;
+    }
 
     const cooldownMs = profile.cooldownMs ?? getSetting("gesture.cooldown_ms") ?? 600;
     try {
@@ -924,7 +1092,6 @@ export class GestureEngine {
 
     if (!binding) return;
 
-    const now = Date.now();
     const cooldownKey = `${profile.id}:${gesture.id}`;
     if (this.gestureCooldowns.has(cooldownKey)
       && now - this.gestureCooldowns.get(cooldownKey) < cooldownMs) return;
@@ -965,9 +1132,16 @@ export class GestureEngine {
     this.refreshAccountScope();
     if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.activeProfileId !== binding?.profileId
       || this.bindings.get(binding?.id) !== binding || !this.profiles.has(binding.profileId)) return false;
-    if (!binding || !Object.hasOwn(GESTURES, gesture?.id)) return false;
+    if (!binding || (!Object.hasOwn(GESTURES, gesture?.id) && !this.customGestures.has(gesture?.id))) return false;
     try { validateSafeUiMapping(binding.actionType, binding.action); }
     catch { return false; }
+    // Only the Dashboard navigation action currently has an in-product handler.
+    // Keep other catalogued UI actions storable for compatibility, but never
+    // report them as dispatched until a real, verifiable handler exists.
+    if (binding.action !== "summon") {
+      this.notify("action_failed", { code: "action_handler_unavailable", action: binding.action });
+      return false;
+    }
     if (binding.target !== null || binding.riskLevel !== "low" || binding.requiresConfirmation !== false
       || !binding.parameters || Object.keys(binding.parameters).length !== 0) return false;
     const action = {
@@ -978,8 +1152,20 @@ export class GestureEngine {
       timestamp: new Date().toISOString(),
     };
 
-    publish("gesture.action_executed", { binding: copyGestureJson(binding, "Gesture mapping"), action: copyGestureJson(action, "Gesture action") });
-    this.notify("action_executed", { binding: copyGestureJson(binding, "Gesture mapping"), action: copyGestureJson(action, "Gesture action") });
+    const request = {
+      requestId: globalThis.crypto?.randomUUID?.() || generateBindingId(),
+      profileId: binding.profileId,
+      binding: copyGestureJson(binding, "Gesture mapping"),
+      action: copyGestureJson(action, "Gesture action"),
+    };
+    const consumers = publish("gesture.action_requested", request);
+    if (consumers < 1) {
+      this.notify("action_failed", { requestId: request.requestId, code: "action_handler_unavailable", action: request.action });
+      recordAudit({ action: "gesture.action_requested", status: "failed", metadata: { gesture: gesture.id, binding: binding.id, reason: "action_handler_unavailable" } });
+      return false;
+    }
+    this.notify("action_requested", request);
+    recordAudit({ action: "gesture.action_requested", status: "started", metadata: { gesture: gesture.id, binding: binding.id, requestId: request.requestId } });
     return true;
   }
 
@@ -988,6 +1174,9 @@ export class GestureEngine {
     this.recognitionGeneration += 1;
     this.detectionEpoch += 1;
     this.gestureCooldowns.clear();
+    this.pendingGesture = null;
+    this.latestDetectorObservation = null;
+    this.testCustomGestureId = null;
     this.recognitionAbortController?.abort(reason);
     this.recognitionAbortController = null;
     this.recognitionState = GESTURE_STATES.INACTIVE;
@@ -1009,12 +1198,18 @@ export class GestureEngine {
       this.videoElement = null;
     }
 
+    if (this.cameraPermissionGranted) {
+      this.cameraPermissionGranted = false;
+      try { revokePermission("camera", "session"); } catch { /* Camera tracks are already being released. */ }
+    }
+
     try {
       this.recognitionAdapter?.stop?.(reason);
     } catch (error) {
       this.notify("recognition_adapter_error", { profileId: this.activeProfileId, error: error?.message || "Gesture adapter cleanup failed." });
     }
     this.activeProfileId = null;
+    this.recognitionMode = "active";
     this.frameCanvas = null;
     this.lastFrameAt = 0;
     
@@ -1026,6 +1221,7 @@ export class GestureEngine {
     if (this.recognitionState !== GESTURE_STATES.ACTIVE) return false;
     this.detectionEpoch += 1;
     this.gestureCooldowns.clear();
+    this.pendingGesture = null;
     this.recognitionState = GESTURE_STATES.PAUSED;
     this.notify("recognition_state_changed", { state: this.recognitionState, profileId: this.activeProfileId, camera: "active", visible: true });
     return true;
@@ -1046,21 +1242,23 @@ export class GestureEngine {
     const allowed = new Set(["name", "gestureId", "action", "actionType", "scope"]);
     if (Object.keys(input).some((key) => !allowed.has(key))) throw new TypeError("Custom gesture mapping contains unsupported fields.");
     if (this.customGestures.size >= MAX_CUSTOM_GESTURES) throw new RangeError("Custom gesture mapping limit reached.");
-    if (!Object.hasOwn(GESTURES, input.gestureId)) throw new TypeError("Custom mappings must reference a recognized gesture.");
+    const gestureId = input.gestureId ?? "G20";
+    if (!Object.hasOwn(GESTURES, gestureId)) throw new TypeError("Custom mappings must reference a recognized gesture family.");
     validateSafeUiMapping(input.actionType, input.action);
     const name = input.name;
     const scope = input.scope ?? SCOPES.FOREGROUND;
     if (typeof name !== "string" || !name.trim() || name.length > 80 || !Object.values(SCOPES).includes(scope)) {
       throw new TypeError("Custom gesture mapping details are invalid.");
     }
-    const gestureId = `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const customGestureId = `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
     
     const gesture = {
-      id: gestureId,
+      id: customGestureId,
       name,
-      gestureId: input.gestureId,
+      gestureId,
       samples: [],
+      templates: [],
       signature: null,
       action: input.action,
       actionType: input.actionType,
@@ -1073,9 +1271,9 @@ export class GestureEngine {
       testResults: null,
     };
 
-    this.customGestures.set(gestureId, gesture);
+    this.customGestures.set(customGestureId, gesture);
     if (!this.save()) {
-      this.customGestures.delete(gestureId);
+      this.customGestures.delete(customGestureId);
       throw new Error("Custom gesture mapping could not be safely saved.");
     }
     this.notify("custom_gesture_created", copyGestureJson(gesture, "Custom gesture mapping"));
@@ -1111,10 +1309,83 @@ export class GestureEngine {
     return copyGestureJson(gesture, "Custom gesture mapping");
   }
 
+  captureCustomGestureSample(gestureId) {
+    this.refreshAccountScope();
+    const scope = getAccountScope();
+    const gesture = this.customGestures.get(gestureId);
+    if (!scope.startsWith("account:") || !["default", "loaded", "saved"].includes(this.storageStatus)) {
+      return { success: false, status: "account_required", error: "An available account-scoped gesture store is required." };
+    }
+    if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.recognitionMode !== "test") {
+      return { success: false, status: "test_session_required", error: "Start a consented detector test session before recording a pose." };
+    }
+    if (this.recognitionAdapter?.kind !== "mediapipe-hands-bundled" || typeof this.recognitionAdapter.getLatestObservation !== "function") {
+      return { success: false, status: "detector_unavailable", error: "Pose recording requires the bundled local hand detector." };
+    }
+    if (!gesture) return { success: false, status: "not_found", error: "Custom gesture not found." };
+    if (gesture.templates.length >= MAX_CUSTOM_GESTURE_SAMPLES) {
+      return { success: false, status: "sample_limit", error: "This custom gesture has reached its sample limit." };
+    }
+    const observation = this.getLatestDetectorObservation();
+    if (!observation?.pose || observation.accountScope !== scope || observation.profileId !== this.activeProfileId) {
+      return { success: false, status: "no_recent_pose", error: "Hold a hand in view and try recording again." };
+    }
+    const data = observation.pose;
+    if (!Array.isArray(data) || data.length !== 63 || data.some((number) => !Number.isFinite(number) || number < -1 || number > 1)) {
+      return { success: false, status: "invalid_pose", error: "The local detector returned an invalid pose sample." };
+    }
+    if (!Number.isFinite(observation.handConfidence) || observation.handConfidence < 0.7) {
+      return { success: false, status: "low_confidence", error: "Hand tracking confidence is too low. Move into clear view and try again." };
+    }
+
+    const sample = {
+      id: generateSampleId(),
+      data: [...data],
+      timestamp: new Date(observation.timestamp).toISOString(),
+      handedness: observation.handedness || "unknown",
+      confidence: observation.handConfidence,
+    };
+    gesture.templates.push(sample);
+    gesture.updatedAt = new Date().toISOString();
+    this.customGestures.set(gestureId, gesture);
+    if (!this.save()) {
+      gesture.templates.pop();
+      throw new Error("Detector sample could not be safely saved to this account.");
+    }
+    this.notify("custom_gesture_sample_recorded", { gestureId, sampleCount: gesture.templates.length });
+    return { success: true, status: "recorded", sampleCount: gesture.templates.length };
+  }
+
   testCustomGesture(gestureId) {
     this.refreshAccountScope();
-    if (!this.customGestures.has(gestureId)) return { success: false, status: "not_found" };
-    return { success: false, status: "unavailable", reason: "No custom gesture detector is installed; caller-supplied test scores are not accepted." };
+    const gesture = this.customGestures.get(gestureId);
+    if (!gesture) return { success: false, status: "not_found" };
+    if (gesture.templates.length < 3) return { success: false, status: "samples_required", sampleCount: gesture.templates.length, requiredSamples: 3 };
+    if (this.recognitionState !== GESTURE_STATES.ACTIVE || this.recognitionMode !== "test") {
+      return { success: false, status: "test_session_required", error: "Start a consented test session to verify this gesture live." };
+    }
+    this.testCustomGestureId = gestureId;
+    return { success: true, status: "ready", sampleCount: gesture.templates.length, actionSuppressed: true };
+  }
+
+  getCustomGestureConflicts(gestureId) {
+    this.refreshAccountScope();
+    const target = this.customGestures.get(gestureId);
+    if (!target || target.templates.length < 3) return { status: "insufficient_samples", conflicts: [] };
+    const conflicts = [];
+    for (const other of this.customGestures.values()) {
+      if (other.id === target.id || other.templates.length < 3) continue;
+      let closest = Infinity;
+      for (const left of target.templates) {
+        for (const right of other.templates) {
+          let distance = 0;
+          for (let index = 0; index < 63; index += 1) distance += Math.abs(left.data[index] - right.data[index]);
+          closest = Math.min(closest, distance / 63);
+        }
+      }
+      if (closest < 0.12) conflicts.push({ gestureId: other.id, name: other.name, similarity: Number((1 - closest).toFixed(2)) });
+    }
+    return { status: conflicts.length ? "conflict" : "clear", conflicts };
   }
 
   getCustomGestures() {
@@ -1165,7 +1436,17 @@ export class GestureEngine {
 }
 
 export const gestureEngine = new GestureEngine();
+if (typeof globalThis.document?.createElement === "function") {
+  gestureEngine.setRecognitionAdapter(createBundledHandGestureAdapter());
+}
 subscribeAccountScope(() => gestureEngine.refreshAccountScope());
+subscribe("permission.updated", (grant) => {
+  if (grant?.permission === "camera" && grant?.status === "revoked"
+    && (grant.scope === "session" || grant.scope === "account")
+    && gestureEngine.getRecognitionState() !== GESTURE_STATES.INACTIVE) {
+    gestureEngine.stopRecognition("permission_revoked");
+  }
+});
 
 export function createGestureProfile(input) {
   return gestureEngine.createProfile(input);

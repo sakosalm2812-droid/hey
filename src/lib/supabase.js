@@ -34,5 +34,6 @@ const supabaseClient = (supabaseUrl && supabaseAnonKey)
   : createUnavailableClient()
 
 export const supabase = supabaseClient
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
 export { supabaseClient as default }
 export { supabaseClient }

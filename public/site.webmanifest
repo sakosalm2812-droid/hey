@@ -2,7 +2,8 @@
   "name": "HEY — Your Second Brain",
   "short_name": "HEY",
   "description": "Your second brain for thinking, creating, remembering, and moving forward.",
-  "start_url": "/",
+  "start_url": "/chat",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
@@ -12,7 +13,17 @@
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
+  ],
+  "shortcuts": [
+    { "name": "Chat with HEY", "short_name": "Chat", "url": "/chat", "icons": [{ "src": "/pwa-maskable.svg", "sizes": "512x512", "type": "image/svg+xml" }] },
+    { "name": "Create with HEY", "short_name": "Create", "url": "/create", "icons": [{ "src": "/pwa-maskable.svg", "sizes": "512x512", "type": "image/svg+xml" }] }
   ]
 }

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { parseFusionPricingConfig, runFusionChatRequest } from "../supabase/functions/hey/fusionProvider.js";
 
@@ -22,12 +23,19 @@ const messages = [
   { role: "user", content: "What is the fixture answer?" },
 ];
 
-function providerPayload(providerId, value, confidence = 0.9) {
+function providerPayload(providerId, value, confidence = 0.9, verificationConfirmed = true) {
   const text = `The answer is ${value}.`;
+  const evidence = [{ claimId: "answer", statement: "Exact response text returned by this provider.", value: text, source: "fixture://evidence" }];
+  if (verificationConfirmed !== null) evidence.push({
+    claimId: "verification",
+    statement: "The candidate was independently reviewed.",
+    value: verificationConfirmed,
+    source: "fixture://review",
+  });
   const answer = JSON.stringify({
     text,
     confidence,
-    evidence: [{ claimId: "answer", statement: "Exact response text returned by this provider.", value: text, source: "fixture://evidence" }],
+    evidence,
   });
   return providerId === "gemini"
     ? { candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }
@@ -42,8 +50,11 @@ function mockProviderFetch(answerFor) {
       : url.includes("openrouter.ai") ? "openrouter"
       : url.includes("api.groq.com") ? "groq"
       : "unknown";
+    const [value, confidence] = answerFor(providerId);
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    const candidateValue = isChecker ? answerFor(calls[0]?.providerId || providerId)[0] : value;
     calls.push({ url, init, providerId });
-    return new Response(JSON.stringify(providerPayload(providerId, ...answerFor(providerId))), { status: 200 });
+    return new Response(JSON.stringify(providerPayload(providerId, value, confidence, isChecker ? value === candidateValue : null)), { status: 200 });
   };
   return { calls, fetchImpl };
 }
@@ -83,6 +94,86 @@ test("fusion permission and exact provider entitlements are required before HTTP
   });
 });
 
+test("Gemini dispatch keeps the API key in a header and out of the request URL", async () => {
+  const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+  const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.equal(result.status, "complete");
+  const gemini = calls.find((call) => call.providerId === "gemini");
+  assert.ok(gemini, "independent checker should use the configured Gemini provider");
+  assert.equal(new URL(gemini.url).searchParams.has("key"), false);
+  assert.equal(gemini.init.headers["x-goog-api-key"], "fake-gemini-key");
+  assert.equal(gemini.init.redirect, "error");
+});
+
+test("Gemini redirects are rejected before credentials can reach a second host", async () => {
+  const secretKey = "fixture-gemini-key-never-forward";
+  const attackerRequests = [];
+  let attackerPort;
+  const providerRequests = [];
+  const providerServer = createServer(async (request, response) => {
+    providerRequests.push({ url: request.url, key: request.headers["x-goog-api-key"] });
+    response.writeHead(302, { Location: `http://127.0.0.1:${attackerPort}/stolen` });
+    response.end("private provider redirect response");
+  });
+  const attackerServer = createServer((request, response) => {
+    attackerRequests.push({ url: request.url, key: request.headers["x-goog-api-key"] });
+    response.end("unexpected");
+  });
+  const listen = (server) => new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve(server.address().port);
+    });
+  });
+  const close = (server) => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  let providerPort;
+  try {
+    [providerPort, attackerPort] = await Promise.all([listen(providerServer), listen(attackerServer)]);
+    const fetchImpl = async (url, init) => {
+      if (String(url).includes("generativelanguage.googleapis.com")) {
+        assert.equal(init.redirect, "error");
+        assert.equal(new URL(url).searchParams.has("key"), false);
+        return fetch(`http://127.0.0.1:${providerPort}/redirect`, init);
+      }
+      return new Response(JSON.stringify(providerPayload("openai", "42", 0.9, null)), { status: 200 });
+    };
+    const result = await runFusionChatRequest({
+      requested: true,
+      accountId: "account-a",
+      entitlements,
+      attempts: attempts.map((attempt) => attempt.id === "gemini" ? { ...attempt, key: secretKey } : attempt),
+      pricingConfig: pricing,
+      messages,
+      fetchImpl,
+    });
+    assert.notEqual(result.status, "complete");
+    assert.equal("answer" in result, false);
+    assert.deepEqual(providerRequests, [{ url: "/redirect", key: secretKey }]);
+    assert.deepEqual(attackerRequests, []);
+    assert.equal(JSON.stringify(result).includes(secretKey), false);
+    assert.equal(JSON.stringify(result).includes("private provider redirect response"), false);
+  } finally {
+    await Promise.all([close(providerServer), close(attackerServer)]);
+  }
+});
+
+test("malformed request identities cannot start a provider call", async () => {
+  let calls = 0;
+  const result = await runFusionChatRequest({
+    requested: true,
+    requestId: "request-from-another-turn",
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async () => { calls += 1; throw new Error("must not dispatch"); },
+  });
+  assert.deepEqual(result, { status: "invalid_request", reason: "fusion_request_id_invalid" });
+  assert.equal(calls, 0);
+});
+
 test("fusion fails closed when trusted per-model pricing or the second independent provider is missing", async (t) => {
   let calls = 0;
   await t.test("missing pricing", async () => {
@@ -100,24 +191,69 @@ test("fusion fails closed when trusted per-model pricing or the second independe
 
 test("Fusion dispatches two mocked provider HTTP requests and returns only a checked matching answer", async () => {
   const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
-  const result = await runFusionChatRequest({ requested: true, accountId: "auth-user-123", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  const requestText = "What is the fixture answer?";
+  const result = await runFusionChatRequest({ requested: true, requestText, accountId: "auth-user-123", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
   assert.equal(result.status, "complete");
   assert.equal(result.independentlyChecked, true);
   assert.equal(result.answer, "The answer is 42.");
-  assert.equal(result.evidence.length, 2);
+  assert.equal(result.evidence.length, 3);
+  assert.equal(result.provenance.status, "verified");
+  assert.match(result.provenance.requestId, /^[0-9a-f-]{36}$/i);
+  assert.match(result.provenance.requestSha256, /^[0-9a-f]{64}$/i);
+  const expectedRequestDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(requestText)));
+  assert.equal(result.provenance.requestSha256, Array.from(expectedRequestDigest, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+  assert.match(result.provenance.answerSha256, /^[0-9a-f]{64}$/i);
+  assert.equal(result.provenance.primary.role, "primary");
+  assert.equal(result.provenance.primary.providerId, calls[0].providerId);
+  assert.equal(result.provenance.checker.role, "checker");
+  assert.equal(result.provenance.checker.providerId, calls[1].providerId);
+  assert.equal(result.provenance.checker.verificationClaimId, "verification");
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map((call) => call.providerId).sort(), ["gemini", "openai"]);
   assert.equal(calls.every(({ init }) => init.method === "POST" && init.signal instanceof AbortSignal), true);
-  assert.equal(calls.every(({ init }) => init.body.includes("Return only JSON")), true);
+  assert.equal(calls[0].init.body.includes("Return only JSON"), true);
+  assert.equal(calls[1].init.body.includes("Independently verify its answer"), true);
+  assert.equal(calls[1].init.body.includes("The answer is 42."), true);
+  assert.equal(JSON.parse(calls[1].init.body).messages.at(-1).role, "user");
+  assert.equal(calls[1].init.body.includes('"claimId":"verification"'), false, "the candidate evidence itself remains untrusted input");
   assert.equal(result.accountScope, undefined);
+});
+
+test("oversized provider response streams are cancelled before the body is fully buffered", async () => {
+  let cancelled = 0;
+  let calls = 0;
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1_000_001));
+        },
+        cancel() {
+          cancelled += 1;
+        },
+      }));
+    },
+  });
+  assert.equal(cancelled, 2);
+  assert.equal(calls, 2);
+  assert.notEqual(result.status, "complete");
+  assert.equal("answer" in result, false);
 });
 
 test("fusion disagreement returns no answer and stale account scope cancels before any provider HTTP call", async (t) => {
   await t.test("providers disagree", async () => {
     const { calls, fetchImpl } = mockProviderFetch((providerId) => [providerId === "openai" ? "42" : "43", 0.9]);
     const result = await runFusionChatRequest({ requested: true, accountId: "auth-user-123", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
-    assert.equal(result.status, "conflict");
-    assert.equal(result.answer, null);
+    assert.equal(result.status, "provider_contract_invalid");
+    assert.equal(result.reason, "checker_verification_not_confirmed");
+    assert.equal("answer" in result, false);
     assert.equal(calls.length, 2);
   });
   await t.test("account scope no longer current", async () => {
@@ -140,6 +276,7 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
       calls.push(providerId);
       const evidence = [
         { claimId: "answer", statement: "Exact response text returned by this provider.", value: "The providers disagree.", source: null },
+        ...(calls.length > 1 ? [{ claimId: "verification", statement: "The answer is supported by the conversation.", value: true, source: null }] : []),
         ...makeEvidence(providerId),
       ];
       const answer = JSON.stringify({ text: "The providers disagree.", confidence: 0.9, evidence });
@@ -152,7 +289,7 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
   };
 
   await t.test("duplicate claim ids produce one independent conflict", async () => {
-    const { calls, result } = await runWithEvidence((providerId) => Array.from({ length: 31 }, () => ({
+    const { calls, result } = await runWithEvidence((providerId) => Array.from({ length: 30 }, () => ({
       claimId: "same-claim",
       statement: "The providers returned different values.",
       value: providerId === "openai" ? "alpha" : "beta",
@@ -166,7 +303,7 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
   });
 
   await t.test("more than the report cap is flagged and truncated", async () => {
-    const { result } = await runWithEvidence((providerId) => Array.from({ length: 31 }, (_, index) => ({
+    const { result } = await runWithEvidence((providerId) => Array.from({ length: 30 }, (_, index) => ({
       claimId: `claim-${index}`,
       statement: `Claim ${index} differs between providers.`,
       value: providerId === "openai" ? index : index + 100,
@@ -176,7 +313,7 @@ test("hostile provider evidence cannot multiply or exceed the bounded conflict s
     assert.equal(result.answer, null);
     assert.equal(result.conflicts.length, 16);
     assert.equal(result.conflictsTruncated, true);
-    assert.equal(result.evidence.length, 64);
+    assert.equal(result.evidence.length, 63);
   });
 });
 
@@ -191,7 +328,7 @@ test("Fusion withholds the candidate when verifier evidence does not bind to its
       statement: "Exact response text returned by this provider.",
       value: providerId === "gemini" ? "The answer is 43." : text,
       source: null,
-    }];
+    }, ...(providerId === "gemini" ? [{ claimId: "verification", statement: "The candidate was reviewed.", value: true, source: null }] : [])];
     const answer = JSON.stringify({ text, confidence: 0.9, evidence });
     return providerId === "gemini"
       ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }), { status: 200 })
@@ -204,14 +341,82 @@ test("Fusion withholds the candidate when verifier evidence does not bind to its
   assert.equal("answer" in result, false);
 });
 
+test("oversized candidate evidence cannot be sent to the checker or escape as an answer", async () => {
+  let calls = 0;
+  const primaryText = "The answer is 42.";
+  const primaryOutput = JSON.stringify({
+    text: primaryText,
+    confidence: 0.9,
+    evidence: [
+      { claimId: "answer", statement: "Exact response text returned by this provider.", value: primaryText, source: null },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        claimId: `claim-${index}`,
+        statement: "Evidence detail ".repeat(30),
+        value: index,
+        source: null,
+      })),
+    ],
+  });
+  const fetchImpl = async (url) => {
+    calls += 1;
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
+    const data = providerId === "gemini"
+      ? { candidates: [{ content: { parts: [{ text: primaryOutput }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }
+      : { choices: [{ message: { content: primaryOutput } }], usage: { prompt_tokens: 50, completion_tokens: 20 } };
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+  const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.equal(result.status, "verification_unavailable");
+  assert.equal(result.reason, "independent_provider_failed");
+  assert.equal(calls, 1);
+  assert.equal("answer" in result, false);
+});
+
+test("primary cannot forge checker provenance with its own verification claim", async () => {
+  let calls = 0;
+  const fetchImpl = async (url) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini" : "openai";
+    const text = "The answer is 42.";
+    const answer = JSON.stringify({
+      text,
+      confidence: 0.9,
+      evidence: [
+        { claimId: "answer", statement: "Exact response text returned by this provider.", value: text, source: null },
+        { claimId: "verification", statement: "This provider claims it checked the candidate.", value: true, source: null },
+      ],
+    });
+    calls += 1;
+    const data = providerId === "gemini"
+      ? { candidates: [{ content: { parts: [{ text: answer }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 } }
+      : { choices: [{ message: { content: answer } }], usage: { prompt_tokens: 50, completion_tokens: 20 } };
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+  const result = await runFusionChatRequest({ requested: true, accountId: "account-a", entitlements, attempts, pricingConfig: pricing, messages, fetchImpl });
+  assert.equal(result.status, "inconclusive");
+  assert.equal(result.reason, "independent_evidence_did_not_confirm_answer");
+  assert.equal(calls, 2);
+  assert.equal("answer" in result, false);
+  assert.equal("provenance" in result, false);
+});
+
 test("Edge chat explains verification, time, cost, and provider-contract failures without leaking details", async () => {
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
+  assert.match(route, /models\/\$\{provider\.model\}:generateContent/);
+  assert.match(route, /models\/\$\{encodeURIComponent\(attempt\.model\)\}:generateContent/);
+  assert.match(route, /"x-goog-api-key": provider\.key/);
+  assert.match(route, /"x-goog-api-key": attempt\.key/);
+  assert.equal([...route.matchAll(/"x-goog-api-key": (?:provider|attempt)\.key[\s\S]{0,80}?redirect: "error"/g)].length, 2);
+  assert.doesNotMatch(route, /generateContent\?key=\$\{(?:provider|attempt)\.key\}/);
   assert.match(route, /\["conflict", "inconclusive", "verification_unavailable", "time_budget_exhausted", "budget_exhausted", "provider_contract_invalid"\]\.includes\(fusion\.status\)/);
   assert.match(route, /fusion\.status === "verification_unavailable"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "time_budget_exhausted"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "budget_exhausted"[\s\S]*?no answer was delivered/i);
   assert.match(route, /fusion\.status === "provider_contract_invalid"[\s\S]*?no answer was delivered/i);
   assert.match(route, /latestProfileQuery\.abortSignal\(signal\)/);
+  assert.match(route, /requestId: payload\.requestId/);
+  assert.match(route, /requestText: message/);
+  assert.match(route, /fusion\.provenance\?\.status !== "verified"[\s\S]*?No answer was delivered/i);
+  assert.match(route, /provenance: fusion\.provenance/);
 });
 
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {

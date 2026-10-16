@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { spaceDetailsMatchAccount, spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
+import { spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
 
 const page = await readFile(new URL("../src/SpacesPage.jsx", import.meta.url), "utf8");
 const accountHelpers = await readFile(new URL("../src/spacePageAccount.js", import.meta.url), "utf8");
@@ -20,7 +20,7 @@ test("Spaces page exposes accessible loading, empty, error, and retry states", (
 });
 
 test("Space creation reviews exact private effects and requires an explicit confirm action", () => {
-  assert.match(page, /HEY\.spaces\.previewNaturalLanguageCreation\(\{ prompt, templateId \}\)/);
+  assert.match(page, /HEY\.spaces\.previewNaturalLanguageCreation\(\{ prompt \}\)/);
   assert.match(page, /HEY\.spaces\.confirmNaturalLanguageCreation\(\{ previewId: pending\.previewId, confirm: true \}\)/);
   assert.match(page, /result\.action !== "create_private_space"/);
   assert.match(page, /result\.space\?\.visibility !== "private"/);
@@ -84,34 +84,4 @@ test("Space tool membership is account fenced, revision checked, and separate fr
   assert.match(page, /category = tool\.category \|\| "general"/);
   assert.match(page, /aria-expanded=\{expanded\}/);
   assert.match(page, /Registered tools could not be loaded\./);
-});
-
-test("Space details can be edited only in the active signed-in account and recover from stale writes", () => {
-  const snapshot = {
-    success: true,
-    accountScope: "account:account-a",
-    spaceId: "space-a",
-    detailsRevision: 2,
-    name: "Planning",
-    description: "Project notes",
-  };
-  assert.equal(spaceDetailsMatchAccount(snapshot, "account-a", "account:account-a", "space-a"), true);
-  assert.equal(spaceDetailsMatchAccount(snapshot, "account-b", "account:account-b", "space-a"), false);
-  assert.equal(spaceDetailsMatchAccount(snapshot, "account-a", "account:account-b", "space-a"), false);
-  assert.equal(spaceDetailsMatchAccount({ ...snapshot, detailsRevision: -1 }, "account-a", "account:account-a", "space-a"), false);
-
-  assert.match(page, /HEY\.spaces\.updateDetails\(\{/);
-  assert.match(page, /expectedRevision: space\.detailsRevision/);
-  assert.match(page, /Space name/);
-  assert.match(page, /Description/);
-  assert.match(page, /Save details/);
-  assert.match(page, /stale_revision/);
-  assert.match(page, /review them and save again/);
-  assert.match(page, /id="space-template"/);
-  assert.match(page, /Planning template/);
-  assert.match(page, /Research template/);
-  assert.match(page, /Starting point/);
-  assert.match(page, /const currentSpaces = loadedAccountId === accountId && accountIsCurrent \? spaces : \[\]/);
-  assert.match(page, /Sign in to create and view your private Spaces/);
-  assert.match(page, /Your account changed\. Space tools are hidden/);
 });

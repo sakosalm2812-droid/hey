@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { press, springs } from "./lib/heyMotion";
 
 import { useAuth } from "./AuthContext";
+import { getSafePostLoginPath } from "./lib/authRedirect.js";
 
 import styles from "./pages/Auth.module.css";
 
@@ -51,7 +52,7 @@ setLoading(false);
 
 else{
 const requestedPath = new URLSearchParams(location.search).get("next");
-const destination = requestedPath?.startsWith("/") ? requestedPath : "/chat";
+const destination = getSafePostLoginPath(requestedPath, window.location.origin);
 navigate(destination);
 
 }

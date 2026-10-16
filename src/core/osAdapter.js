@@ -99,11 +99,16 @@ export function createBrowserOSAdapter() {
     },
 
     async openUrl({ url }) {
+      let parsed;
       try {
-        const parsed = new URL(url);
-        if (!["http:", "https:"].includes(parsed.protocol)) {
-          return { success: false, error: "Only HTTP and HTTPS URLs can be opened from the browser.", verified: false };
-        }
+        parsed = new URL(url);
+      } catch {
+        return { success: false, error: "Invalid URL.", verified: false };
+      }
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        return { success: false, error: "Only HTTP and HTTPS URLs can be opened from the browser.", verified: false };
+      }
+      try {
         const opened = window.open(parsed.href, "_blank", "noopener,noreferrer");
         return {
           success: Boolean(opened),
@@ -112,7 +117,7 @@ export function createBrowserOSAdapter() {
           error: opened ? null : "The browser blocked the new tab or window.",
         };
       } catch {
-        return { success: false, error: "Invalid URL.", verified: false };
+        return { success: false, url: parsed.href, error: "The browser could not open the requested URL.", verified: false };
       }
     },
 
