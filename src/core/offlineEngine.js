@@ -1,4 +1,5 @@
 import { getSetting, setSetting } from "./settingsRegistry.js";
+import { getAccountScope } from "./accountScope.js";
 
 const LOCAL_STATES = Object.freeze({
   READY: "ready_local",
@@ -27,6 +28,142 @@ const QUEUE_POLICIES = Object.freeze({
   USER_APPROVAL: "user_approval",
   ALWAYS: "always",
 });
+
+const MAX_SYNC_FIELDS = 128;
+const MAX_SYNC_FIELD_NAME_LENGTH = 128;
+const MAX_SYNC_STRING_LENGTH = 4096;
+const FORBIDDEN_SYNC_FIELDS = new Set(["__proto__", "prototype", "constructor"]);
+
+function isRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function copyFlatSyncDocument(value) {
+  if (!isRecord(value)) return null;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > MAX_SYNC_FIELDS || keys.some((key) => typeof key !== "string")) return null;
+
+  const copy = Object.create(null);
+  for (const key of keys) {
+    if (!key || key.length > MAX_SYNC_FIELD_NAME_LENGTH || FORBIDDEN_SYNC_FIELDS.has(key)) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+    const fieldValue = descriptor.value;
+    if (typeof fieldValue === "string" && fieldValue.length <= MAX_SYNC_STRING_LENGTH) {
+      copy[key] = fieldValue;
+    } else if (fieldValue === null || typeof fieldValue === "boolean"
+      || (typeof fieldValue === "number" && Number.isFinite(fieldValue))) {
+      copy[key] = fieldValue;
+    } else {
+      return null;
+    }
+  }
+  return copy;
+}
+
+function sameSyncValue(left, right, key) {
+  return Object.hasOwn(left, key) === Object.hasOwn(right, key)
+    && (!Object.hasOwn(left, key) || Object.is(left[key], right[key]));
+}
+
+function copySyncRevision(revision) {
+  if (!isRecord(revision)) return null;
+  const allowedKeys = new Set(["baseVersion", "version", "sequence", "value"]);
+  if (Reflect.ownKeys(revision).some((key) => typeof key !== "string" || !allowedKeys.has(key))) return null;
+  for (const key of allowedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(revision, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+  }
+  const { baseVersion, version, sequence } = revision;
+  if (![baseVersion, version, sequence].every((value) => Number.isSafeInteger(value) && value >= 0)) return null;
+  const value = copyFlatSyncDocument(revision.value);
+  if (!value) return null;
+  return { baseVersion, version, sequence, value };
+}
+
+/**
+ * Resolves concurrent edits to a flat scalar record using a three-way merge.
+ * All three revisions must descend from the same base and belong to the
+ * currently active account. Conflicting fields are returned by name only.
+ */
+export function resolveOfflineSyncConflict(input) {
+  try {
+    if (!isRecord(input) || Reflect.ownKeys(input).some((key) => !["accountScope", "base", "local", "remote"].includes(key))) {
+      return { ok: false, code: "invalid_input" };
+    }
+    const accountScopeDescriptor = Object.getOwnPropertyDescriptor(input, "accountScope");
+    if (!accountScopeDescriptor || !Object.hasOwn(accountScopeDescriptor, "value")
+      || typeof accountScopeDescriptor.value !== "string") {
+      return { ok: false, code: "invalid_input" };
+    }
+    if (accountScopeDescriptor.value !== getAccountScope()) return { ok: false, code: "account_scope_mismatch" };
+
+    const baseDescriptor = Object.getOwnPropertyDescriptor(input, "base");
+    const localDescriptor = Object.getOwnPropertyDescriptor(input, "local");
+    const remoteDescriptor = Object.getOwnPropertyDescriptor(input, "remote");
+    if (![baseDescriptor, localDescriptor, remoteDescriptor].every((descriptor) => descriptor && Object.hasOwn(descriptor, "value"))) {
+      return { ok: false, code: "invalid_input" };
+    }
+    const local = copySyncRevision(localDescriptor.value);
+    const remote = copySyncRevision(remoteDescriptor.value);
+    const baseRevision = baseDescriptor.value;
+    if (!isRecord(baseRevision)
+      || Reflect.ownKeys(baseRevision).some((key) => !["version", "sequence", "value"].includes(key))) {
+      return { ok: false, code: "invalid_input" };
+    }
+    const baseVersionDescriptor = Object.getOwnPropertyDescriptor(baseRevision, "version");
+    const baseSequenceDescriptor = Object.getOwnPropertyDescriptor(baseRevision, "sequence");
+    const baseValueDescriptor = Object.getOwnPropertyDescriptor(baseRevision, "value");
+    if (![baseVersionDescriptor, baseSequenceDescriptor, baseValueDescriptor].every((descriptor) => descriptor && Object.hasOwn(descriptor, "value"))) {
+      return { ok: false, code: "invalid_input" };
+    }
+    const baseVersion = baseVersionDescriptor.value;
+    const baseSequence = baseSequenceDescriptor.value;
+    const base = copyFlatSyncDocument(baseValueDescriptor.value);
+    if (!Number.isSafeInteger(baseVersion) || baseVersion < 0 || !Number.isSafeInteger(baseSequence) || baseSequence < 0
+      || !base || !local || !remote) {
+      return { ok: false, code: "invalid_input" };
+    }
+    if (local.baseVersion !== baseVersion || remote.baseVersion !== baseVersion
+      || local.version <= baseVersion || remote.version <= baseVersion
+      || Math.max(local.version, remote.version) === Number.MAX_SAFE_INTEGER) {
+      return { ok: false, code: "version_mismatch" };
+    }
+    if (local.sequence <= baseSequence || remote.sequence <= baseSequence
+      || Math.max(local.sequence, remote.sequence) === Number.MAX_SAFE_INTEGER) {
+      return { ok: false, code: "sequence_mismatch" };
+    }
+
+    const merged = Object.create(null);
+    const conflicts = [];
+    const fields = new Set([...Object.keys(base), ...Object.keys(local.value), ...Object.keys(remote.value)]);
+    for (const key of [...fields].sort()) {
+      const localChanged = !sameSyncValue(base, local.value, key);
+      const remoteChanged = !sameSyncValue(base, remote.value, key);
+      if (localChanged && remoteChanged && !sameSyncValue(local.value, remote.value, key)) {
+        conflicts.push(key);
+      } else {
+        const source = localChanged ? local.value : remote.value;
+        if (Object.hasOwn(source, key)) merged[key] = source[key];
+      }
+    }
+    if (conflicts.length) return { ok: false, code: "field_conflict", conflictFields: conflicts };
+
+    return {
+      ok: true,
+      accountScope: accountScopeDescriptor.value,
+      version: Math.max(local.version, remote.version) + 1,
+      sequence: Math.max(local.sequence, remote.sequence) + 1,
+      parentVersion: Math.max(local.version, remote.version),
+      value: Object.fromEntries(Object.keys(merged).sort().map((key) => [key, merged[key]])),
+    };
+  } catch {
+    // Malformed or hostile in-memory values must not prevent later sync work.
+    return { ok: false, code: "invalid_input" };
+  }
+}
 
 function generateModelPackId() {
   return `model_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -257,6 +394,10 @@ class OfflineEngine {
     return this.localRuntime.outbox;
   }
 
+  resolveSyncConflict(input) {
+    return resolveOfflineSyncConflict(input);
+  }
+
   addToOutbox(input) {
     const outboxId = generateOutboxId();
     const item = {
@@ -416,6 +557,10 @@ export function addToOutbox(input) {
 
 export function processOutbox() {
   return offlineEngine.processOutbox();
+}
+
+export function resolveSyncConflict(input) {
+  return offlineEngine.resolveSyncConflict(input);
 }
 
 export function enableLANCompute(enabled) {
