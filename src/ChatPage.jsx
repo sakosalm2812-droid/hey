@@ -27,6 +27,7 @@ import { addMemory } from "./lib/heyMemory.js";
 import { useLocale } from "./i18n/LocaleContext.jsx";
 import ChatInput from "./components/chat/ChatInput";
 import ChatMessage from "./components/chat/ChatMessage";
+import FirstRunPurposeSetup from "./components/chat/FirstRunPurposeSetup.jsx";
 import { subscribe } from "./core/eventBus.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { cancelVoiceCommandPreview, reviewVoiceCommandPreview, understandVoiceCommand } from "./core/voiceCommandUnderstanding.js";
@@ -840,6 +841,7 @@ function ChatWorkspace() {
               {chatError && <div className="hey-chat-error" role="alert">{chatError}</div>}
 
               <div className="hey-chat-messages">
+                <FirstRunPurposeSetup />
                 {messages.map((item, index) => (
                   <ChatMessage
                     key={`${item.role}-${item.text}-${index}`}

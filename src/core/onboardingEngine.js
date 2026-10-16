@@ -106,7 +106,19 @@ export const ONBOARDING_MOTIVATIONS = Object.freeze([
   Object.freeze({ id: "privacy", label: "Keep control of my information" }),
 ]);
 
+export const ONBOARDING_PURPOSES = Object.freeze([
+  Object.freeze({ id: "ai_assistant" }),
+  Object.freeze({ id: "ai_models" }),
+  Object.freeze({ id: "control_automation" }),
+  Object.freeze({ id: "create_build" }),
+  Object.freeze({ id: "teaching_learning" }),
+  Object.freeze({ id: "life_work" }),
+  Object.freeze({ id: "custom" }),
+]);
+
 const VALID_ONBOARDING_MOTIVATIONS = new Set(ONBOARDING_MOTIVATIONS.map(({ id }) => id));
+const VALID_ONBOARDING_PURPOSES = new Set(ONBOARDING_PURPOSES.map(({ id }) => id));
+const MAX_CUSTOM_PURPOSE_CHARS = 500;
 const STARTER_SUGGESTIONS = Object.freeze([
   Object.freeze({ id: "personal", label: "Personal" }),
   Object.freeze({ id: "work", label: "Work" }),
@@ -150,6 +162,27 @@ function normalizeMotivationSelections(value) {
   }
 }
 
+function normalizePurposeSelections(value) {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.getOwnPropertySymbols(value).length > 0) return null;
+    const length = descriptors.length?.value;
+    if (!Number.isInteger(length) || length < 0 || length > ONBOARDING_PURPOSES.length) return null;
+    if (Object.keys(descriptors).some((key) => key !== "length" && (!/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= length))) return null;
+    const result = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[index];
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+      if (typeof descriptor.value !== "string" || !VALID_ONBOARDING_PURPOSES.has(descriptor.value) || result.includes(descriptor.value)) return null;
+      result.push(descriptor.value);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
 function createInitialProgress() {
   return {
     currentStage: ONBOARDING_STAGES.WELCOME,
@@ -163,6 +196,9 @@ function createInitialProgress() {
     accessibility: {},
     starterSpaceSelections: [],
     motivationSelections: [],
+    purposeSelections: [],
+    customPurposeGoal: "",
+    purposeSetupComplete: false,
     dismissedSuggestions: new Set(),
   };
 }
@@ -176,6 +212,12 @@ function normalizeProgress(value) {
   const accessibility = value.accessibility && typeof value.accessibility === "object" && !Array.isArray(value.accessibility)
     ? Object.fromEntries(Object.entries(value.accessibility).filter(([, flag]) => typeof flag === "boolean"))
     : {};
+  const normalizedPurposeSelections = normalizePurposeSelections(value.purposeSelections);
+  const purposeSelections = normalizedPurposeSelections || [];
+  const customPurposeGoal = typeof value.customPurposeGoal === "string" && value.customPurposeGoal.trim().length <= MAX_CUSTOM_PURPOSE_CHARS
+    ? value.customPurposeGoal.trim()
+    : "";
+  const purposeSetupValid = purposeSelections.length > 0 && (!purposeSelections.includes("custom") || Boolean(customPurposeGoal)) && (purposeSelections.includes("custom") || !customPurposeGoal);
   return {
     ...base,
     currentStage: VALID_ONBOARDING_STAGES.has(value.currentStage) ? value.currentStage : base.currentStage,
@@ -192,6 +234,9 @@ function normalizeProgress(value) {
       ? [...new Set(value.starterSpaceSelections.filter((id) => typeof id === "string" && STARTER_SPACE_ID.test(id)))].slice(0, MAX_STARTER_SPACE_SELECTIONS)
       : [],
     motivationSelections: normalizeMotivationSelections(value.motivationSelections) || [],
+    purposeSelections: purposeSetupValid ? purposeSelections : [],
+    customPurposeGoal: purposeSetupValid ? customPurposeGoal : "",
+    purposeSetupComplete: value.purposeSetupComplete === true && (normalizedPurposeSelections?.length === 0 || purposeSetupValid),
     dismissedSuggestions: new Set(strings(value.dismissedSuggestions)),
   };
 }
@@ -276,7 +321,7 @@ export class OnboardingEngine {
   }
 
   getProgress() {
-    return { ...this.progress, completedStages: [...this.progress.completedStages], skippedStages: [...this.progress.skippedStages], accessibility: { ...this.progress.accessibility }, starterSpaceSelections: [...this.progress.starterSpaceSelections], motivationSelections: [...this.progress.motivationSelections], dismissedSuggestions: new Set(this.progress.dismissedSuggestions) };
+    return { ...this.progress, completedStages: [...this.progress.completedStages], skippedStages: [...this.progress.skippedStages], accessibility: { ...this.progress.accessibility }, starterSpaceSelections: [...this.progress.starterSpaceSelections], motivationSelections: [...this.progress.motivationSelections], purposeSelections: [...this.progress.purposeSelections], dismissedSuggestions: new Set(this.progress.dismissedSuggestions) };
   }
 
   getCurrentStage() {
@@ -421,6 +466,62 @@ export class OnboardingEngine {
     return [...this.progress.motivationSelections];
   }
 
+  getPurposeSetup() {
+    return {
+      complete: this.progress.purposeSetupComplete,
+      selections: [...this.progress.purposeSelections],
+      customGoal: this.progress.customPurposeGoal,
+    };
+  }
+
+  savePurposeSetup(purposeIds, customGoal = "") {
+    const selections = normalizePurposeSelections(purposeIds);
+    if (!selections || selections.length === 0) return { error: "Choose one or more valid, unique HEY purposes" };
+    if (typeof customGoal !== "string" || customGoal.length > MAX_CUSTOM_PURPOSE_CHARS || (selections.includes("custom") && !customGoal.trim()) || (!selections.includes("custom") && customGoal.trim())) {
+      return { error: "Add a custom goal up to 500 characters only when Custom is selected" };
+    }
+    const normalizedGoal = customGoal.trim();
+    const previous = this.getPurposeSetup();
+    const scope = this.accountScope;
+    this.progress.purposeSelections = selections;
+    this.progress.customPurposeGoal = normalizedGoal;
+    this.progress.purposeSetupComplete = true;
+    const result = this.save();
+    if (!result.success) {
+      if (scope === this.accountScope && scope === getAccountScope()) {
+        this.progress.purposeSelections = previous.selections;
+        this.progress.customPurposeGoal = previous.customGoal;
+        this.progress.purposeSetupComplete = previous.complete;
+      }
+      return { error: "Could not safely save HEY purposes", status: result.status };
+    }
+    const payload = { accountScope: scope, ...this.getPurposeSetup() };
+    this.notify("purposes_updated", payload);
+    publish("onboarding.purposes_updated", payload);
+    return this.getPurposeSetup();
+  }
+
+  skipPurposeSetup() {
+    const previous = this.getPurposeSetup();
+    const scope = this.accountScope;
+    this.progress.purposeSelections = [];
+    this.progress.customPurposeGoal = "";
+    this.progress.purposeSetupComplete = true;
+    const result = this.save();
+    if (!result.success) {
+      if (scope === this.accountScope && scope === getAccountScope()) {
+        this.progress.purposeSelections = previous.selections;
+        this.progress.customPurposeGoal = previous.customGoal;
+        this.progress.purposeSetupComplete = previous.complete;
+      }
+      return { error: "Could not safely save the onboarding choice", status: result.status };
+    }
+    const payload = { accountScope: scope, ...this.getPurposeSetup() };
+    this.notify("purposes_updated", payload);
+    publish("onboarding.purposes_updated", payload);
+    return this.getPurposeSetup();
+  }
+
   rankStarterSuggestions(motivationIds = this.progress.motivationSelections) {
     const normalized = normalizeMotivationSelections(motivationIds) || [];
     const scores = new Map(STARTER_SUGGESTIONS.map(({ id }) => [id, 0]));
@@ -462,20 +563,7 @@ export class OnboardingEngine {
   }
 
   reset() {
-    this.progress = {
-      currentStage: ONBOARDING_STAGES.WELCOME,
-      completedStages: [],
-      skippedStages: [],
-      startedAt: null,
-      completedAt: null,
-      practiceTaskId: null,
-      practiceTaskCompleted: false,
-      locale: "en",
-      accessibility: {},
-      starterSpaceSelections: [],
-      motivationSelections: [],
-      dismissedSuggestions: new Set(),
-    };
+    this.progress = createInitialProgress();
     this.save();
     this.notify("reset", this.progress);
     return this.progress;
@@ -654,6 +742,18 @@ export function setOnboardingMotivations(motivationIds) {
 
 export function getOnboardingMotivations() {
   return onboardingEngine.getMotivations();
+}
+
+export function getOnboardingPurposeSetup() {
+  return onboardingEngine.getPurposeSetup();
+}
+
+export function saveOnboardingPurposeSetup(purposeIds, customGoal) {
+  return onboardingEngine.savePurposeSetup(purposeIds, customGoal);
+}
+
+export function skipOnboardingPurposeSetup() {
+  return onboardingEngine.skipPurposeSetup();
 }
 
 export function rankOnboardingStarterSuggestions(motivationIds) {

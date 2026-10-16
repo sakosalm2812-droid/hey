@@ -102,7 +102,7 @@ import { createMission, getMission, getAllMissions, getActiveMissions, getMissio
 import { parseNaturalCommand } from "./commandParser.js";
 import { cancelVoiceCommandPreview, understandVoiceCommand, validateVoiceCommandPreview, reviewVoiceCommandPreview } from "./voiceCommandUnderstanding.js";
 import { createDictationEditSession } from "../lib/dictationEditProposals.js";
-import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, setOnboardingMotivations, getOnboardingMotivations, rankOnboardingStarterSuggestions, ONBOARDING_MOTIVATIONS, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
+import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, setOnboardingMotivations, getOnboardingMotivations, getOnboardingPurposeSetup, saveOnboardingPurposeSetup, skipOnboardingPurposeSetup, rankOnboardingStarterSuggestions, ONBOARDING_MOTIVATIONS, ONBOARDING_PURPOSES, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
 import { defaultTutorials } from "./tutorialCatalog.js";
 import { workspaceEngine, createWidget, getWidget, getAllWidgets, getWidgetsByFamily, getActiveWidgets, updateWidget, setWidgetState, moveWidget, resizeWidget, bringWidgetToFront, sendWidgetToBack, pinWidget, groupWidgets, ungroupWidgets, dockWidget, undockWidget, closeWidget, deleteWidget, handleSemanticDrop, saveLayout, loadLayout, getLayouts, deleteLayout, handleMonitorChange, subscribeToWorkspace, WIDGET_STATES, WIDGET_FAMILIES, DRAG_TYPES, SNAP_MODES } from "./workspaceEngine.js";
 import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, exportPrivateSpaces, previewPrivateSpaceImport, confirmPrivateSpaceImport, previewPrivateSpaceRecovery, confirmPrivateSpaceRecovery, updatePrivateSpaceDetails, previewPrivateSpaceArchive, confirmPrivateSpaceArchive, previewPrivateSpaceRestore, confirmPrivateSpaceRestore, getOnboardingSpaceSuggestions, previewPrivateSpaceDeletion, confirmPrivateSpaceDeletion, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_RECOVERY_CONTRACT_VERSION, SPACE_TRANSFER_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
@@ -813,6 +813,9 @@ import {
       getStarterSpaces: getOnboardingStarterSpaces,
       setMotivations: setOnboardingMotivations,
       getMotivations: getOnboardingMotivations,
+      getPurposeSetup: getOnboardingPurposeSetup,
+      savePurposeSetup: saveOnboardingPurposeSetup,
+      skipPurposeSetup: skipOnboardingPurposeSetup,
       rankStarterSuggestions: rankOnboardingStarterSuggestions,
       selectPracticeTask,
       completePracticeTask,
@@ -834,6 +837,7 @@ import {
       steps: ONBOARDING_STEPS,
       practiceTasks: PRACTICE_TASKS,
       motivations: ONBOARDING_MOTIVATIONS,
+      purposes: ONBOARDING_PURPOSES,
       defaultTutorials,
     },
 

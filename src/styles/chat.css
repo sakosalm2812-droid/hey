@@ -92,6 +92,27 @@
 
 .hey-chat-feed { flex: 1; overflow-y: auto; padding: 34px clamp(18px, 5vw, 76px) 24px; }
 .hey-chat-messages { width: min(100%, 790px); margin: 0 auto; }
+.hey-first-run-purposes { margin: 4px 0 24px; padding: 22px; border: 1px solid var(--border); border-radius: 20px; background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.025)); }
+.hey-first-run-purposes h2 { margin: 0; color: var(--text-primary); font-family: var(--font-heading); font-size: clamp(22px, 3vw, 29px); font-weight: 400; letter-spacing: -.04em; }
+.hey-first-run-purposes-intro { max-width: 650px; margin: 8px 0 17px; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+.hey-first-run-purposes fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.hey-first-run-purposes-legend { margin-bottom: 10px; color: var(--text-primary); font-size: 12px; font-weight: 700; }
+.hey-first-run-purposes-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.hey-first-run-purpose-option { display: flex; gap: 10px; min-height: 66px; padding: 12px; border: 1px solid var(--border); border-radius: 13px; color: var(--text-primary); background: rgba(0,0,0,.08); cursor: pointer; }
+.hey-first-run-purpose-option:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.hey-first-run-purpose-option input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
+.hey-first-run-purpose-option span { display: grid; gap: 4px; }
+.hey-first-run-purpose-option strong { font-size: 12px; }
+.hey-first-run-purpose-option small { color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.hey-first-run-purpose-option:focus-within, .hey-first-run-custom-goal textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hey-first-run-custom-goal { display: grid; gap: 7px; margin-top: 14px; color: var(--text-primary); font-size: 12px; font-weight: 700; }
+.hey-first-run-custom-goal textarea { width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 12px; color: var(--text-primary); background: rgba(0,0,0,.12); font: inherit; font-weight: 400; resize: vertical; }
+.hey-first-run-purposes-error { color: var(--coral); font-size: 12px; }
+.hey-first-run-purposes-actions { display: flex; gap: 10px; margin-top: 15px; }
+.hey-first-run-purposes-actions button { min-height: 40px; padding: 0 15px; border: 1px solid transparent; border-radius: 11px; color: var(--on-accent); background: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; }
+.hey-first-run-purposes-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.hey-first-run-purposes-actions .hey-first-run-skip { border-color: var(--border); color: var(--text-primary); background: transparent; }
+@media (max-width: 620px) { .hey-first-run-purposes { padding: 16px; } .hey-first-run-purposes-grid { grid-template-columns: 1fr; } }
 .hey-chat-message { display: flex; gap: 13px; margin-bottom: 30px; }
 .hey-chat-message.user { flex-direction: row-reverse; }
 .hey-chat-message-avatar { display: grid; flex: 0 0 31px; place-items: center; width: 31px; height: 31px; border-radius: 10px; color: var(--accent-hover); background: var(--accent-glow-soft); font-size: 9px; font-weight: 700; }
