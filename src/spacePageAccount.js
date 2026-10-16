@@ -19,3 +19,19 @@ export function spaceMembershipMatchesAccount(snapshot, accountId, activeScope, 
     Array.isArray(snapshot.toolIds)
   );
 }
+
+export function spaceMembershipRetryMatches(retry, snapshot, accountId, activeScope, activeAccountId, spaceId) {
+  return Boolean(
+    retry &&
+    retry.accountId === accountId &&
+    retry.accountScope === `account:${accountId}` &&
+    retry.spaceId === spaceId &&
+    typeof retry.toolName === "string" &&
+    typeof retry.member === "boolean" &&
+    Number.isSafeInteger(retry.expectedRevision) &&
+    retry.expectedRevision >= 0 &&
+    retry.expectedRevision === snapshot?.revision &&
+    activeAccountId === accountId &&
+    spaceMembershipMatchesAccount(snapshot, accountId, activeScope, spaceId)
+  );
+}

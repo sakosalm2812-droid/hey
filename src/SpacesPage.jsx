@@ -3,7 +3,7 @@ import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw,
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
-import { spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
+import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import "./SpacesPage.css";
 
 function formatDate(value) {
@@ -21,6 +21,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
   const [membership, setMembership] = useState({ status: "idle", accountId: null, layout: null });
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [retryMembership, setRetryMembership] = useState(null);
   const requestRef = useRef(0);
 
   const activeScope = `account:${accountId}`;
@@ -47,6 +48,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
     setMembership({ status: "loading", accountId, layout: null });
     setError("");
     setNotice("");
+    setRetryMembership(null);
     if (!membershipAccountIsCurrent(accountRef, accountId, activeScope)) {
       setMembership({ status: "account_required", accountId: null, layout: null });
       setError("Your account changed. Reopen this Space to load its tools.");
@@ -89,17 +91,33 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
       if (!spaceMembershipMatchesAccount(result, accountId, getAccountScope(), space.id)) {
         if (result?.code === "stale_revision" && spaceMembershipMatchesAccount(result.current, accountId, getAccountScope(), space.id)) {
           setMembership({ status: "ready", accountId, layout: result.current });
-          setError("This Space changed while you were editing. Its current membership is shown; try again.");
+          setRetryMembership({ accountId, accountScope: activeScope, spaceId: space.id, toolName, member, expectedRevision: result.current.revision });
+          setError("This Space changed while you were editing. Review its current tool selections before retrying your change.");
         } else {
+          setRetryMembership(null);
           setError(result?.error || "Membership could not be updated. Try again.");
         }
         return;
       }
+      setRetryMembership(null);
       setMembership({ status: "ready", accountId, layout: result });
       if (result.changed) setNotice(member ? "Tool added to this Space." : "Tool removed from this Space.");
     } catch {
-      if (membershipAccountIsCurrent(accountRef, accountId, activeScope)) setError("Membership could not be updated. Try again.");
+      if (membershipAccountIsCurrent(accountRef, accountId, activeScope)) {
+        setRetryMembership(null);
+        setError("Membership could not be updated. Try again.");
+      }
     }
+  }
+
+  function retryConflictedMembership() {
+    if (!spaceMembershipRetryMatches(retryMembership, currentLayout, accountId, getAccountScope(), accountRef.current, space.id)) {
+      setRetryMembership(null);
+      setError("This Space or account changed again. Reload its tools before retrying.");
+      loadMembership();
+      return;
+    }
+    toggleMembership(retryMembership.toolName, retryMembership.member);
   }
 
   const controlId = `space-tools-${encodeURIComponent(space.id)}`;
@@ -130,7 +148,8 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
             Tool membership organizes this Space. It does not grant permission or make a tool executable.
           </p>
           {membershipLoading && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading this Space&apos;s tools…</p>}
-          {membershipError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{error || "Tools in this Space could not be loaded."}</p><button type="button" className="spaces-page__secondary" onClick={loadMembership}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
+          {membershipError && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{error || "Tools in this Space could not be loaded."}</p><button type="button" className="spaces-page__secondary" onClick={loadMembership}><RotateCw size={14} aria-hidden="true" /> Reload tools</button></div>}
+          {error && retryMembership && currentLayout && <div className="spaces-page__message spaces-page__message--error" role="alert"><p>Your latest selections are shown above. Retry the same change on revision {currentLayout.revision}?</p><button type="button" className="spaces-page__secondary" onClick={retryConflictedMembership} disabled={getAccountScope() !== activeScope}><RotateCw size={14} aria-hidden="true" /> Retry my change</button></div>}
           {!membershipLoading && !membershipError && toolsStatus === "loading" && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading registered tools…</p>}
           {!membershipLoading && !membershipError && toolsStatus === "error" && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>Registered tools could not be loaded.</p><button type="button" className="spaces-page__secondary" onClick={retryTools}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
           {!membershipLoading && !membershipError && toolsStatus === "ready" && tools.length === 0 && <p className="spaces-page__empty-membership" role="status">No registered tools are available to add yet.</p>}
@@ -162,7 +181,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
               </div>
             </>
           )}
-          {error && !membershipError && <p className="spaces-page__membership-error" role="alert">{error}</p>}
+          {error && !retryMembership && !membershipError && <p className="spaces-page__membership-error" role="alert">{error}</p>}
           {notice && <p className="spaces-page__notice" role="status"><Check size={15} aria-hidden="true" /> {notice}</p>}
         </section>
       )}

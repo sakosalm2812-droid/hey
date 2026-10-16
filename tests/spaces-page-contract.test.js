@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { spaceMembershipMatchesAccount, spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
+import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "../src/spacePageAccount.js";
 
 const page = await readFile(new URL("../src/SpacesPage.jsx", import.meta.url), "utf8");
 const accountHelpers = await readFile(new URL("../src/spacePageAccount.js", import.meta.url), "utf8");
@@ -84,6 +84,22 @@ test("Space tool membership is account fenced, revision checked, and separate fr
   assert.match(page, /category = tool\.category \|\| "general"/);
   assert.match(page, /aria-expanded=\{expanded\}/);
   assert.match(page, /Registered tools could not be loaded\./);
+});
+
+test("conflicted membership retry is available only for the latest Space revision in the active account", () => {
+  const latest = { success: true, accountScope: "account:account-a", spaceId: "space-a", revision: 4, toolIds: ["calendar"] };
+  const retry = { accountId: "account-a", accountScope: "account:account-a", spaceId: "space-a", toolName: "notes", member: true, expectedRevision: 4 };
+  assert.equal(spaceMembershipRetryMatches(retry, latest, "account-a", "account:account-a", "account-a", "space-a"), true);
+  assert.equal(spaceMembershipRetryMatches(retry, { ...latest, revision: 5 }, "account-a", "account:account-a", "account-a", "space-a"), false);
+  assert.equal(spaceMembershipRetryMatches(retry, latest, "account-b", "account:account-b", "account-b", "space-a"), false);
+  assert.equal(spaceMembershipRetryMatches(retry, latest, "account-a", "account:account-b", "account-a", "space-a"), false);
+  assert.equal(spaceMembershipRetryMatches(retry, latest, "account-a", "account:account-a", "account-b", "space-a"), false);
+  assert.equal(spaceMembershipRetryMatches({ ...retry, spaceId: "space-b" }, latest, "account-a", "account:account-a", "account-a", "space-a"), false);
+  assert.equal(spaceMembershipRetryMatches({ ...retry, member: "true" }, latest, "account-a", "account:account-a", "account-a", "space-a"), false);
+  assert.equal(spaceMembershipRetryMatches({ ...retry, expectedRevision: -1 }, latest, "account-a", "account:account-a", "account-a", "space-a"), false);
+  assert.match(page, /Retry my change/);
+  assert.match(page, /spaceMembershipRetryMatches\(retryMembership, currentLayout, accountId, getAccountScope\(\), accountRef\.current, space\.id\)/);
+  assert.match(page, /expectedRevision: currentLayout\.revision/);
 });
 
 test("Space cards expose a review, explicit delete confirmation, and recoverable failure path", () => {
