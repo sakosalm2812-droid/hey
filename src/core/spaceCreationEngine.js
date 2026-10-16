@@ -3,6 +3,7 @@ import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { safeStorage } from "../lib/safeStorage.js";
 import { getTool } from "./toolRegistry.js";
+import { getOnboardingMotivations, rankOnboardingStarterSuggestions } from "./onboardingEngine.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
 export const SPACE_STORAGE_CONTRACT_VERSION = 2;
@@ -33,6 +34,11 @@ const SPACE_STARTERS = Object.freeze({
   planning: { label: "Planning template", description: "Goals, tasks, and next steps." },
   research: { label: "Research template", description: "Questions, sources, and findings." },
   custom: { label: "Custom Space", description: "" },
+});
+const ONBOARDING_SPACE_STARTERS = Object.freeze({
+  personal: Object.freeze({ name: "Personal", templateId: "empty" }),
+  work: Object.freeze({ name: "Work", templateId: "planning" }),
+  learning: Object.freeze({ name: "Learning", templateId: "research" }),
 });
 
 function containsControlChars(value) {
@@ -378,6 +384,31 @@ export class SpaceCreationEngine {
     return [...this.spaces.values()].map(cloneSpace);
   }
 
+  getOnboardingSuggestions() {
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() !== scope) return { error: "An active account is required for Space suggestions" };
+    return {
+      accountScope: scope,
+      motivationSelections: getOnboardingMotivations(),
+      suggestions: rankOnboardingStarterSuggestions().map(({ id, label, score }) => {
+        const starter = ONBOARDING_SPACE_STARTERS[id];
+        return {
+          id,
+          label,
+          score,
+          templateId: starter.templateId,
+          previewRequest: {
+            accountScope: scope,
+            prompt: `Create a private Space called ${starter.name}`,
+            templateId: starter.templateId,
+          },
+          permissionsChanged: false,
+          requiresConfirmation: true,
+        };
+      }),
+    };
+  }
+
   getLayoutPreferences(spaceId) {
     if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
     const refreshed = this.refreshFromStorage(this.accountScope);
@@ -569,10 +600,11 @@ export class SpaceCreationEngine {
   }
 
   previewNaturalLanguageRequest(request) {
-    const safeRequest = readDataRecord(request, ["prompt", "templateId"]);
+    const safeRequest = readDataRecord(request, ["accountScope", "prompt", "templateId"]);
     if (safeRequest.error) return safeRequest;
     if (this.accountScope === "anonymous") return { error: "An account scope is required to create a Space" };
     if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; retry the request" };
+    if (safeRequest.value.accountScope !== undefined && safeRequest.value.accountScope !== this.accountScope) return { error: "Account scope changed; refresh Space suggestions before continuing" };
     if (this.loadError) return { error: "Space storage could not be read; try again" };
     const templateId = safeRequest.value.templateId === undefined ? "empty" : safeRequest.value.templateId;
     if (typeof templateId !== "string" || !Object.hasOwn(SPACE_STARTERS, templateId)) return { error: "Choose a supported Space starting point" };
@@ -683,6 +715,10 @@ export function confirmNaturalLanguageSpaceCreation(request) {
 
 export function getPrivateSpaces() {
   return spaceCreationEngine.getSpaces();
+}
+
+export function getOnboardingSpaceSuggestions() {
+  return spaceCreationEngine.getOnboardingSuggestions();
 }
 
 export function getSpaceLayoutPreferences(spaceId) {
