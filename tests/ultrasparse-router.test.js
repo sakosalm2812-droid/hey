@@ -207,6 +207,23 @@ test("packed postings preserve parity at the maximum accepted expert index", () 
   assert.equal(selector.prepareIndexed(), false);
 });
 
+test("catalog term budget stops deep reads at the first over-budget expert", () => {
+  const terms = Array.from({ length: 31 }, (_, termIndex) => `term${termIndex}`);
+  let inspectedTermArrays = 0;
+  const catalog = Array.from({ length: 10_000 }, (_, expertIndex) => ({
+    id: `budget-${String(expertIndex).padStart(5, "0")}`,
+    terms: new Proxy(terms, {
+      ownKeys(target) {
+        inspectedTermArrays += 1;
+        return Reflect.ownKeys(target);
+      },
+    }),
+  }));
+
+  assert.throws(() => createUltraSparseSelector(catalog), /Invalid expert catalog/);
+  assert.equal(inspectedTermArrays, Math.floor(250_000 / 31) + 1);
+});
+
 test("catalog selector fails closed on hostile, duplicate, sparse, and oversized definitions", () => {
   assert.throws(() => createUltraSparseSelector(null), /Invalid expert catalog/);
   assert.throws(() => createUltraSparseSelector([new Array(1)]), /Invalid expert definition/);

@@ -102,10 +102,15 @@ function readCatalogExpert(value) {
  */
 export function createUltraSparseSelector(catalog) {
   const definitions = readCatalogArray(catalog, "expert catalog", MAX_CATALOG_EXPERTS);
-  const experts = definitions.map(readCatalogExpert);
+  let totalTerms = 0;
+  const experts = definitions.map((definition) => {
+    const expert = readCatalogExpert(definition);
+    totalTerms += expert.terms.length;
+    if (totalTerms > MAX_CATALOG_TERMS) throw new TypeError("Invalid expert catalog");
+    return expert;
+  });
   const ids = new Set(experts.map(({ id }) => id));
-  const totalTerms = experts.reduce((count, expert) => count + expert.terms.length, 0);
-  if (ids.size !== experts.length || totalTerms > MAX_CATALOG_TERMS) throw new TypeError("Invalid expert catalog");
+  if (ids.size !== experts.length) throw new TypeError("Invalid expert catalog");
 
   let tokenIndex = null;
   // The synchronous selector has no callbacks, so these scratch buffers cannot overlap calls.

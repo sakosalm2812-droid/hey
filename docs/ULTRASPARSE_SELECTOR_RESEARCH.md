@@ -122,3 +122,19 @@ To reduce preparation work, the inverted index now stores each posting as one bo
 Three full runs on the same fingerprint (`80a5cb5f9ce90c0b547220e0a3450abc8014ba2f7f8e0936b9fc509a1cdf024e`) each verified exact output for 60,000 calls per fixed selector and retained the warmed sub-millisecond result. At 2,000 experts, indexed preparation was 6,359.4 μs on the current baseline and 4,690.8/5,227.3 μs with compact postings (about 18–26% lower in these observations). The two compact-posting runs measured overall adaptive p95 at 212.1–243.1 μs and 208.3–247.7 μs across trials; duplicate-term indexed p95 was 402.3 and 383.3 μs. First-selection maxima still varied: 50,795.1 μs on baseline and 14,456.6/35,317.1 μs after compact postings. Those are maxima of single observations per case/trial, not cold p95. Preparation and first selection remain above 1 ms; only warmed in-process selection meets the measured target. Host CPU load remains unrecorded.
 
 The packed-posting guard also exercises the accepted catalog boundary: 10,000 experts, maximum expert index 9,999, and term index 30 on that final expert, with exact equality to the linear oracle and expected routing to `expert-09999`. The benchmark reports the highest synthetic posting value and confirms it fits uint32 for each catalog size. A full run at coordinator `ff04069` retained the workload hash above and exact parity for 60,000 calls per fixed selector. Its maximum synthetic packed posting was 63,975 at 2,000 experts. The target flag was false in that run because the 2,000-expert shared-term adaptive p95 reached 1,353.5 μs in one trial; other trials for that case were 790.7 and 656.7 μs. Preparation measured 47,785.5 μs and first-call maxima were 16,920.9–23,380.6 μs at 2,000 experts, showing substantial host variability. These setup and first-call figures are reported separately from warmed p95 and are not presented as stable latency estimates.
+
+## Catalog term-budget early stop
+
+Catalog creation now tracks the cumulative term count while validating and copying experts, and rejects immediately after the first expert that exceeds the 250,000-term budget. This avoids deep-reading and copying the rest of an oversized catalog before rejection. A deterministic test supplies 10,000 experts with 31 terms each through counted term-array proxies; creation rejects after inspecting 8,065 term arrays, rather than traversing all 10,000. The test also verifies the existing linear-oracle, packed-index-boundary, and selector-reuse cases still pass.
+
+The same fingerprint benchmark ran on the early-stop implementation and retained exact parity for 60,000 calls per fixed selector. Setup, first selection and warmed routing remain separate. One full run measured:
+
+| Experts | Catalog construction μs | Index preparation μs | Warm adaptive p95 by trial μs | Cold first-selection maximum by trial μs |
+|---:|---:|---:|---:|---:|
+| 5 | 1,403.4 | 249.7 | 116.7 / 108.6 / 124.8 | 113 / 73,026.6 / 121.9 |
+| 20 | 431.4 | 229.8 | 103.5 / 103.3 / 102.5 | 33,497.7 / 429.8 / 306.9 |
+| 100 | 32,392.9 | 8,184.5 | 108 / 103.1 / 104.3 | 6,911.5 / 421.5 / 3,795.4 |
+| 500 | 8,514 | 1,535.6 | 111.2 / 107.9 / 110.8 | 12,522.5 / 5,715.5 / 4,633 |
+| 2,000 | 115,948.9 | 4,729.6 | 225.7 / 215 / 236.9 | 17,584.3 / 17,855.5 / 16,308.3 |
+
+The benchmark marked warmed selection below 1 ms in that run. The large catalog-construction and cold-call outliers are unexplained because host load is not recorded. Cold maxima are individual observations across six cases per trial, not cold p95. No inference or end-to-end claim follows from these measurements.
