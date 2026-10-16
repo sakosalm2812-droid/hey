@@ -2,7 +2,7 @@
 
 Coordinator checkout: `C:\Users\DELL\Documents\Codex\2026-10-14\hey-emergency-continuation-resume-execution-the\work\hey`
 Coordinator branch: `codex/resume-emergency-2026-10-14`
-Integrated source HEAD: `a0df523` (`Add first-run purpose setup to chat`). Remote origin still points to `b98629689c547017f22a4de224bbd229fb6ae5a5`; the current integration batch is not pushed yet. The untracked `docs/requirements/v3-agent-pack/` extraction is intentionally preserved.
+Integrated source HEAD: `504fed3` (`Trace Fusion provider attempts in failure receipts`). The most recent pushed checkpoint is `b6fb3a2`; five specialist integrations after it are committed locally and await the next push. The untracked `docs/requirements/v3-agent-pack/` extraction is intentionally preserved.
 
 ### Implementations integrated since the prior checkpoint
 
@@ -23,25 +23,25 @@ Integrated source HEAD: `a0df523` (`Add first-run purpose setup to chat`). Remot
 | First-run purpose setup | `01a14073-33bf-7403-940b-871cd0de9ebc`, source `2d17a50` | `a0df523` | Signed-in Chat offers multi-select purposes, optional custom goals, and Skip; choices persist per account and do not grant permissions. Focused tests 12/12; live authenticated use remains unverified. |
 | Cancellable expired-preview refresh | Coordinator continuation | `d88258e` | Expired VoiceOS refresh has its own abort controller and visible cancel action; cancellation keeps the original request and drops late previews. English/Kurdish/Arabic copy and source-contract regression added; focused chat/VoiceOS suite 13/13. Live OS execution remains unverified. |
 
-Coordinator verification on integrated source through `a0df523`: full Node suite **828/828**, full `npm run lint`, production build (**2,779 modules**), SPA smoke for `/login`, `/download`, and `/assets/index-hsW1c2Bm.js`, plus `git diff --check`. Other worker evidence: #04 lease floor 26 focused + 818 full, #05 Gesture 56, #09 provider response 55, #10 UltraSparse 87, #11 Fusion 94; each reports lint/build except #09, whose checkout lacked dependencies (syntax checks passed). Build may skip sitemap without `SITE_URL` and emits the known mixed static/dynamic `contextManager.js` warning.
+Coordinator verification after integrating receipts through `504fed3`: full Node suite **832/832**, full `npm run lint`, production build (**2,779 modules**), SPA smoke for `/login`, `/download`, and `/assets/index-B_cLZUTw.js`, and `git diff --check`. Worker evidence: #04 lease floor 26 focused + 818 full, #05 Gesture 56, #09 provider response 55, #10 UltraSparse 87, #11 Fusion 94; each reports lint/build except #09, whose checkout lacked dependencies (syntax checks passed). Build may skip sitemap without `SITE_URL` and emits the known mixed static/dynamic `contextManager.js` warning.
 
 ### Existing worker tasks and current state
 
-All 11 specialist task references are preserved. Fresh concurrent continuations for all 11 requested GPT-6 Luna / High where available, isolated branches based on coordinator `a0df523`, distinct implementations, tests and commits. Latest task-list snapshot after dispatch: 8 active, 3 idle/completing prior turns; their follow-ups are delivered and task acceptance should be checked before assuming active work. Completed unmerged worker receipts: #04 `fc6d7a1`, #05 `753a830`, #09 `7089b39`, #10 `db22001`, #11 `c1b9971`. Refresh status and branch receipts before each integration.
+All 11 specialist task references are preserved. Fresh concurrent continuations for all 11 requested GPT-6 Luna / High where available, isolated branches based on coordinator `a0df523`, distinct implementations, tests and commits. Eight workers were active on the latest responsive task snapshot; three task states need refresh after dispatch. Integrated receipts: #04 `fc6d7a1` → `8703452`, #05 `753a830` → `38a5ce0`, #09 `7089b39` → `cf77c84`, #10 `db22001` → `b41e84d`, #11 `c1b9971` → `504fed3`. Preserve every source branch/worktree and refresh task states before the next integration.
 
 | Specialist | Codex task reference | Preserved branch/checkpoint | Latest coordinator integration / next state |
 |---|---|---|---|
 | Frontend Director | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/voice-edit-chat-ui-fbeedd6` / `cb0717e`; `codex/frontend-followup-6dd5c54` / `2d17a50` | Voice binding and first-run purpose setup integrated in `8939667`/`a0df523`; purpose-to-recommendation continuation dispatched. |
 | Onboarding & Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-recovery-durable-port` / `d13e734`; `codex/space-portable-transfer` / `f73c1e3`, UI `db7e0ce` | API/UI integrated in `6dd5c54`/`862f7e6`; recovery/conflict continuation dispatched. |
 | Universal Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-outcome-recovery-fbeedd6` / `4c93178`; discovery `1bde1c0`; readiness `b2c9b46` | Discovery, hardening, and readiness integrated through `3963990`; lifecycle continuation dispatched. |
-| Edge & Everywhere | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-everywhere-delivery-fbeedd6` / `20ee507`; claim `f0408ac`; lease floor `fc6d7a1` | Idempotent claim integrated; 1-second minimum lease floor is a completed, unmerged receipt. Migrations `00300`–`00500` await live DB validation. |
-| Gesture Control | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-recovery-ui-fbeedd6` / `ea35c61`; camera `44fd13f`; calibration `753a830` | Camera selector integrated; low-confidence calibration recovery is a completed, unmerged receipt; new calibration continuation dispatched. |
+| Edge & Everywhere | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-everywhere-delivery-fbeedd6` / `20ee507`; claim `f0408ac`; lease floor `fc6d7a1` | Idempotent claim and 1-second minimum lease floor integrated (`f2545cc`,`8703452`). Migrations `00300`–`00500` await live DB validation. |
+| Gesture Control | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-recovery-ui-fbeedd6` / `ea35c61`; camera `44fd13f`; calibration `753a830` | Camera selector and 70% confidence recovery integrated (`5274009`,`38a5ce0`); hardware remains unverified. |
 | Flow & Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-runtime-fbeedd6` / `f52d2a3`; `codex/flow-runtime-f52d2a3-next` / `1197c74` | Probe cleanup integrated; safe edit-by-voice preview-contract continuation dispatched. |
 | VoiceOS & Computer Control | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-preview-ui-current` / `7d75bd5`; recovery `8f86470` | Refresh cancellation integrated in `d88258e`; worker is adding typed/spoken cancellation and must be reviewed for overlap. |
 | Teacher Experience | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-artifact-lifecycle-fbeedd6` / `5bd4349`; question bank `4d895e0` | Question-bank UI integrated; standalone handout remains in progress after a recent recovery-test failure; accept only after final suite passes. |
-| HEY One Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-hey-one-models` / `d8a195f`; error-body cancellation `7089b39` | Provider error-body cancellation is a completed, unmerged receipt; evaluation-provenance continuation dispatched. |
-| UltraSparse Research | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-planner-parity` / `059aad7`; routing `2f79794`; top-k parity `db22001` | Abstention integrated; top-k tie preservation is a completed, unmerged receipt; benchmark continuation dispatched. |
-| Fusion Multi-Model | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-cancel-persist` / `8322771`; receipt `c1b9971`; spend `194c06f` | Spend-on-failure integrated; provider-attempt attribution is a completed, unmerged receipt; partial-provider behavior continuation dispatched. |
+| HEY One Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-hey-one-models` / `d8a195f`; error-body cancellation `7089b39` | Cancels non-success provider bodies without buffering diagnostics (`cf77c84`); no live inference claim. |
+| UltraSparse Research | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-planner-parity` / `059aad7`; routing `2f79794`; top-k parity `db22001` | Abstention and ties-hidden-by-top-k handling integrated (`e0fc59a`,`b41e84d`). No production inference claim. |
+| Fusion Multi-Model | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-cancel-persist` / `8322771`; receipt `c1b9971`; spend `194c06f` | Failure receipts expose bounded provider/model/role and usage states (`504fed3`); mocked tests only, no live billing claim. |
 
 ### Live application proof and exact blockers
 
@@ -52,9 +52,9 @@ All 11 specialist task references are preserved. Fresh concurrent continuations 
 
 ### Current state and exact next actions
 
-- Source is committed through `a0df523`; integrated full checks pass 828/828, lint, build, and route smoke. The intentionally preserved untracked item is `docs/requirements/v3-agent-pack/`.
+- Source is committed through `504fed3`; full suite 832/832, lint, build, and route smoke pass. The intentionally preserved untracked item is `docs/requirements/v3-agent-pack/`.
 - Update the current task-list snapshot after worker receipts, then repeat the relevant focused/full checks for each integration batch.
-- Review and integrate completed unmerged worker receipts `fc6d7a1`, `753a830`, `7089b39`, `db22001`, and `c1b9971` after diff review and full verification; retain every source branch/worktree.
+- Finish full lint, commit/push this checkpoint and handoff update, then review fresh worker receipts; retain every source branch/worktree and run full verification after each integration batch.
 - Update `docs/HEY_STEP_STATUS.md` only from code and current tests, and keep every step `In progress`/`Incomplete` until its specified capability chain and real-app evidence are demonstrated.
 - Commit the refreshed handoff and step evidence, push the coordinator branch checkpoint, then continue integrating the active workers.
 

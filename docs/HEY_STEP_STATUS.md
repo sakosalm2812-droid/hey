@@ -42,15 +42,19 @@ The active supplied program is `C:\Users\DELL\Downloads\HEY_WORK_MODE_MASTER_BUI
 
 ## Step status
 
-### Latest evidence delta — 2026-10-16, coordinator integrations through `a0df523`
+### Latest evidence delta — 2026-10-16, coordinator integrations through `504fed3`
 
-These additions update the detailed per-step records below; no workstream is promoted to `Implemented`. The integrated coordinator suite passes **828/828**, full ESLint passes, the production build succeeds with **2,779 modules**, and built-SPA smoke passes for `/login`, `/download`, and the entry asset. The local app still lacks Supabase URL/public key, so signed-in UI and live services are unverified.
+These additions update the detailed per-step records below; no workstream is promoted to `Implemented`. The integrated coordinator suite passes **832/832**, the production build succeeds with **2,779 modules**, and built-SPA smoke passes for `/login`, `/download`, and the entry asset; full lint is still running. The local app still lacks Supabase URL/public key, so signed-in UI and live services are unverified.
 
 - **Step 02 — Identity / Onboarding:** Signed-in Chat now presents first-run reasons to use HEY with multi-select purposes, optional custom goals, and Skip; values persist per account and read back before being reported saved (`a0df523`; focused onboarding tests 12/12). This does not grant permissions or prove authenticated browser use.
 - **Step 07 — Agent & Expert Fabric:** Tool Library's natural-language dictation entry now checks browser speech-recognition support and queries microphone permission state without opening capture (`3963990`; worker focused tests 25/25). API errors are shown as unknown; real hardware permission behavior and cross-app insertion remain unverified.
 - **Step 11 — Computer Use / OS Control:** Expired preview refresh can now be cancelled while checking; the original request remains recoverable and late preview tokens are cancelled (`d88258e`; chat/VoiceOS focused tests 13/13). This adds no execution authority or OS adapter.
+- **Step 06 — Model & Provider Fabric:** Non-success provider response bodies are cancelled without buffering diagnostics (`cf77c84`; worker provider-response suite 55/55). Fusion failure receipts now include bounded provider/model/role and reported/unknown usage attribution (`504fed3`; Fusion worker suite 94/94). These were mock-tested; no live inference or billing was verified.
+- **Step 10 — Device Mesh:** Device command claims now reject leases below one second at the client, transport, and service-only RPC (`8703452`, migration `20261016000500`; worker transport suite 26/26 and full suite 818/818). The SQL remains unexecuted against PostgreSQL/Supabase.
+- **Step 17 — Zero-UI / FlowOS:** Gesture sample capture now shares the engine's 70% detector-confidence threshold and explains recovery while below it (`38a5ce0`; worker Gesture suite 56/56). Synthetic detector results only; camera hardware behavior remains unverified.
+- **Step 21 — Evolution / Benchmarking:** UltraSparse continues checking ambiguity when the caller's top-k limit would hide a tied runner-up (`b41e84d`; worker suite 87/87). No measured sub-millisecond production claim.
 
-The fresh specialist continuations are concurrent. Completed but not yet integrated worker receipts are Edge lease floor `fc6d7a1`, Gesture calibration `753a830`, provider error-body cancellation `7089b39`, UltraSparse top-k ambiguity `db22001`, and Fusion provider-attempt receipts `c1b9971`; source branches and their verification claims are recorded in `HEY_EXECUTION_HANDOFF.md`. These do not promote a status until coordinator integration checks complete.
+The fresh specialist continuations are concurrent. The five current receipts are integrated in coordinator commits `8703452`, `38a5ce0`, `cf77c84`, `b41e84d`, and `504fed3`; the source branches and their verification claims are recorded in `HEY_EXECUTION_HANDOFF.md`. These do not promote a status until coordinator integration checks complete.
 
 ### Prior evidence delta — 2026-10-16, coordinator integrations through `6dd5c54`
 
