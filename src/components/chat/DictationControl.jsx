@@ -355,7 +355,16 @@ export default function DictationControl({ onInsert, onCapture, captureLabel, di
             <h3 id="hey-dictation-result-heading">{t("chat.dictation.transcriptHeading")}</h3>
             {isActive && <span className="hey-dictation__active-label"><i aria-hidden="true" /> {t("chat.dictation.listening")}</span>}
           </div>
-          <p className="hey-dictation__transcript" aria-live="polite">{transcript}</p>
+          {isActive
+            ? <p className="hey-dictation__transcript" aria-live="polite">{transcript}</p>
+            : <textarea
+              className="hey-dictation__transcript-editor"
+              aria-label={t("chat.dictation.reviewTranscript")}
+              value={transcript}
+              maxLength={8000}
+              rows={Math.min(8, Math.max(3, transcript.split("\n").length))}
+              onChange={(event) => setTranscript(event.target.value.slice(0, 8000))}
+            />}
           <div className="hey-dictation__actions">
             {isActive && (
                 <button type="button" className="hey-dictation__quiet" onClick={stopAndDiscard}>
