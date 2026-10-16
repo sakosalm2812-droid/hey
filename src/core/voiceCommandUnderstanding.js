@@ -78,8 +78,17 @@ function registerCommandPreview(result) {
   pendingCommandPreviews.set(previewId, {
     accountScope: result.accountScope,
     expiresAt,
+    contentBinding: canonicalPreviewJson(proposal),
   });
   return proposal;
+}
+
+function canonicalPreviewJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalPreviewJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalPreviewJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /** Cancel one exact, unexpired, account-scoped voice command preview once. */
@@ -93,6 +102,35 @@ export function cancelVoiceCommandPreview(previewId) {
   if (pending.accountScope !== getAccountScope()) return deepFreeze({ success: false, status: "stale_account_scope" });
   if (pending.expiresAt <= Date.now()) return deepFreeze({ success: false, status: "preview_expired" });
   return deepFreeze({ success: true, status: "cancelled", previewId });
+}
+
+/** Validate that a review copy still matches its exact registered proposal. */
+export function validateVoiceCommandPreview(preview) {
+  let snapshot;
+  try {
+    const fields = readDataObject(preview, "Voice command preview");
+    snapshot = safePreview(fields, { remaining: MAX_COMMAND_PREVIEW_NODES + 32 });
+  } catch {
+    return deepFreeze({ success: false, status: "invalid_preview" });
+  }
+  const previewId = snapshot.previewId;
+  if (typeof previewId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(previewId)) {
+    return deepFreeze({ success: false, status: "invalid_preview" });
+  }
+  const pending = pendingCommandPreviews.get(previewId);
+  if (!pending) return deepFreeze({ success: false, status: "preview_unavailable" });
+  if (pending.accountScope !== getAccountScope()) {
+    pendingCommandPreviews.delete(previewId);
+    return deepFreeze({ success: false, status: "stale_account_scope" });
+  }
+  if (pending.expiresAt <= Date.now()) {
+    pendingCommandPreviews.delete(previewId);
+    return deepFreeze({ success: false, status: "preview_expired" });
+  }
+  if (canonicalPreviewJson(snapshot) !== pending.contentBinding) {
+    return deepFreeze({ success: false, status: "preview_mismatch" });
+  }
+  return deepFreeze({ success: true, status: "current", previewId });
 }
 
 function deepFreeze(value) {
@@ -215,4 +253,4 @@ export async function understandVoiceCommand(input, options = {}) {
   return registerCommandPreview(classifySnapshot(snapshot, scopeAtStart));
 }
 
-export default { understandVoiceCommand, cancelVoiceCommandPreview };
+export default { understandVoiceCommand, cancelVoiceCommandPreview, validateVoiceCommandPreview };

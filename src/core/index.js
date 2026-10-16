@@ -98,7 +98,7 @@ import { createReleaseInventoryAttestationBody, evaluateReleaseGate } from "./re
 import { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS } from "./integrationMigrationPlanner.js";
 import { createMission, getMission, getAllMissions, getActiveMissions, getMissionsByState, getMissionsByProject, updateMission, setMissionState, startMission, pauseMission, resumeMission, cancelMission, retryMission, updateMissionStep, createMissionCheckpoint, restoreMissionCheckpoint, getMissionProgress, getMissionReplay, deleteMission, subscribeToMissions, MISSION_STATES, STEP_STATES } from "./missionCenter.js";
 import { parseNaturalCommand } from "./commandParser.js";
-import { cancelVoiceCommandPreview, understandVoiceCommand } from "./voiceCommandUnderstanding.js";
+import { cancelVoiceCommandPreview, understandVoiceCommand, validateVoiceCommandPreview } from "./voiceCommandUnderstanding.js";
 import { createDictationEditSession } from "../lib/dictationEditProposals.js";
 import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgress, completeOnboardingStage, skipOnboardingStage, setOnboardingLocale, setOnboardingAccessibility, setOnboardingStarterSpaces, getOnboardingStarterSpaces, setOnboardingMotivations, getOnboardingMotivations, rankOnboardingStarterSuggestions, ONBOARDING_MOTIVATIONS, selectPracticeTask, completePracticeTask, getPracticeTasks, getOnboardingSteps, dismissOnboardingSuggestion, isOnboardingSuggestionDismissed, resetOnboarding, subscribeToOnboarding, registerTutorial, getTutorial, getTutorialProgress, startTutorial, completeTutorialStep, skipTutorial, completeTutorial, resetTutorial, ONBOARDING_STAGES, ONBOARDING_STEPS, PRACTICE_TASKS } from "./onboardingEngine.js";
 import { defaultTutorials } from "./tutorialCatalog.js";
@@ -534,6 +534,7 @@ import {
       createState: createVoiceState,
       understandCommand: understandVoiceCommand,
       cancelCommandPreview: cancelVoiceCommandPreview,
+      validateCommandPreview: validateVoiceCommandPreview,
       createDictationEditSession,
     },
 
@@ -1052,6 +1053,6 @@ export const spaces = HEY.spaces;
 export { setOnboardingMotivations, getOnboardingMotivations, rankOnboardingStarterSuggestions, ONBOARDING_MOTIVATIONS };
 export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, updatePrivateSpaceDetails, getOnboardingSpaceSuggestions, previewPrivateSpaceDeletion, confirmPrivateSpaceDeletion, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
 export { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS };
-export { understandVoiceCommand, cancelVoiceCommandPreview, createDictationEditSession };
+export { understandVoiceCommand, cancelVoiceCommandPreview, validateVoiceCommandPreview, createDictationEditSession };
 
 export default HEY;
