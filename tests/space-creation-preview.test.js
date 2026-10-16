@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
-import { spaces as spacesApi } from "../src/core/index.js";
+import { HEY, spaces as spacesApi } from "../src/core/index.js";
 import { OnboardingEngine } from "../src/core/onboardingEngine.js";
 import { clearPermissions, listPermissions, seedPermissions } from "../src/core/permissionManager.js";
 import { SPACE_CREATION_LIMITS, SpaceCreationEngine } from "../src/core/spaceCreationEngine.js";
@@ -70,7 +70,74 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
   assert.equal(typeof spacesApi.setToolMembership, "function");
   assert.equal(typeof spacesApi.subscribe, "function");
+  assert.equal(typeof spacesApi.getOnboardingSuggestions, "function");
+  assert.equal(typeof spacesApi.previewDeletion, "function");
+  assert.equal(typeof spacesApi.confirmDeletion, "function");
 });
+
+test("onboarding motivations produce account-bound Space suggestions and stale choices are rejected", () => withStorage(() => {
+  const previousScope = "spaces-suggestion-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("spaces-suggestion-owner-a");
+    HEY.onboarding.setMotivations(["organize_work", "learn"]);
+    const suggestions = spacesApi.getOnboardingSuggestions();
+    assert.equal(suggestions.accountScope, "account:spaces-suggestion-owner-a");
+    assert.deepEqual(suggestions.motivationSelections, ["organize_work", "learn"]);
+    assert.deepEqual(suggestions.suggestions.map(({ id }) => id), ["work", "learning", "personal"]);
+    assert.deepEqual(spacesApi.getPrivateSpaces(), []);
+    const preview = spacesApi.previewNaturalLanguageCreation(suggestions.suggestions[1].previewRequest);
+    assert.equal(preview.space.name, "Learning");
+    assert.equal(spacesApi.getPrivateSpaces().length, 0);
+    setAccountScope("spaces-suggestion-owner-b");
+    assert.deepEqual(spacesApi.getOnboardingSuggestions().motivationSelections, []);
+    assert.match(spacesApi.previewNaturalLanguageCreation(suggestions.suggestions[1].previewRequest).error, /Account scope changed/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space deletion is reviewed, account scoped, stale safe, and durable across reload", () => withStorage((storage) => {
+  const previousScope = "spaces-delete-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("spaces-delete-owner-a");
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a private space called Keep until confirmed" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).space;
+    const request = { accountScope: created.accountScope, spaceId: created.id, expectedLayoutRevision: 0 };
+    const reviewed = engine.previewDeleteSpace(request);
+    assert.equal(reviewed.action, "delete_private_space");
+    assert.equal(reviewed.requiresConfirmation, true);
+    assert.equal(reviewed.permissionsChanged, false);
+    assert.deepEqual(engine.getSpaces().map(({ id }) => id), [created.id]);
+    assert.match(engine.confirmDeleteSpace({ previewId: reviewed.previewId, confirm: false }).error, /Explicit confirmation/);
+
+    const staleReview = engine.previewDeleteSpace(request);
+    engine.updateLayoutPreferences({ accountScope: request.accountScope, spaceId: request.spaceId, expectedRevision: 0, preferences: { widgetIds: ["notes"] } });
+    const stale = engine.confirmDeleteSpace({ previewId: staleReview.previewId, confirm: true });
+    assert.equal(stale.code, "stale_revision");
+    assert.equal(engine.getSpaces().length, 1);
+
+    const latest = engine.getSpaces()[0];
+    const retryRequest = { accountScope: latest.accountScope, spaceId: latest.id, expectedLayoutRevision: latest.layoutPreferences.revision };
+    const failureReview = engine.previewDeleteSpace(retryRequest);
+    storage.failWrites = true;
+    assert.equal(engine.confirmDeleteSpace({ previewId: failureReview.previewId, confirm: true }).code, "write_failed");
+    assert.equal(engine.getSpaces().length, 1);
+    storage.failWrites = false;
+
+    const accountAReview = engine.previewDeleteSpace(retryRequest);
+    setAccountScope("spaces-delete-owner-b");
+    assert.match(engine.confirmDeleteSpace({ previewId: accountAReview.previewId, confirm: true }).error, /not found or already used|Account scope changed/);
+    assert.deepEqual(engine.getSpaces(), []);
+    setAccountScope("spaces-delete-owner-a");
+    assert.equal(engine.getSpaces().length, 1);
+    const finalSpace = engine.getSpaces()[0];
+    const finalReview = engine.previewDeleteSpace({ accountScope: finalSpace.accountScope, spaceId: finalSpace.id, expectedLayoutRevision: finalSpace.layoutPreferences.revision });
+    assert.equal(engine.confirmDeleteSpace({ previewId: finalReview.previewId, confirm: true }).success, true);
+    assert.deepEqual(new SpaceCreationEngine().getSpaces(), []);
+    assert.equal(Object.hasOwn(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).spaces, finalSpace.id), false);
+  } finally { setAccountScope(previousScope); }
+}));
 
 test("saved Space layout preferences persist by account, merge partial edits, and keep onboarding starters as suggestions", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";

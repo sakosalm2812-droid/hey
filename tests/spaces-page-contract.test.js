@@ -85,3 +85,18 @@ test("Space tool membership is account fenced, revision checked, and separate fr
   assert.match(page, /aria-expanded=\{expanded\}/);
   assert.match(page, /Registered tools could not be loaded\./);
 });
+
+test("Space cards expose a review, explicit delete confirmation, and recoverable failure path", () => {
+  assert.match(page, /onClick=\{\(\) => previewSpaceDeletion\(space\)\}/);
+  assert.match(page, /HEY\.spaces\.previewDeletion\(\{ accountScope: `account:\$\{accountId\}`, spaceId: space\.id, expectedLayoutRevision: layout\.revision \}\)/);
+  assert.match(page, /result\.action !== "delete_private_space"/);
+  assert.match(page, /result\.requiresConfirmation !== true/);
+  assert.match(page, /Review Space deletion/);
+  assert.match(page, /Delete permanently/);
+  assert.match(page, /HEY\.spaces\.confirmDeletion\(\{ previewId: pending\.previewId, confirm: true \}\)/);
+  assert.match(page, /The Space was not deleted\. Review it again before retrying\./);
+  assert.match(page, /Review again/);
+  assert.match(page, /pending\.accountScope !== `account:\$\{accountId\}`/);
+  assert.match(page, /setDeletePreview\(null\)/);
+  assert.match(page, /Access permissions will not change\./);
+});

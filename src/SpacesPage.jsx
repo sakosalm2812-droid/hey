@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw, Search, Wrench, X } from "lucide-react";
+import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw, Search, Trash2, Wrench, X } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
@@ -173,6 +173,7 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
 export default function SpacesPage() {
   const { user } = useAuth();
   const accountId = user?.id || "";
+  const accountIsCurrent = Boolean(accountId && getAccountScope() === `account:${accountId}`);
   const accountRef = useRef(accountId);
   useLayoutEffect(() => {
     accountRef.current = accountId;
@@ -191,6 +192,10 @@ export default function SpacesPage() {
   const [creating, setCreating] = useState(false);
   const [creationPhase, setCreationPhase] = useState("");
   const [notice, setNotice] = useState("");
+  const [deletePreview, setDeletePreview] = useState(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteErrorSpaceId, setDeleteErrorSpaceId] = useState("");
+  const [deletingSpaceId, setDeletingSpaceId] = useState("");
 
   const refreshSpaces = useCallback(() => {
     if (accountRef.current !== accountId) return false;
@@ -255,6 +260,10 @@ export default function SpacesPage() {
     setNotice("");
     setCreating(false);
     setCreationPhase("");
+    setDeletePreview(null);
+    setDeleteError("");
+    setDeleteErrorSpaceId("");
+    setDeletingSpaceId("");
 
     const refreshCurrentAccount = () => {
       if (active) refreshSpaces();
@@ -356,6 +365,79 @@ export default function SpacesPage() {
     setNotice("");
   };
 
+  const previewSpaceDeletion = async (space) => {
+    if (!accountId || accountRef.current !== accountId || getAccountScope() !== `account:${accountId}` || deletingSpaceId) return;
+    setDeletePreview(null);
+    setDeleteError("");
+    setDeleteErrorSpaceId("");
+    setDeletingSpaceId(space.id);
+    await Promise.resolve();
+    if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) {
+      return;
+    }
+    try {
+      const layout = HEY.spaces.getLayoutPreferences(space.id);
+      if (!spaceMembershipMatchesAccount(layout, accountId, getAccountScope(), space.id)) {
+        setDeleteError(layout?.error || "This Space could not be loaded for deletion review. Try again.");
+        setDeleteErrorSpaceId(space.id);
+        refreshSpaces();
+        return;
+      }
+      const result = HEY.spaces.previewDeletion({ accountScope: `account:${accountId}`, spaceId: space.id, expectedLayoutRevision: layout.revision });
+      if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
+      if (!result || result.error || result.action !== "delete_private_space" || result.requiresConfirmation !== true || result.permissionsChanged !== false || result.accountScope !== `account:${accountId}` || result.space?.id !== space.id || typeof result.previewId !== "string") {
+        setDeleteError(result?.error || "A safe deletion review could not be prepared. Reload this Space and try again.");
+        setDeleteErrorSpaceId(space.id);
+        refreshSpaces();
+        return;
+      }
+      setDeletePreview({ ...result, accountId });
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) {
+        setDeleteError("A safe deletion review could not be prepared. Try again.");
+        setDeleteErrorSpaceId(space.id);
+      }
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) setDeletingSpaceId("");
+    }
+  };
+
+  const confirmSpaceDeletion = async () => {
+    const pending = deletePreview;
+    if (!spacePreviewMatchesAccount(pending, accountId, accountRef.current) || pending.accountScope !== `account:${accountId}` || deletingSpaceId) return;
+    setDeletingSpaceId(pending.space.id);
+    setDeleteError("");
+    await Promise.resolve();
+    if (!spacePreviewMatchesAccount(pending, accountId, accountRef.current) || getAccountScope() !== `account:${accountId}` || pending.accountScope !== `account:${accountId}`) {
+      return;
+    }
+    try {
+      const result = HEY.spaces.confirmDeletion({ previewId: pending.previewId, confirm: true });
+      if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
+      if (!result?.success || result.accountScope !== `account:${accountId}` || result.spaceId !== pending.space.id) {
+        setDeletePreview(null);
+        setDeleteError(result?.error || "The Space was not deleted. Review it again before retrying.");
+        setDeleteErrorSpaceId(pending.space.id);
+        refreshSpaces();
+        return;
+      }
+      setDeletePreview(null);
+      setDeleteError("");
+      setDeleteErrorSpaceId("");
+      refreshSpaces();
+      setNotice(`Deleted “${pending.space.name}”.`);
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) {
+        setDeletePreview(null);
+        setDeleteError("The Space was not deleted. Review it again before retrying.");
+        setDeleteErrorSpaceId(pending.space.id);
+        refreshSpaces();
+      }
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === `account:${accountId}`) setDeletingSpaceId("");
+    }
+  };
+
   const accountDataLoading = loading || loadedAccountId !== accountId;
   const currentSpaces = loadedAccountId === accountId ? spaces : [];
 
@@ -432,6 +514,23 @@ export default function SpacesPage() {
           <div className="spaces-page__card-copy"><h3>{space.name}</h3><p>{space.description || "Private Space"}</p></div>
           <span className="spaces-page__private-label"><LockKeyhole size={13} aria-hidden="true" /> Private</span>
           <time dateTime={space.createdAt}>{formatDate(space.createdAt)}</time>
+          <button type="button" className="spaces-page__delete-button" onClick={() => previewSpaceDeletion(space)} disabled={Boolean(deletingSpaceId) || !accountIsCurrent}>
+            {deletingSpaceId === space.id ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Trash2 size={15} aria-hidden="true" />} Delete Space
+          </button>
+          {deletePreview?.space?.id === space.id && deletePreview.accountId === accountId && (
+            <section className="spaces-page__delete-review" aria-labelledby={`space-delete-title-${encodeURIComponent(space.id)}`}>
+              <h4 id={`space-delete-title-${encodeURIComponent(space.id)}`}>Review Space deletion</h4>
+              <p>Delete <strong>{deletePreview.space.name}</strong> and its saved layout and tool selections? This cannot be undone.</p>
+              <p>Access permissions will not change.</p>
+              <div className="spaces-page__actions">
+                <button type="button" className="spaces-page__secondary" onClick={() => setDeletePreview(null)} disabled={Boolean(deletingSpaceId)}>Cancel</button>
+                <button type="button" className="spaces-page__danger" onClick={confirmSpaceDeletion} disabled={Boolean(deletingSpaceId) || !accountIsCurrent}>
+                  {deletingSpaceId === space.id ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Trash2 size={15} aria-hidden="true" />} Delete permanently
+                </button>
+              </div>
+            </section>
+          )}
+          {deleteError && deleteErrorSpaceId === space.id && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{deleteError}</p><button type="button" className="spaces-page__secondary" onClick={() => previewSpaceDeletion(space)} disabled={Boolean(deletingSpaceId)}><RotateCw size={14} aria-hidden="true" /> Review again</button></div>}
           <SpaceToolMembership
             space={space}
             accountId={accountId}

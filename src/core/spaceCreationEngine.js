@@ -3,6 +3,7 @@ import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { safeStorage } from "../lib/safeStorage.js";
 import { getTool } from "./toolRegistry.js";
+import { getOnboardingMotivations, rankOnboardingStarterSuggestions } from "./onboardingEngine.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
 export const SPACE_STORAGE_CONTRACT_VERSION = 2;
@@ -24,6 +25,11 @@ const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, SPACE_STORAGE_CONTRACT_VERS
 const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
 const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
 const activeLayoutPreferenceWrites = new Set();
+const ONBOARDING_SPACE_STARTERS = Object.freeze({
+  personal: Object.freeze({ name: "Personal" }),
+  work: Object.freeze({ name: "Work" }),
+  learning: Object.freeze({ name: "Learning" }),
+});
 const CREATE_SPACE_PROMPT = /^(?:please\s+)?create\s+(?:a\s+)?(?:private\s+)?space\s+(?:called|named)\s+(.+)$/i;
 const FORBIDDEN_INTENT = /\b(?:public|share|shared|sharing|invite|invites|members?|permissions?|access|roles?|admin|administrator|owner|grant|escalat(?:e|ion))\b/i;
 const SPACE_NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'’()-]{0,79}$/u;
@@ -268,12 +274,14 @@ export class SpaceCreationEngine {
     this.accountScope = getAccountScope();
     this.spaces = new Map();
     this.previews = new Map();
+    this.deletePreviews = new Map();
     this.listeners = new Set();
     this.loadError = false;
     this.load(this.accountScope);
     this.unsubscribeAccountScope = subscribeAccountScope(() => {
       this.accountScope = getAccountScope();
       this.previews.clear();
+      this.deletePreviews.clear();
       this.load(this.accountScope);
       this.notify("account_scope_changed", { accountScope: this.accountScope });
     });
@@ -330,6 +338,7 @@ export class SpaceCreationEngine {
     this.unsubscribeAccountScope?.();
     this.listeners.clear();
     this.previews.clear();
+    this.deletePreviews.clear();
   }
 
   save() {
@@ -359,6 +368,29 @@ export class SpaceCreationEngine {
     if (this.loadError) this.load(this.accountScope);
     if (this.loadError) throw new Error("Space storage could not be read");
     return [...this.spaces.values()].map(cloneSpace);
+  }
+
+  getOnboardingSuggestions() {
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() !== scope) return { error: "An active account is required for Space suggestions" };
+    return {
+      accountScope: scope,
+      motivationSelections: getOnboardingMotivations(),
+      suggestions: rankOnboardingStarterSuggestions().map(({ id, label, score }) => {
+        const starter = ONBOARDING_SPACE_STARTERS[id];
+        return {
+          id,
+          label,
+          score,
+          previewRequest: {
+            accountScope: scope,
+            prompt: `Create a private Space called ${starter.name}`,
+          },
+          permissionsChanged: false,
+          requiresConfirmation: true,
+        };
+      }),
+    };
   }
 
   getLayoutPreferences(spaceId) {
@@ -482,11 +514,103 @@ export class SpaceCreationEngine {
     return updated.success ? { ...updated, changed: true } : updated;
   }
 
+  previewDeleteSpace(request) {
+    const safeRequest = readDataRecord(request, ["accountScope", "spaceId", "expectedLayoutRevision"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, spaceId, expectedLayoutRevision } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to delete a Space" };
+    if (typeof accountScope !== "string" || accountScope !== scope || accountScope !== getAccountScope()) return { error: "Account scope mismatch" };
+    if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    if (!Number.isSafeInteger(expectedLayoutRevision) || expectedLayoutRevision < 0) return { error: "A valid Space layout revision is required" };
+    const refreshed = this.refreshFromStorage(scope, { notify: true });
+    if (refreshed.error) return refreshed;
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the request" };
+    const space = this.spaces.get(spaceId);
+    if (!space || space.accountScope !== scope) return { error: "Space not found" };
+    if (space.layoutPreferences.revision !== expectedLayoutRevision) {
+      return { error: "Space layout changed; reload before reviewing deletion", code: "stale_revision", current: cloneSpace(space) };
+    }
+    const previewId = createId();
+    const expiresAt = Date.now() + SPACE_CREATION_LIMITS.previewLifetimeMs;
+    this.deletePreviews.set(previewId, { accountScope: scope, spaceId, snapshot: JSON.stringify(space), expiresAt });
+    return {
+      previewId,
+      accountScope: scope,
+      expiresAt: new Date(expiresAt).toISOString(),
+      action: "delete_private_space",
+      space: cloneSpace(space),
+      effects: [`Permanently delete the private Space “${space.name}” and its saved layout and tool selections`],
+      permissionsChanged: false,
+      requiresConfirmation: true,
+    };
+  }
+
+  confirmDeleteSpace(request) {
+    const safeRequest = readDataRecord(request, ["previewId", "confirm"]);
+    if (safeRequest.error) return safeRequest;
+    const { previewId, confirm } = safeRequest.value;
+    const scope = this.accountScope;
+    if (typeof previewId !== "string" || previewId.length > 100) return { error: "A valid deletion preview ID is required" };
+    if (confirm !== true) return { error: "Explicit confirmation is required" };
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to delete a Space" };
+    if (getAccountScope() !== scope) {
+      this.deletePreviews.clear();
+      return { error: "Account scope changed; deletion preview is no longer valid" };
+    }
+    const pending = this.deletePreviews.get(previewId);
+    if (!pending || pending.accountScope !== scope) return { error: "Deletion preview not found or already used" };
+    if (Date.now() > pending.expiresAt) {
+      this.deletePreviews.delete(previewId);
+      return { error: "Deletion preview expired; review deletion again" };
+    }
+    const writeLockKey = JSON.stringify([scope, pending.spaceId]);
+    if (activeLayoutPreferenceWrites.has(writeLockKey)) return { error: "A Space update is already in progress", code: "write_in_progress" };
+    activeLayoutPreferenceWrites.add(writeLockKey);
+    try {
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error) return refreshed;
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; deletion preview is no longer valid" };
+      const current = this.spaces.get(pending.spaceId);
+      if (!current || current.accountScope !== scope) {
+        this.deletePreviews.delete(previewId);
+        return { error: "Space no longer exists" };
+      }
+      if (JSON.stringify(current) !== pending.snapshot) {
+        this.deletePreviews.delete(previewId);
+        return { error: "Space changed after deletion review; review the latest version", code: "stale_revision", current: cloneSpace(current) };
+      }
+      // Consume before writing so reentrant storage cannot apply this confirmation twice.
+      this.deletePreviews.delete(previewId);
+      const nextSpaces = new Map(this.spaces);
+      nextSpaces.delete(pending.spaceId);
+      const serialized = serializeSpaces(nextSpaces, scope);
+      if (!serialized) return { error: "Space could not be deleted", code: "write_failed" };
+      try {
+        const key = getAccountStorageKey(STORAGE_KEY, scope);
+        safeStorage.setItem(key, serialized);
+        if (safeStorage.getItem(key) !== serialized) return { error: "Space could not be deleted", code: "write_failed" };
+      } catch {
+        return { error: "Space could not be deleted", code: "write_failed" };
+      }
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before deleting" };
+      this.spaces = nextSpaces;
+      const result = { success: true, accountScope: scope, spaceId: pending.spaceId, permissionsChanged: false };
+      this.notify("space_deleted", result);
+      publish("spaces.private_space_deleted", result);
+      recordAudit({ action: "space.private_deleted", status: "completed", metadata: { spaceId: pending.spaceId, accountScope: scope } });
+      return result;
+    } finally {
+      activeLayoutPreferenceWrites.delete(writeLockKey);
+    }
+  }
+
   previewNaturalLanguageRequest(request) {
-    const safeRequest = readDataRecord(request, ["prompt"]);
+    const safeRequest = readDataRecord(request, ["accountScope", "prompt"]);
     if (safeRequest.error) return safeRequest;
     if (this.accountScope === "anonymous") return { error: "An account scope is required to create a Space" };
     if (getAccountScope() !== this.accountScope) return { error: "Account scope changed; retry the request" };
+    if (safeRequest.value.accountScope !== undefined && safeRequest.value.accountScope !== this.accountScope) return { error: "Account scope changed; refresh Space suggestions before continuing" };
     if (this.loadError) return { error: "Space storage could not be read; try again" };
     const parsed = parseSpacePrompt(safeRequest.value.prompt);
     if (parsed.error) return parsed;
@@ -592,6 +716,20 @@ export function confirmNaturalLanguageSpaceCreation(request) {
 
 export function getPrivateSpaces() {
   return spaceCreationEngine.getSpaces();
+}
+
+export function getOnboardingSpaceSuggestions() {
+  return spaceCreationEngine.getOnboardingSuggestions();
+}
+
+/** Preview requires accountScope, spaceId, and expectedLayoutRevision. */
+export function previewPrivateSpaceDeletion(request) {
+  return spaceCreationEngine.previewDeleteSpace(request);
+}
+
+/** Confirmation accepts only { previewId, confirm: true } and rechecks persisted state. */
+export function confirmPrivateSpaceDeletion(request) {
+  return spaceCreationEngine.confirmDeleteSpace(request);
 }
 
 export function getSpaceLayoutPreferences(spaceId) {
