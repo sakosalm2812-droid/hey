@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -123,6 +123,120 @@ test("evidence report enforces JSON depth and node budgets", () => {
     const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: ["contracts/deep.schema.json", "contracts/wide.schema.json"] });
     assert.equal(report.entries.find(({ path: itemPath }) => itemPath.endsWith("deep.schema.json")).analysisStatus, "json_budget_exceeded");
     assert.equal(report.entries.find(({ path: itemPath }) => itemPath.endsWith("wide.schema.json")).analysisStatus, "json_budget_exceeded");
+  });
+});
+
+test("bounded JSON Schema comparison reports structural contract changes without returning contract content", () => {
+  withRoot((root) => {
+    const beforePath = "contracts/a-before.schema.json";
+    const afterPath = "contracts/z-after.schema.json";
+    const sharedId = "https://schemas.example.invalid/account";
+    const before = {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: sharedId,
+      title: "private title text",
+      type: "object",
+      properties: {
+        name: { type: "string", maxLength: 80 },
+        "api_key=private-secret-value": { type: "string", enum: ["alpha", "beta"] },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    };
+    const after = {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: sharedId,
+      title: "different private title",
+      type: "object",
+      properties: {
+        name: { type: "integer", maxLength: 80 },
+        "api_key=private-secret-value": { type: "string", enum: ["alpha", "gamma"] },
+        optionalField: { type: "boolean" },
+      },
+      required: ["name", "optionalField"],
+      additionalProperties: true,
+    };
+    writeJson(root, beforePath, before);
+    writeJson(root, afterPath, after);
+    const originalBefore = Buffer.from(JSON.stringify(before));
+    const originalAfter = Buffer.from(JSON.stringify(after));
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: [beforePath, afterPath] });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantic_diff");
+    assert.deepEqual(comparison.changes, {
+      typeChanges: 1,
+      propertiesAdded: 1,
+      propertiesRemoved: 0,
+      requiredAdded: 1,
+      requiredRemoved: 0,
+      additionalPropertiesChanges: 1,
+      itemsChanges: 0,
+      enumChanges: 1,
+      constChanges: 0,
+      annotationChanges: 0,
+      constraintChanges: 0,
+      schemaShapeChanges: 0,
+    });
+    const serialized = JSON.stringify(report);
+    assert.doesNotMatch(serialized, /private title text|private-secret-value|alpha|gamma|schemas\.example\.invalid\/account/);
+    assert.ok(report.entries.every((entry) => !Object.keys(entry).some((key) => key.startsWith("_schema"))));
+    assert.deepEqual(readFileSync(path.join(root, beforePath)), originalBefore);
+    assert.deepEqual(readFileSync(path.join(root, afterPath)), originalAfter);
+  });
+});
+
+test("JSON Schema comparison treats object and set ordering plus descriptive metadata as non-semantic", () => {
+  withRoot((root) => {
+    const common = { $schema: "https://json-schema.org/draft/2020-12/schema", $id: "same-contract", type: ["string", "null"] };
+    writeJson(root, "contracts/a.schema.json", {
+      ...common,
+      title: "private title one",
+      required: ["alpha", "beta"],
+      properties: { alpha: { enum: ["one", "two"] }, beta: { type: "boolean" } },
+    });
+    writeJson(root, "contracts/b.schema.json", {
+      ...common,
+      type: ["null", "string"],
+      title: "private title two",
+      required: ["beta", "alpha"],
+      properties: { beta: { type: "boolean" }, alpha: { enum: ["two", "one"] } },
+    });
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: ["contracts/a.schema.json", "contracts/b.schema.json"] });
+    assert.equal(report.contractSemanticComparisons[0].status, "semantically_equivalent_in_supported_profile");
+    assert.ok(Object.values(report.contractSemanticComparisons[0].changes).every((count) => count === 0));
+    assert.doesNotMatch(JSON.stringify(report), /private title one|private title two|same-contract/);
+  });
+});
+
+test("JSON Schema semantic comparison fails closed for references, unknown formats, missing identity, and ambiguous identity", () => {
+  withRoot((root) => {
+    const base = { $schema: "https://json-schema.org/draft/2020-12/schema", $id: "schema-id", type: "object" };
+    writeJson(root, "contracts/ref-a.schema.json", { ...base, $ref: "#/$defs/item" });
+    writeJson(root, "contracts/ref-b.schema.json", { ...base, $ref: "#/$defs/other" });
+    writeJson(root, "contracts/no-id.schema.json", { $schema: base.$schema, type: "string" });
+    writeJson(root, "contracts/ambiguous-a.schema.json", base);
+    writeJson(root, "contracts/ambiguous-b.schema.json", base);
+    writeJson(root, "contracts/ambiguous-c.schema.json", base);
+    writeJson(root, "contracts/openapi-a.schema.json", { openapi: "3.1.0", $id: "api-id", paths: { "/private": { get: { summary: "never-return-this" } } } });
+    writeJson(root, "contracts/openapi-b.schema.json", { openapi: "3.1.0", $id: "api-id", paths: {} });
+    writeJson(root, "contracts/dialect-a.schema.json", { ...base, $id: "dialect-id" });
+    writeJson(root, "contracts/dialect-b.schema.json", { ...base, $id: "dialect-id", $schema: "http://json-schema.org/draft-07/schema#" });
+    writeJson(root, "contracts/prototype-a.schema.json", { ...base, $id: "prototype-id", properties: Object.fromEntries([["__proto__", { type: "string" }]]) });
+    writeJson(root, "contracts/prototype-b.schema.json", { ...base, $id: "prototype-id", properties: Object.fromEntries([["__proto__", { type: "number" }]]) });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/ref-a.schema.json", "contracts/ref-b.schema.json", "contracts/no-id.schema.json", "contracts/ambiguous-a.schema.json", "contracts/ambiguous-b.schema.json", "contracts/ambiguous-c.schema.json", "contracts/openapi-a.schema.json", "contracts/openapi-b.schema.json", "contracts/dialect-a.schema.json", "contracts/dialect-b.schema.json", "contracts/prototype-a.schema.json", "contracts/prototype-b.schema.json"],
+    });
+    const statuses = report.contractSemanticComparisons.map(({ status }) => status);
+    assert.ok(statuses.includes("unsupported_schema_profile"));
+    assert.equal(report.contractSemanticComparisons.find(({ leftPath }) => leftPath?.includes("dialect-a.schema.json"))?.status, "unsupported_schema_profile");
+    assert.ok(statuses.includes("missing_identity"));
+    assert.ok(statuses.includes("ambiguous_identity"));
+    assert.ok(statuses.includes("unsupported_schema_profile"));
+    assert.doesNotMatch(JSON.stringify(report), /never-return-this|schema-id|api-id|\$ref|\$defs/);
+    assert.equal(report.entries.find(({ path: itemPath }) => itemPath.endsWith("ref-a.schema.json")).semanticAnalysisStatus, "unsupported_schema_features");
+    assert.equal(report.entries.find(({ path: itemPath }) => itemPath.endsWith("openapi-a.schema.json")).semanticAnalysisStatus, "unsupported_format");
+    assert.equal(Object.prototype.type, undefined);
   });
 });
 
