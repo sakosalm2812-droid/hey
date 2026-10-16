@@ -86,8 +86,18 @@
 .spaces-page__card-copy p { margin: 4px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; }
 .spaces-page__card time { color: var(--text-secondary, #a7a4ae); font-size: 12px; white-space: nowrap; }
 .spaces-page__membership { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
+.spaces-page__saved-preferences { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
 .spaces-page__membership-toggle { min-height: 36px !important; padding: 7px 11px !important; border-color: rgba(214, 182, 107, .28) !important; color: var(--gold-primary, #d6b66b) !important; font-size: 13px !important; }
 .spaces-page__membership-panel { margin-top: 12px; padding: clamp(13px, 2vw, 20px); border: 1px solid rgba(255, 255, 255, .08); border-radius: 15px; background: rgba(0, 0, 0, .12); }
+.spaces-page__preferences-panel { margin-top: 12px; padding: clamp(13px, 2vw, 20px); border: 1px solid rgba(255, 255, 255, .08); border-radius: 15px; background: rgba(0, 0, 0, .12); }
+.spaces-page__preference-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 14px; }
+.spaces-page__preference-field label { display: block; margin-bottom: 5px; color: var(--text-primary, #f5f2ec); font-size: 13px; font-weight: 600; }
+.spaces-page__preference-field p { min-height: 36px; margin: 0 0 8px; color: var(--text-secondary, #a7a4ae); font-size: 11px; line-height: 1.45; }
+.spaces-page__preference-field textarea { display: block; width: 100%; min-height: 72px; padding: 10px 12px; resize: vertical; border: 1px solid rgba(255, 255, 255, .13); border-radius: 10px; background: rgba(0, 0, 0, .14); color: var(--text-primary, #f5f2ec); font: inherit; font-size: 12px; line-height: 1.5; }
+.spaces-page__preference-field textarea:focus-visible { outline: 2px solid var(--gold-primary, #d6b66b); outline-offset: 2px; }
+.spaces-page__preference-conflict { margin-top: 14px; padding: 14px; border: 1px solid rgba(255, 155, 139, .25); border-radius: 12px; background: rgba(255, 155, 139, .07); color: #ffb0a4; }
+.spaces-page__preference-conflict > p { margin: 0 0 7px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.spaces-page__preference-revision { margin: 10px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 11px; }
 .spaces-page__membership-note { margin: 0 0 13px; color: var(--text-secondary, #a7a4ae); font-size: 12px; line-height: 1.55; }
 .spaces-page__tool-search { display: flex; align-items: center; gap: 9px; max-width: 460px; margin: 12px 0; padding: 0 12px; border: 1px solid rgba(255, 255, 255, .13); border-radius: 11px; color: var(--text-secondary, #a7a4ae); }
 .spaces-page__tool-search:focus-within { outline: 2px solid var(--gold-primary, #d6b66b); outline-offset: 2px; }

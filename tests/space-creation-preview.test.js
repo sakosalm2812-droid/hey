@@ -245,6 +245,60 @@ test("Space layout preference updates reject cross-account and stale revisions w
   } finally { setAccountScope(previousScope); }
 }));
 
+test("saved Space preference edits can recover from a cross-tab revision conflict only after re-review", () => withStorage(() => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-pref-recovery-owner-a");
+    const editor = new SpaceCreationEngine();
+    const preview = editor.previewNaturalLanguageRequest({ prompt: "Create a space called Preference recovery" });
+    const created = editor.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true }).space;
+    const peerTab = new SpaceCreationEngine();
+    const baseRequest = { accountScope: created.accountScope, spaceId: created.id, expectedRevision: 0 };
+    const peerSave = peerTab.updateLayoutPreferences({
+      ...baseRequest,
+      preferences: { favoriteToolIds: ["tool.calendar"], widgetIds: ["calendar"], shortcutIds: ["open-calendar"] },
+    });
+    assert.equal(peerSave.revision, 1);
+
+    const staleDraft = editor.updateLayoutPreferences({
+      ...baseRequest,
+      preferences: { favoriteToolIds: ["tool.notes"], widgetIds: ["notes"], shortcutIds: ["open-notes"] },
+    });
+    assert.equal(staleDraft.code, "stale_revision");
+    assert.equal(staleDraft.current.revision, 1);
+    assert.deepEqual(staleDraft.current.favoriteToolIds, ["tool.calendar"]);
+    assert.deepEqual(peerTab.getLayoutPreferences(created.id).widgetIds, ["calendar"]);
+
+    setAccountScope("space-pref-recovery-owner-b");
+    const foreignTab = new SpaceCreationEngine();
+    const crossAccount = foreignTab.updateLayoutPreferences({
+      accountScope: created.accountScope,
+      spaceId: created.id,
+      expectedRevision: 1,
+      preferences: { favoriteToolIds: ["tool.attacker"] },
+    });
+    assert.match(crossAccount.error, /Account scope mismatch/);
+    assert.deepEqual(foreignTab.getSpaces(), []);
+
+    setAccountScope("space-pref-recovery-owner-a");
+    const reviewedLatest = editor.getLayoutPreferences(created.id);
+    const recovered = editor.updateLayoutPreferences({
+      accountScope: reviewedLatest.accountScope,
+      spaceId: reviewedLatest.spaceId,
+      expectedRevision: reviewedLatest.revision,
+      preferences: { favoriteToolIds: ["tool.notes"], widgetIds: ["notes"], shortcutIds: ["open-notes"] },
+    });
+    assert.equal(recovered.revision, 2);
+    assert.deepEqual(recovered.favoriteToolIds, ["tool.notes"]);
+    assert.deepEqual(recovered.widgetIds, ["notes"]);
+    const reloaded = new SpaceCreationEngine().getLayoutPreferences(created.id);
+    assert.deepEqual(reloaded.favoriteToolIds, ["tool.notes"]);
+    assert.deepEqual(reloaded.widgetIds, ["notes"]);
+    assert.deepEqual(reloaded.shortcutIds, ["open-notes"]);
+  } finally { setAccountScope(previousScope); }
+}));
+
 test("Space layout preference validation and persistence fail closed on hostile, oversized, or unavailable data", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);

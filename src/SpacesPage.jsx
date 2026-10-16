@@ -4,6 +4,7 @@ import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
 import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
+import { parseSpacePreferenceDraft, spacePreferencesMatchAccount } from "./spacePagePreferences.js";
 import "./SpacesPage.css";
 
 function formatDate(value) {
@@ -185,6 +186,166 @@ function SpaceToolMembership({ space, accountId, accountRef, tools, toolsStatus,
           {notice && <p className="spaces-page__notice" role="status"><Check size={15} aria-hidden="true" /> {notice}</p>}
         </section>
       )}
+    </div>
+  );
+}
+
+const EMPTY_SPACE_PREFERENCE_DRAFT = Object.freeze({ favoriteToolIds: "", widgetIds: "", shortcutIds: "" });
+const SPACE_PREFERENCE_FIELDS = Object.freeze([
+  ["favoriteToolIds", "Favorite tool IDs", "Registered tool IDs to highlight in this Space."],
+  ["widgetIds", "Widget IDs", "Saved widget IDs for this Space."],
+  ["shortcutIds", "Shortcut IDs", "Saved shortcut IDs for this Space."],
+]);
+
+function preferenceDraftFrom(snapshot) {
+  return {
+    favoriteToolIds: snapshot.favoriteToolIds.join("\n"),
+    widgetIds: snapshot.widgetIds.join("\n"),
+    shortcutIds: snapshot.shortcutIds.join("\n"),
+  };
+}
+
+function SpaceSavedPreferences({ space, accountId, accountRef }) {
+  const [expanded, setExpanded] = useState(false);
+  const [preferences, setPreferences] = useState(null);
+  const [draft, setDraft] = useState(EMPTY_SPACE_PREFERENCE_DRAFT);
+  const [conflict, setConflict] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const activeScope = `account:${accountId}`;
+
+  useEffect(() => {
+    setExpanded(false);
+    setPreferences(null);
+    setDraft(EMPTY_SPACE_PREFERENCE_DRAFT);
+    setConflict(null);
+    setLoading(false);
+    setSaving(false);
+    setError("");
+    setNotice("");
+  }, [accountId, space.id]);
+
+  function acceptSnapshot(snapshot, { replaceDraft = true } = {}) {
+    setPreferences(snapshot);
+    if (replaceDraft) setDraft(preferenceDraftFrom(snapshot));
+    setConflict(null);
+  }
+
+  async function loadPreferences() {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    setConflict(null);
+    await Promise.resolve();
+    if (accountRef.current !== accountId || getAccountScope() !== activeScope) {
+      setLoading(false);
+      setError("Your account changed. Reopen this Space before editing its saved preferences.");
+      return;
+    }
+    try {
+      const result = HEY.spaces.getLayoutPreferences(space.id);
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      if (!result?.success || !spacePreferencesMatchAccount(result, accountId, getAccountScope(), space.id)) {
+        setError(result?.error || "Saved Space preferences could not be loaded. Try again.");
+        return;
+      }
+      acceptSnapshot(result);
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setError("Saved Space preferences could not be loaded. Try again.");
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setLoading(false);
+    }
+  }
+
+  function savePreferences(event) {
+    event.preventDefault();
+    if (!preferences || conflict || saving) return;
+    if (accountRef.current !== accountId || getAccountScope() !== activeScope || preferences.accountScope !== activeScope || preferences.spaceId !== space.id) {
+      setError("Your account or Space changed. Reload saved preferences before saving.");
+      return;
+    }
+    const parsed = Object.fromEntries(Object.entries(draft).map(([field, value]) => [field, parseSpacePreferenceDraft(value)]));
+    const invalid = Object.values(parsed).find((result) => result.error);
+    if (invalid) {
+      setError(invalid.error);
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = HEY.spaces.updateLayoutPreferences({
+        accountScope: activeScope,
+        spaceId: space.id,
+        expectedRevision: preferences.revision,
+        preferences: Object.fromEntries(Object.entries(parsed).map(([field, parsedField]) => [field, parsedField.value])),
+      });
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      if (result?.code === "stale_revision" && spacePreferencesMatchAccount(result.current, accountId, getAccountScope(), space.id)) {
+        setConflict(result.current);
+        setError("Another tab saved newer preferences. Your draft is still unsaved; compare it with the latest values below.");
+        return;
+      }
+      if (!result?.success || !spacePreferencesMatchAccount(result, accountId, getAccountScope(), space.id)) {
+        setError(result?.error || "Preferences were not saved. Reload and try again.");
+        return;
+      }
+      acceptSnapshot(result);
+      setNotice(`Saved Space preferences at revision ${result.revision}.`);
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setError("Preferences were not saved. Reload and try again.");
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setSaving(false);
+    }
+  }
+
+  const editorId = `space-preferences-${encodeURIComponent(space.id)}`;
+
+  return (
+    <div className="spaces-page__saved-preferences">
+      <button type="button" className="spaces-page__membership-toggle" aria-expanded={expanded} aria-controls={editorId} onClick={() => {
+        const nextExpanded = !expanded;
+        setExpanded(nextExpanded);
+        if (nextExpanded && !preferences && !loading) loadPreferences();
+      }}>
+        {expanded ? "Hide saved preferences" : "Edit saved preferences"}
+      </button>
+      {expanded && <section id={editorId} className="spaces-page__preferences-panel" aria-label={`Saved preferences for ${space.name}`}>
+        <p className="spaces-page__membership-note">Edit this Space&apos;s saved IDs, one per line. Saving uses the current revision. Onboarding suggestions never replace these choices.</p>
+        {loading && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading saved preferences…</p>}
+        {preferences && !loading && <form onSubmit={savePreferences}>
+          <div className="spaces-page__preference-fields">
+            {SPACE_PREFERENCE_FIELDS.map(([field, label, help]) => {
+              const inputId = `${editorId}-${field}`;
+              return <div className="spaces-page__preference-field" key={field}>
+                <label htmlFor={inputId}>{label}</label>
+                <p id={`${inputId}-help`}>{help} Up to {HEY.spaces.limits.maxPreferenceIdsPerCategory} IDs per category.</p>
+                <textarea id={inputId} aria-describedby={`${inputId}-help`} value={draft[field]} rows={3} maxLength={HEY.spaces.limits.maxPreferenceIdsPerCategory * (HEY.spaces.limits.maxPreferenceIdLength + 1)} disabled={saving || !accountId} onChange={(event) => setDraft((current) => ({ ...current, [field]: event.target.value }))} />
+              </div>;
+            })}
+          </div>
+          {conflict && <div className="spaces-page__preference-conflict" role="alert">
+            <p>Latest saved revision: {conflict.revision}. Compare these values with your draft before continuing.</p>
+            {SPACE_PREFERENCE_FIELDS.map(([field, label]) => <p key={field}><strong>{label}:</strong> {conflict[field].length ? conflict[field].join(", ") : "None"}</p>)}
+            <div className="spaces-page__actions">
+              <button type="button" className="spaces-page__secondary" onClick={() => { acceptSnapshot(conflict); setError(""); setNotice("Loaded the latest saved preferences; your draft was discarded."); }}>Load latest and discard my draft</button>
+              <button type="button" className="spaces-page__secondary" onClick={() => { acceptSnapshot(conflict, { replaceDraft: false }); setError(""); setNotice(`Latest revision ${conflict.revision} loaded. Review your draft and save it when ready.`); }}>Keep my draft and review latest</button>
+            </div>
+          </div>}
+          {error && !conflict && <p className="spaces-page__membership-error" role="alert">{error}</p>}
+          {notice && <p className="spaces-page__notice" role="status"><Check size={15} aria-hidden="true" /> {notice}</p>}
+          <div className="spaces-page__actions">
+            <button type="button" className="spaces-page__secondary" onClick={loadPreferences} disabled={saving || loading}>Discard draft and reload</button>
+            <button type="submit" className="spaces-page__primary" disabled={saving || loading || Boolean(conflict) || getAccountScope() !== activeScope}>
+              {saving ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Check size={15} aria-hidden="true" />} Save preferences
+            </button>
+          </div>
+          <p className="spaces-page__preference-revision">Editing revision {preferences.revision}</p>
+        </form>}
+        {!preferences && !loading && <div className="spaces-page__message spaces-page__message--error" role="alert"><p>{error || "Saved preferences are unavailable."}</p><button type="button" className="spaces-page__secondary" onClick={loadPreferences}><RotateCw size={14} aria-hidden="true" /> Try again</button></div>}
+      </section>}
     </div>
   );
 }
@@ -558,6 +719,7 @@ export default function SpacesPage() {
             toolsStatus={toolCatalogAccountId === accountId ? toolCatalogStatus : "loading"}
             retryTools={loadToolCatalog}
           />
+          <SpaceSavedPreferences space={space} accountId={accountId} accountRef={accountRef} />
         </li>)}</ul>}
       </section>
     </section>

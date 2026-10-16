@@ -102,6 +102,20 @@ test("conflicted membership retry is available only for the latest Space revisio
   assert.match(page, /expectedRevision: currentLayout\.revision/);
 });
 
+test("Spaces exposes revision-checked saved preference editing with explicit conflict recovery", () => {
+  assert.match(page, /Edit saved preferences/);
+  assert.match(page, /Favorite tool IDs/);
+  assert.match(page, /Widget IDs/);
+  assert.match(page, /Shortcut IDs/);
+  assert.match(page, /HEY\.spaces\.updateLayoutPreferences\(\{/);
+  assert.match(page, /expectedRevision: preferences\.revision/);
+  assert.match(page, /spacePreferencesMatchAccount\(result\.current, accountId, getAccountScope\(\), space\.id\)/);
+  assert.match(page, /Keep my draft and review latest/);
+  assert.match(page, /Load latest and discard my draft/);
+  assert.match(page, /Onboarding suggestions never replace these choices/);
+  assert.match(page, /pending\.accountScope !== `account:\$\{accountId\}`/);
+});
+
 test("Space cards expose a review, explicit delete confirmation, and recoverable failure path", () => {
   assert.match(page, /onClick=\{\(\) => previewSpaceDeletion\(space\)\}/);
   assert.match(page, /HEY\.spaces\.previewDeletion\(\{ accountScope: `account:\$\{accountId\}`, spaceId: space\.id, expectedLayoutRevision: layout\.revision \}\)/);
