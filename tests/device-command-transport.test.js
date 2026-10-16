@@ -73,7 +73,8 @@ test("transport CORS accepts configured and verified Tauri origins but rejects o
 });
 
 test("transport request contract remains claim, renew, ack and fail", () => {
-  assert.ok(normalizeTransportRequest({ operation: "claim", deviceId, leaseMs: 1000 }));
+  assert.ok(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-1", leaseMs: 1000 }));
+  assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, leaseMs: 1000 }), null);
   assert.ok(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew", leaseMs: 1000 }));
   assert.ok(normalizeTransportRequest({ operation: "ack", deviceId, commandId, leaseToken }));
   assert.ok(normalizeTransportRequest({ operation: "fail", deviceId, commandId, leaseToken }));
@@ -83,7 +84,7 @@ test("transport request contract remains claim, renew, ack and fail", () => {
 
 test("device credentials avoid account JWT lookup while account mutations remain account-authenticated", async () => {
   for (const body of [
-    { operation: "claim", deviceId },
+    { operation: "claim", deviceId, idempotencyKey: "claim-1" },
     { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew" },
     { operation: "ack", deviceId, commandId, leaseToken },
     { operation: "fail", deviceId, commandId, leaseToken },
@@ -150,7 +151,7 @@ test("transport binds claim, acknowledgement and failure to authenticated device
     async acknowledge(...args) { calls.push(["ack", ...args]); return true; },
     async recordFailure(...args) { calls.push(["fail", ...args]); return true; },
   };
-  assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, leaseMs: 10_000 }, credentialStore, queue }), {
+  assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1", leaseMs: 10_000 }, credentialStore, queue }), {
     ok: true, status: 200, claim: { commandId, envelope: { action: "computer.open_url" }, leaseToken },
   });
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew-one", leaseMs: 10_000 }, credentialStore, queue }), {
@@ -159,7 +160,7 @@ test("transport binds claim, acknowledgement and failure to authenticated device
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "ack", deviceId, commandId, leaseToken }, credentialStore, queue }), { ok: true, status: 200, accepted: true });
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "fail", deviceId, commandId, leaseToken }, credentialStore, queue }), { ok: true, status: 200, accepted: true });
   assert.deepEqual(calls, [
-    ["claim", accountId, deviceId, 10_000, digest],
+    ["claim", accountId, deviceId, "claim-1", 10_000, digest],
     ["renew", accountId, deviceId, commandId, leaseToken, "renew-one", 10_000, digest],
     ["ack", accountId, deviceId, commandId, leaseToken, digest],
     ["fail", accountId, deviceId, commandId, leaseToken, digest],
@@ -198,7 +199,7 @@ test("credential rotation or revocation between authentication and dispatch is f
   let currentDigest = authenticatedDigest;
   const queueCalls = [];
   const queue = {
-    async claimNext(...args) { queueCalls.push(["claim", ...args]); return args[3] === currentDigest ? { commandId } : null; },
+    async claimNext(...args) { queueCalls.push(["claim", ...args]); return args[4] === currentDigest ? { commandId } : null; },
     async renewLease(...args) { queueCalls.push(["renew", ...args]); return { renewed: args[6] === currentDigest }; },
     async acknowledge(...args) { queueCalls.push(["ack", ...args]); return args[4] === currentDigest; },
     async recordFailure(...args) { queueCalls.push(["fail", ...args]); return args[4] === currentDigest; },
@@ -211,7 +212,7 @@ test("credential rotation or revocation between authentication and dispatch is f
     },
   };
   const racingOperations = [
-    { body: { operation: "claim", deviceId, leaseMs: 10_000 }, expected: { status: 200, claim: null } },
+    { body: { operation: "claim", deviceId, idempotencyKey: "claim-race", leaseMs: 10_000 }, expected: { status: 200, claim: null } },
     { body: { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew-race", leaseMs: 10_000 }, expected: { status: 409, renewal: { renewed: false } } },
     { body: { operation: "ack", deviceId, commandId, leaseToken }, expected: { status: 409, accepted: false } },
     { body: { operation: "fail", deviceId, commandId, leaseToken }, expected: { status: 409, accepted: false } },
@@ -233,10 +234,11 @@ test("malformed, spoofed, revoked and mismatched credentials fail before queue a
   let queueCalls = 0;
   const queue = { async claimNext() { queueCalls += 1; return null; } };
   const goodStore = { async authenticate() { return { accountId, deviceId, active: true }; } };
-  assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, leaseMs: 300_001 }), null);
+  assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-1", leaseMs: 300_001 }), null);
+  assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "" }), null);
   assert.equal(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew", leaseMs: 300_001 }), null);
   assert.equal(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "" }), null);
-  const accessorRequest = { operation: "claim", deviceId };
+  const accessorRequest = { operation: "claim", deviceId, idempotencyKey: "claim-1" };
   let getterCalls = 0;
   Object.defineProperty(accessorRequest, "leaseMs", { enumerable: true, get() { getterCalls += 1; return 30_000; } });
   assert.equal(normalizeTransportRequest(accessorRequest), null);
@@ -244,18 +246,18 @@ test("malformed, spoofed, revoked and mismatched credentials fail before queue a
   const hostileProxy = new Proxy({}, { ownKeys() { throw new Error("hostile request proxy"); } });
   assert.equal(normalizeTransportRequest(hostileProxy), null);
   for (const auth of ["Bearer service-role-secret", `Bearer ${token} trailing`, "Bearer "]) {
-    assert.equal((await handleDeviceTransport({ authorization: auth, body: { operation: "claim", deviceId }, credentialStore: goodStore, queue })).ok, false);
+    assert.equal((await handleDeviceTransport({ authorization: auth, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: goodStore, queue })).ok, false);
   }
   for (const identity of [
     null,
     { accountId, deviceId: otherDeviceId, active: true },
     { accountId, deviceId, active: false },
   ]) {
-    const result = await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId }, credentialStore: { async authenticate() { return identity; } }, queue });
+    const result = await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: { async authenticate() { return identity; } }, queue });
     assert.equal(result.status, 401);
   }
-  assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, accountId: otherAccountId }, credentialStore: goodStore, queue })).status, 400);
-  assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId }, credentialStore: { async authenticate() { return null; } }, queue })).status, 401);
+  assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1", accountId: otherAccountId }, credentialStore: goodStore, queue })).status, 400);
+  assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: { async authenticate() { return null; } }, queue })).status, 401);
   assert.equal(queueCalls, 0);
   assert.equal((await digestDeviceCredential("bad-token")), null);
 });
@@ -332,7 +334,7 @@ test("pending or unknown device states cannot rotate or authenticate transport c
   let queueCalls = 0;
   const result = await handleDeviceTransport({
     authorization: `Bearer ${token}`,
-    body: { operation: "claim", deviceId },
+    body: { operation: "claim", deviceId, idempotencyKey: "claim-1" },
     credentialStore: { async authenticate() { return null; } },
     queue: { async claimNext() { queueCalls += 1; return null; } },
   });

@@ -138,9 +138,15 @@ export class SupabaseDeviceCommandQueueStore {
     return { created: data.created, command: commandFromRow(data.command) };
   }
 
-  async claimNext(accountId, deviceId, leaseMs = 30_000, credentialHash) {
+  async claimNext(accountId, deviceId, idempotencyKey, leaseMs = 30_000, credentialHash) {
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS) throw new RangeError("Device command lease must be between 1 ms and 5 minutes.");
-    const data = rpcData(await this.client.rpc("claim_hey_device_command", { p_account_id: requiredUuid(accountId, "accountId"), p_device_id: requiredUuid(deviceId, "deviceId"), p_lease_ms: leaseMs, p_credential_hash: requiredCredentialHash(credentialHash) }), "claim");
+    const data = rpcData(await this.client.rpc("claim_hey_device_command", {
+      p_account_id: requiredUuid(accountId, "accountId"),
+      p_device_id: requiredUuid(deviceId, "deviceId"),
+      p_idempotency_key: boundedText(idempotencyKey, "Claim idempotency key", 128),
+      p_lease_ms: leaseMs,
+      p_credential_hash: requiredCredentialHash(credentialHash),
+    }), "claim");
     if (data === null) return null;
     if (!data || typeof data !== "object" || !UUID.test(data.leaseToken)) throw new Error("Supabase device command lease response was malformed.");
     return { command: commandFromRow(data.command), leaseToken: data.leaseToken };

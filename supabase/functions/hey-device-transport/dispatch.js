@@ -85,8 +85,11 @@ export function normalizeTransportRequest(body) {
     if (!validUuid(source.deviceId)) return null;
     if (source.operation === "claim") {
       const leaseMs = source.leaseMs === undefined ? 30_000 : source.leaseMs;
-      if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS || keys.some((key) => !["deviceId", "operation", "leaseMs"].includes(key))) return null;
-      return { deviceId: source.deviceId, operation: "claim", leaseMs };
+      if (typeof source.idempotencyKey !== "string" || !source.idempotencyKey.trim() || source.idempotencyKey.length > 128
+        || [...source.idempotencyKey].some((char) => char.codePointAt(0) < 32 || char.codePointAt(0) === 127)
+        || !Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS
+        || keys.some((key) => !["deviceId", "operation", "idempotencyKey", "leaseMs"].includes(key))) return null;
+      return { deviceId: source.deviceId, operation: "claim", idempotencyKey: source.idempotencyKey.trim(), leaseMs };
     }
     if (source.operation === "renew") {
       const leaseMs = source.leaseMs === undefined ? 30_000 : source.leaseMs;
@@ -174,7 +177,7 @@ export async function handleDeviceTransport({ authorization, body, credentialSto
       return result(false, { status: 401, reason: "Device credential is invalid or revoked." });
     }
     if (request.operation === "claim") {
-      const claim = await queue.claimNext(identity.accountId, identity.deviceId, request.leaseMs, digest);
+      const claim = await queue.claimNext(identity.accountId, identity.deviceId, request.idempotencyKey, request.leaseMs, digest);
       return result(true, { status: 200, claim });
     }
     if (request.operation === "renew") {
