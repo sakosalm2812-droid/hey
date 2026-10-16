@@ -2,7 +2,7 @@
 
 ## Current behavior
 
-Rust rejects every `native_execute` IPC call and reports an empty `native_capabilities` list. This includes browser opening, app launch/navigation, filesystem operations, terminal execution, and system information. Renderer-supplied authorization fields cannot bypass the gate: native authorization state is not derived from renderer input, and the command accepts no permit parameter.
+Rust rejects every `native_execute` IPC call and reports an empty `native_capabilities` list. The Tauri renderer adapter now mirrors that empty list, freezes it against accidental additions, and returns an unsupported result before IPC for every capability. This includes browser opening, app launch/navigation, filesystem operations, terminal execution, and system information. Renderer-supplied authorization fields cannot bypass the gate: native authorization state is not derived from renderer input, and the command accepts no permit parameter.
 
 This is intentionally fail closed. JavaScript policy checks, backend command leases, and a capability list do not prove that a specific native side effect is authorized at the Tauri boundary. The current repository has no server-side signing key, signed permit format, native signature verifier, or native one-use/revocation ledger. The device transport authenticates credentials and fences queue RPCs, but does not issue a cryptographically verifiable authorization for each exact native operation.
 

@@ -282,6 +282,37 @@ test("Tauri bridge stays inactive in a normal web runtime", () => {
   assert.equal(createTauriAdapter(), null);
 });
 
+test("Tauri adapter neither advertises nor dispatches capabilities absent from the native verifier", async () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { location: { protocol: "tauri:" } },
+  });
+  try {
+    const adapter = createTauriAdapter();
+    assert.ok(adapter);
+    assert.deepEqual(adapter.capabilities, []);
+    assert.equal(Object.isFrozen(adapter), true);
+    assert.equal(Object.isFrozen(adapter.capabilities), true);
+    assert.throws(() => adapter.capabilities.push("terminal.execute"), TypeError);
+    assert.throws(() => Object.defineProperty(adapter, "capabilities", { value: ["terminal.execute"] }), TypeError);
+
+    const availability = getCapabilityAvailability("system.info", adapter.platform, adapter);
+    assert.equal(availability.status, CAPABILITY_STATUS.unsupported);
+    assert.equal(availability.available, false);
+    const result = await adapter.execute({ capability: "terminal.execute", input: { program: "whoami" } });
+    assert.deepEqual(result, {
+      success: false,
+      verified: false,
+      status: "unsupported",
+      error: "Native commands are currently disabled on this device.",
+    });
+  } finally {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else delete globalThis.window;
+  }
+});
+
 test("device registry exposes capabilities without allowing fake remote execution", async () => {
   const deviceId = "remote-test-device";
   registerDevice({
