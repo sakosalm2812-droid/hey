@@ -1,6 +1,39 @@
-## Current execution checkpoint — 2026-10-16, wave 3 integrated
+## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 4 integrated
 
-This checkpoint supersedes the older checkpoint below. Coordinator branch `codex/resume-emergency-2026-10-14` is at `7fd6c64bdd05459a9940d2aa7f06274aad5c5746` before this documentation commit; latest pushed coordinator checkpoint is `156999213a0e56a521e0acbd40be21c93b2f9e14`. Eleven existing specialist chats were resumed concurrently using GPT-6 Luna where selectable; each implementation stayed in an isolated worktree and only reviewed commits were cherry-picked. Current coordinator tree preserves the untracked `docs/requirements/v3-agent-pack/` extraction because a path exceeds Windows Git limits; do not stage or delete it. User-supplied V3 source files/ZIP remain committed under `docs/requirements/v3-source/`.
+Coordinator branch `codex/resume-emergency-2026-10-14` is at `d7433fd689a0ecbd8f006a0dc5aa6a3ce00ef8cf` (local, not yet pushed while this checkpoint is being recorded). The previous pushed checkpoint was `3d3c583326ea006d787ff6f5b73cbb2c7e492fe1`. The wave 4 worker changes below are all reviewed and cherry-picked; wave 4 has no unmerged changes. Preserve the coordinator's untracked `docs/requirements/v3-agent-pack/` extraction; do not stage or delete it.
+
+### Integrated wave 4 implementations
+
+- Worker 01 `992e1bb` → coordinator `83c1405`: accessible private Space name/description editor with fresh account-scoped revision checks and explicit review on stale updates.
+- Worker 02 `2f3a6fb` → `d7433fd`: reversible private Space archive/restore API, explicit preview and confirmation for each direction, lifecycle revision fencing, account-switch invalidation, V3→V4 migration, and permission preservation.
+- Worker 03 `60e6ae3` → `b614a26`: caps concurrent starting/running/stopping tool sessions at 16 per account; returns a capacity result and frees slots after runs settle.
+- Worker 04 `69cfe3c` → `6589b0e`: device credential rotation/authentication accepts only online/offline states; pending/unknown status fails closed in code and migration.
+- Worker 05 `b7826b0` → `ba67c49`: hidden page stops Gesture recognition, aborts detections, releases camera/detector, clears consent, and requires fresh consent after return. Synthetic camera only.
+- Worker 06 `3af79d1` → `3d3c583`: hidden page stops dictation, ignores late transcripts, blocks pending permission from starting recognition, and requires fresh consent. Mocked permission/speech providers.
+- Worker 07 `d11ad1b` → `ac144b3`: validates that inert VoiceOS preview content still matches its registered proposal, account and expiry.
+- Worker 08 `4ab661f` → `793b9f5`: blocks Teacher artifact mutations without Teacher write authorization, including edits, versions, branches and deletion.
+- Worker 09 `9ca7804` → `d565517`: bounds provider JSON/error bodies to 1 MB, cancels oversized streams, sanitizes failures, and preserves singleton exact-model routing. Coordinator lint fix `2d8dd19` adds a meaningful pre-revocation grant assertion.
+- Worker 10 `67083b6` → `013fb61`: stops UltraSparse catalog traversal at its declared term budget while preserving deterministic selector parity.
+- Worker 11 `567922a` → `f92b71e`: tests that Fusion rechecks the exact checker grant after primary failure and before fallback dispatch.
+
+### Verification and product proof
+
+- Full `npm test`: **660/660 passed**. `npm run build`: passed, 2,768 modules. ESLint passed for 25 changed JS/JSX files. `git diff --check` passed.
+- Build still skips sitemap generation without `SITE_URL` and emits the pre-existing mixed static/dynamic import warning from `src/core/contextManager.js`. Supabase/Deno Edge type-check and deployment remain **UNVERIFIED**.
+- Local app URL: `http://127.0.0.1:5175/login`. The previous browser check found Supabase URL/public anon key missing and disabled sign-in. The URL and public route rendering are verified; signed-in Space UI, actual database/RLS persistence, live provider response, real microphone/camera permission, native devices, and production deployment remain **UNVERIFIED**. Do not claim production readiness.
+- All 47 program steps remain In progress/Incomplete; none is production-certified complete.
+
+### Wave 4 worker receipts and exact state
+
+All eleven existing Codex tasks were resumed together on separate worktrees from `10e8c3b351b7a67317995da4dfae8af78c3864da`, requesting GPT-6 Luna where selectable. Every worker change is now integrated; no new Codex chats were created. `codex/wave4-01-space-details-ui` `992e1bb`, `codex/wave4-02-space-recovery` `2f3a6fb`, `codex/wave4-03-tool-lifecycle` `60e6ae3`, `codex/wave4-04-edge-privacy` `69cfe3c`, `codex/wave4-05-gesture-visibility` `b7826b0`, `codex/wave4-06-dictation-visibility` `3af79d1`, `codex/wave4-07-voice-preview` `d11ad1b`, `codex/wave4-08-teacher-access` `4ab661f`, `codex/wave4-09-provider-error` `9ca7804`, `codex/wave4-10-selector-memory` `67083b6`, and `codex/wave4-11-fusion-recovery` `567922a` are retained locally. Task references are unchanged: `01a14073-33bf-7403-940b-871cd0de9ebc`, `01a14073-9827-7f42-bf35-4eb2faee522d`, `01a14073-ae0b-7fa2-a145-2d4b3283f087`, `01a14073-c424-70e2-9773-630d488b24ae`, `01a14073-de07-7a90-b8bb-08faadea17bc`, `01a14073-f7e7-7601-8957-8d8cdfafa1d0`, `01a14074-1024-7e32-a5c1-c134d8e204a7`, `01a14074-2bb4-7b73-af09-a38e11a10c3d`, `01a14074-4bdf-7f33-bf83-bb7e1dff5097`, `01a14074-6e4f-79e2-805f-30ce26dab60e`, `01a14074-9f63-7672-9965-154a8394ffca`. Workers are completed/idle. There is no unmerged wave 4 work; coordinator-only pending work is this handoff update and the preserved untracked extracted agent pack.
+
+**Exact next actions:** commit and push the handoff/status checkpoint; immediately message all eleven existing specialist tasks concurrently with distinct, bounded wave 5 implementation tasks based on the pushed HEAD. Prioritize making archive/restore available from the Spaces UI, then address distinct backend/UI safety gaps from `docs/HEY_STEP_STATUS.md`. Review every diff before integration, run the complete suite/build/lint after each integration batch, and keep live-service/device evidence explicitly unverified.
+
+---
+
+## Historical checkpoint — 2026-10-16, wave 3 integrated
+
+This historical checkpoint was superseded by the latest checkpoint above. Coordinator branch `codex/resume-emergency-2026-10-14` was at `7fd6c64bdd05459a9940d2aa7f06274aad5c5746` before its documentation commit; latest pushed checkpoint at that time was `156999213a0e56a521e0acbd40be21c93b2f9e14`. Eleven existing specialist chats were resumed concurrently using GPT-6 Luna where selectable; each implementation stayed in an isolated worktree and only reviewed commits were cherry-picked. User-supplied V3 source files/ZIP remain committed under `docs/requirements/v3-source/`.
 
 ### Newly integrated implementations
 
