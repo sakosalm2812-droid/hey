@@ -1,4 +1,10 @@
-## Latest integrated execution delta — 2026-10-16, coordinator `ccd21cc`
+## Latest implementation delta — coordinator `f5d2a38`
+
+Additional code-backed slices now cover: duplicate-ID rejection in private Space backups; frozen-camera frame recovery in Gesture; provider release and explicit retry after dictation recognition failure; VoiceOS preview fencing to the originating conversation; redirect refusal for credential-bearing chat/vision requests; normalized detection of obfuscated routing-override phrases; bounded Fusion elapsed-time receipts; policy-checked Tool Library lifecycle retry; keyboard focus through selected-text voice-edit review; and an enrolled-device requirement for queue dispatch. Their focused adversarial/contract tests are included in the combined suite. Hardware/provider/live-database evidence remains unavailable.
+
+Combined verification at `f5d2a38`: **886/886** full Node suite, full lint pass, production build pass (**2,784 modules**), and SPA route smoke pass for `/login` and `/download`. The local `/download` UI is browser-verified; sign-in and authenticated journeys are unavailable without Supabase URL/key. **All 47 steps remain In progress or Incomplete.**
+
+## Prior integrated execution delta — coordinator `ccd21cc`
 
 Private account-scoped Space backups now have a reviewable client/UI path, revision-checked owner-derived save RPC, authenticated row policy, and server-side parity validation for Space names, descriptions, preference IDs and revisions. The client also enforces the SQL UTF-16 name-length bound. Contract/adversarial tests reject invalid payloads before RPC and inspect the SQL guard; live database execution remains **UNVERIFIED**.
 

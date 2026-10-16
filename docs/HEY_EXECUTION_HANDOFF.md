@@ -1,4 +1,28 @@
-## Latest execution checkpoint — 2026-10-16 20:22 Asia/Baghdad
+## Latest integration checkpoint — 2026-10-16 20:33 Asia/Baghdad
+
+Coordinator branch `codex/resume-emergency-2026-10-14` currently integrates through `f5d2a38` (`Require enrolled devices for command delivery`); this batch is ready to push with its handoff update. Previous pushed checkpoint: `e6b3736`. Nine specialist follow-up commits were reviewed and integrated:
+
+| Area | Specialist branch / source commit → coordinator commit | Integrated behavior and evidence boundary |
+|---|---|---|
+| Space backups | `codex/space-onboarding-contract-followup` / `58c7e26` → `fa7cc70` | Direct RPC rejects duplicate Space IDs as well as duplicate preference IDs; fixture/SQL contract assertions. Live Postgres not run. |
+| Gesture | `codex/gesture-selected-camera-recovery` / `07edc3b` → `aab3df7` | Repeated frozen video timestamps clear hold state and stop the camera session; synthetic adapter/UI tests only. |
+| Dictation | `codex/dictation-provider-recovery-ccd21f` / `585eb74` → `7458611` | Recognition errors release the provider session, reject stale callbacks, and allow a clean explicit retry; synthetic provider tests. |
+| VoiceOS | `codex/voiceos-next-ccd21c` / `1666068` → `94683e4` | Pending computer-action previews are bound to their originating conversation and revoked/cleared on conversation changes; OS execution remains disabled/unverified. |
+| Provider Edge | `codex/next-09-provider-redirect-guard-ccd21c` / `7edf843` → `6e6246a` | Credential-bearing OpenAI-compatible chat and vision requests reject redirects; source-contract regression tests, no live provider request. |
+| UltraSparse | `codex/ultrasparse-safety-normalization` / `ef4d02e` → `b15a4b2` | NFKC and format-character normalization is applied only to the narrow routing-override phrase check; hostile overrides keep ordinary chat routing. This is not a general injection detector. |
+| Fusion | `codex/next-11-fusion-partial-failure` / `e884060` → `1d84cd7` | Adds bounded server-measured Fusion elapsed time to receipts and failure copy. Conflict resolution preserved existing per-provider attempt attribution; full tests pass. Mock providers only. |
+| Tool Library | `codex/tool-library-lifecycle-retry-1016` / `244e081` → `e2149ae` | Failed lifecycle sessions get a Configure/Retry UI only when retry is declared; the failed session ID, account scope, permission, readiness and confirmation are rechecked before dispatch. No production catalog currently demonstrates real retry. |
+| Dictation edit accessibility | `codex/frontend-dictation-focus-ccd21c` / `c43f6ef` → `9706f57` | Selected-text edit stages move keyboard focus to their headings/status and style visible focus; native screen reader interaction was not physically exercised. |
+| Device enrollment | `codex/edge-server-device-state-ccd21cc` / `ed681d1` → `f5d2a38` | Edge rejects pending/revoked devices before queue access, allows offline enrolled devices, and migration guards direct inserts/cancels queued work on demotion. SQL was source-contract tested only, not run against live Supabase/Postgres. |
+
+Verification on the combined source: **886/886** full Node tests passed; full `npm run lint` passed; `npm run build` passed (**2,784 modules**); `npm run smoke:spa` passed at `http://127.0.0.1:4173` for `/login`, `/download`, and `/assets/index-CPc4JWEp.js`; `git diff --check` passed. Smoke is route delivery only. The real browser at `http://127.0.0.1:5175/download` renders honest platform state; login is disabled without `VITE_SUPABASE_URL` and the public anon key. Authenticated product journeys, live database/RLS, provider calls, physical-device I/O, native builds and deployment remain **UNVERIFIED**. No step is production-certified complete.
+
+Teacher Experience remains active (`01a14074-2bb4-7b73-af09-a38e11a10c3d`, branch `codex/teacher-reference-materials-ccd21c`) implementing a differentiated printable pack from existing saved worksheets; exact commit and verification receipt are pending. Frontend Director and Edge & Everywhere have returned commits `c43f6ef` and `ed681d1`, now integrated above. Other specialists completed their assigned follow-up commit; coordinator will continue them on further distinct gaps from the next pushed checkpoint.
+
+Next actions: push this checkpoint; dispatch another parallel wave to idle specialist conversations from the new base; collect Teacher’s receipt; review and integrate remaining work; run full tests/lint/build/smoke after each batch; keep the 47-step map In progress or Incomplete until real end-to-end proof exists; obtain live Supabase/Postgres configuration before claiming database integration. Preserve untracked `docs/requirements/v3-agent-pack/` unstaged.
+
+---
+## Earlier execution checkpoint — 2026-10-16 20:22 Asia/Baghdad
 
 Coordinator branch `codex/resume-emergency-2026-10-14` is pushed through `b46456dee88932fb267dd1070e1de6722f0a4ba6`; previous code checkpoint was `ccd21cc`. New integrated Space backups are in `f364301` (private account backup service/UI/RPC) and `226c3b4` (SQL-side validation parity); `ccd21cc` also rejects names over 80 UTF-16 code units client-side to match SQL. Full Node tests pass **877/877**; focused backup tests pass **6/6** with adversarial validation included; full ESLint passes; production build passes with **2,783 modules**. Built-SPA smoke passes at `http://127.0.0.1:4173` for `/login`, `/download`, and `/assets/index-DwFBhH1w.js`; it verifies route delivery only. `git diff --check` is clean. The intentionally untracked `docs/requirements/v3-agent-pack/` remains preserved and unstaged.
 
