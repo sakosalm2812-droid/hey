@@ -3,8 +3,8 @@ import { supabaseClient } from "../lib/supabase.js";
 /**
  * HEY's narrow Teacher answer-key contract. A deployment must provision these
  * server-managed Supabase app_metadata claims: hey_role="teacher",
- * hey_account_scope=<account scope>, and hey_class_ids=[...]. No claim
- * provisioner or database RLS policy currently exists in this repository.
+ * hey_account_scope=<account scope>, and hey_class_ids=[...]. The repository
+ * includes database RLS policies, but claim provisioning remains deployment-owned.
  */
 export function isTeacherAnswerKeyArtifact(artifact) {
   const seen = new WeakSet();
@@ -28,6 +28,12 @@ export function isTeacherAnswerKeyArtifact(artifact) {
 
 export function isStudentWorksheetArtifact(artifact) {
   return artifact?.content?.type === "teacher_worksheet";
+}
+
+export function isTeacherActivityHandoutArtifact(artifact) {
+  return artifact?.content?.type === "teacher_activity_handout"
+    || artifact?.metadata?.workflow === "teacher_activity_handout"
+    || artifact?.metadata?.artifactContract === "hey.teacher.activity_handout.v1";
 }
 
 export function isTeacherLessonArtifact(artifact) {
@@ -58,7 +64,7 @@ export function authorizeTeacherArtifactRead(artifact, context, user) {
       && artifact?.createdBy === user.id
       && hasTeacherClassAccess(artifact, context, user);
   }
-  if (isStudentWorksheetArtifact(artifact)) {
+  if (isStudentWorksheetArtifact(artifact) || isTeacherActivityHandoutArtifact(artifact)) {
     const role = user?.app_metadata?.hey_role;
     return ["teacher", "student"].includes(role) && hasTeacherClassAccess(artifact, context, user);
   }
@@ -86,7 +92,8 @@ export function authorizeTeacherArtifactWrite(artifact, context, user) {
 }
 
 export async function canReadTeacherArtifact(artifact, context) {
-  if (!isTeacherAnswerKeyArtifact(artifact) && !isStudentWorksheetArtifact(artifact) && !isTeacherLessonArtifact(artifact)) return true;
+  if (!isTeacherAnswerKeyArtifact(artifact) && !isStudentWorksheetArtifact(artifact)
+    && !isTeacherActivityHandoutArtifact(artifact) && !isTeacherLessonArtifact(artifact)) return true;
   try {
     const { data, error } = await supabaseClient.auth.getUser();
     return !error && authorizeTeacherArtifactRead(artifact, context, data?.user);
@@ -96,7 +103,8 @@ export async function canReadTeacherArtifact(artifact, context) {
 }
 
 export async function canWriteTeacherArtifact(artifact, context) {
-  if (!isTeacherAnswerKeyArtifact(artifact) && !isStudentWorksheetArtifact(artifact) && !isTeacherLessonArtifact(artifact)) return true;
+  if (!isTeacherAnswerKeyArtifact(artifact) && !isStudentWorksheetArtifact(artifact)
+    && !isTeacherActivityHandoutArtifact(artifact) && !isTeacherLessonArtifact(artifact)) return true;
   try {
     const { data, error } = await supabaseClient.auth.getUser();
     return !error && authorizeTeacherArtifactWrite(artifact, context, data?.user);

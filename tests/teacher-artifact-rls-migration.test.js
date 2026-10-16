@@ -7,6 +7,10 @@ const migration = readFileSync(fileURLToPath(new URL(
   "../supabase/migrations/20261016000100_teacher_artifact_rls.sql",
   import.meta.url,
 )), "utf8").toLowerCase();
+const activityHandoutMigration = readFileSync(fileURLToPath(new URL(
+  "../supabase/migrations/20261016000200_teacher_activity_handout_rls.sql",
+  import.meta.url,
+)), "utf8").toLowerCase();
 
 test("Teacher artifact RLS derives identity and class access from signed claims", () => {
   assert.match(migration, /alter table public\.hey_artifacts enable row level security/);
@@ -47,4 +51,14 @@ test("migration fails explicitly when either artifact table is missing", () => {
   assert.match(migration, /to_regclass\('public\.hey_artifacts'\) is null/);
   assert.match(migration, /to_regclass\('public\.hey_artifact_versions'\) is null/);
   assert.match(migration, /teacher artifact rls requires hey_artifacts and hey_artifact_versions tables/);
+});
+
+test("activity handouts join the existing class-scoped student artifact boundary", () => {
+  assert.match(activityHandoutMigration, /'teacher_activity_handout'/);
+  assert.match(activityHandoutMigration, /'hey\.teacher\.activity_handout\.v1'/);
+  assert.match(activityHandoutMigration, /v_is_student_facing/);
+  assert.match(activityHandoutMigration, /v_role in \('teacher', 'student'\)/);
+  assert.match(activityHandoutMigration, /if p_write then\s+return v_role = 'teacher' and p_created_by = v_uid/);
+  assert.match(activityHandoutMigration, /teacher artifact privacy scope cannot be removed or changed/);
+  assert.match(activityHandoutMigration, /new\.metadata ->> 'classid' is distinct from old\.metadata ->> 'classid'/);
 });

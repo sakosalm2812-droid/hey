@@ -1066,6 +1066,59 @@ export async function saveTeacherActivityHandoutArtifact(artifact, context) {
   );
 }
 
+export async function exportTeacherActivityHandoutMarkdown(artifact, {
+  accountScope, workspaceId, classId, safetyReview,
+} = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ACTIVITY_HANDOUTS.has(artifact)) {
+    throw new Error("Only an activity handout built in the active Teacher runtime can be exported");
+  }
+  if (!await canWriteTeacherArtifact(artifact, { accountScope, classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to export the student activity handout");
+  }
+  const verification = await verifyTeacherActivityHandoutArtifact(artifact, { accountScope, workspaceId, classId });
+  if (!verification.valid) throw new Error("Activity handout failed verification for the active account, workspace, or class");
+
+  let stableArtifact;
+  let stableSafetyReview;
+  try {
+    stableArtifact = snapshotLessonData(artifact);
+    stableSafetyReview = safetyReview === undefined ? undefined : snapshotLessonData(safetyReview);
+  } catch {
+    throw new Error("Activity handout and teacher review must contain only safe, bounded data");
+  }
+  if (!isPlainRecord(stableSafetyReview)) {
+    throw new Error("Teacher review is required before exporting this activity handout");
+  }
+  assertOnlyDataFields(stableSafetyReview, "Teacher handout review", new Set(["accountScope", "workspaceId", "reviewerId", "reviewedAt"]));
+  if (stableSafetyReview.accountScope !== accountScope
+    || stableSafetyReview.workspaceId !== workspaceId
+    || stableSafetyReview.reviewerId !== artifact.createdBy
+    || !Number.isFinite(Date.parse(stableSafetyReview.reviewedAt || ""))) {
+    throw new Error("Teacher review must match the active account, workspace, and handout author");
+  }
+
+  const { content, metadata } = stableArtifact;
+  const lines = [
+    `# ${escapeMarkdown(content.title)}`, "",
+    `**Subject:** ${escapeMarkdown(content.subject)}  `,
+    `**Grade band:** ${escapeMarkdown(content.gradeBand)}  `,
+    `**Estimated time:** ${content.estimatedMinutes} minutes`, "",
+    "## Objective", escapeMarkdown(content.objective), "",
+    "## Activity directions", escapeMarkdown(content.directions), "",
+    ...(content.materials.length ? ["## Materials", ...content.materials.map((material) => `- ${escapeMarkdown(material)}`), ""] : []),
+    "## Source and review",
+    `- Source lesson: ${escapeMarkdown(content.sourceLessonTitle)}`,
+    `- Source lesson digest: ${metadata.provenance.sourceLessonDigest}`,
+    "- Factual claims and curriculum alignment: not independently verified",
+    `- Student personal data: ${metadata.studentDataPolicy}`,
+    "- Teacher review completed for this account and workspace:",
+    `  - Reviewer: ${escapeMarkdown(stableSafetyReview.reviewerId)}`,
+    `  - Reviewed at: ${new Date(stableSafetyReview.reviewedAt).toISOString()}`,
+    "- This handout is a student-facing export; distribution is not performed by HEY.",
+  ];
+  return Object.freeze({ filename: "student-activity-handout.md", mimeType: "text/markdown", content: lines.join("\n") });
+}
+
 export async function saveTeacherAssessmentArtifact(artifact, context) {
   return saveTeacherArtifact(
     artifact, context, BUILT_TEACHER_ASSESSMENT_ARTIFACTS, verifyTeacherAssessmentArtifact,
@@ -1387,6 +1440,7 @@ export default {
   buildTeacherActivityHandoutArtifact,
   verifyTeacherActivityHandoutArtifact,
   saveTeacherActivityHandoutArtifact,
+  exportTeacherActivityHandoutMarkdown,
   buildTeacherAssessmentArtifact,
   verifyTeacherAssessmentArtifact,
   saveTeacherAssessmentArtifact,

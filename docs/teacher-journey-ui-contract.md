@@ -6,6 +6,8 @@ The protected HEY app can use `HEY.teacher.createLessonWorksheetJourney({ lesson
 
 A Teacher can turn one selected activity from a verified lesson into a separate, student-facing Forge draft without first creating an assessment. Call `HEY.teacher.buildActivityHandoutArtifact(verifiedLesson, activityIndex, context)`, then await `HEY.teacher.saveActivityHandoutArtifact(handout, context)`. `activityIndex` is a zero-based index into the verified lesson activities. The active authenticated user must have the Teacher role, matching account scope, and the class in their server-managed class claims. The saved artifact uses `hey.teacher.activity_handout.v1`, carries source-lesson digest and class provenance, contains only the selected activity directions and materials, and never copies assessment answers. Treat any save rejection, including an unavailable Forge provider, as not saved. This API does not distribute the handout to students.
 
+After Forge confirms the saved handout, the Teacher may download a student-facing Markdown export using `HEY.teacher.exportActivityHandoutMarkdown(handout, { accountScope, workspaceId, classId, safetyReview })`. Export rechecks the authenticated teacher, account, workspace, class, source digest and artifact content. A review receipt matching the active account/workspace and handout author is required for every export. The file states that factual claims and curriculum alignment remain unverified; downloading it does not distribute it.
+
 ## Request
 
 `lesson` accepts these fields:

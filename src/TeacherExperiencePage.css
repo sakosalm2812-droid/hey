@@ -139,6 +139,8 @@
 .teacher-experience__handout h4,
 .teacher-experience__handout p { margin-bottom: 0; }
 .teacher-experience__handout-preview { display: grid; gap: 9px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px; padding: 15px; }
+.teacher-experience__handout-export { display: grid; gap: 12px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px; padding: 15px; }
+.teacher-experience__handout-export pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .teacher-experience__primary,
 .teacher-experience__secondary {

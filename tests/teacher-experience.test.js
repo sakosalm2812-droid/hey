@@ -19,7 +19,7 @@ import {
 } from "../src/core/teacherExperience.js";
 import HEY from "../src/core/index.js";
 import { supabaseClient } from "../src/lib/supabase.js";
-import { authorizeTeacherArtifactRead, authorizeTeacherArtifactWrite, isTeacherAnswerKeyArtifact } from "../src/core/teacherArtifactAccess.js";
+import { authorizeTeacherArtifactRead, authorizeTeacherArtifactWrite, isTeacherActivityHandoutArtifact, isTeacherAnswerKeyArtifact } from "../src/core/teacherArtifactAccess.js";
 import { artifactEngine } from "../src/core/artifactEngine.js";
 
 supabaseClient.auth.getUser = async () => ({ data: { user: {
@@ -560,7 +560,9 @@ test("Teacher activity handout is class-authorized, answer-free, and saved throu
   let lesson;
   await withForgeBatchPersistence(async () => {
     lesson = (await HEY.teacher.createLessonWorksheetJourney({
-      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+      lesson: lessonInput({ activities: [{
+        title: "Build *a number line*", instructions: "Place [fraction] cards and explain each choice.", minutes: 20,
+      }] }), assessment: assessmentInput(), context: teacherContext(),
     })).lesson;
   });
   const handout = await buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext());
@@ -568,6 +570,27 @@ test("Teacher activity handout is class-authorized, answer-free, and saved throu
   assert.equal(handout.metadata.classId, "class-1");
   assert.equal(handout.metadata.audience, "student");
   assert.doesNotMatch(JSON.stringify(handout), /teacherAnswer|expectedLearning/);
+  assert.equal(isTeacherActivityHandoutArtifact(handout), true);
+  const classTeacher = { id: "teacher-1", app_metadata: {
+    hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"],
+  } };
+  const sameClassStudent = { id: "student-1", app_metadata: {
+    hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"],
+  } };
+  const otherClassStudent = { id: "student-2", app_metadata: {
+    hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-2"],
+  } };
+  const otherClassTeacher = { id: "teacher-2", app_metadata: {
+    hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-2"],
+  } };
+  assert.equal(authorizeTeacherArtifactRead(handout, { accountScope: "account:teacher-1", classId: "class-1" }, classTeacher), true);
+  assert.equal(authorizeTeacherArtifactRead(handout, { accountScope: "account:teacher-1", classId: "class-1" }, sameClassStudent), true);
+  assert.equal(authorizeTeacherArtifactRead(handout, { accountScope: "account:teacher-1", classId: "class-1" }, otherClassStudent), false);
+  assert.equal(authorizeTeacherArtifactRead(handout, { accountScope: "account:teacher-1", classId: "class-1" }, otherClassTeacher), false);
+  assert.equal(authorizeTeacherArtifactRead(handout, { accountScope: "account:teacher-2", classId: "class-1" }, classTeacher), false);
+  assert.equal(authorizeTeacherArtifactWrite(handout, { accountScope: "account:teacher-1", classId: "class-1" }, classTeacher), true);
+  assert.equal(authorizeTeacherArtifactWrite(handout, { accountScope: "account:teacher-1", classId: "class-1" }, sameClassStudent), false);
+  assert.equal(authorizeTeacherArtifactWrite(handout, { accountScope: "account:teacher-1", classId: "class-1" }, otherClassTeacher), false);
   assert.equal((await HEY.teacher.verifyActivityHandoutArtifact(handout, {
     accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
   })).valid, true);
@@ -581,6 +604,34 @@ test("Teacher activity handout is class-authorized, answer-free, and saved throu
     return artifact;
   });
   assert.equal(saved.content.type, "teacher_activity_handout");
+
+  const safetyReview = {
+    accountScope: "account:teacher-1", workspaceId: "school-space", reviewerId: "teacher-1",
+    reviewedAt: "2026-10-16T10:30:00.000Z",
+  };
+  const exported = await HEY.teacher.exportActivityHandoutMarkdown(handout, {
+    ...teacherContext(), safetyReview,
+  });
+  assert.equal(exported.filename, "student-activity-handout.md");
+  assert.equal(exported.mimeType, "text/markdown");
+  assert.match(exported.content, /## Activity directions/);
+  assert.ok(exported.content.includes("# Build \\*a number line\\*"));
+  assert.match(exported.content, /Teacher review completed for this account and workspace/);
+  assert.doesNotMatch(exported.content, /teacherAnswer|expectedLearning/);
+  await assert.rejects(HEY.teacher.exportActivityHandoutMarkdown(handout, teacherContext()), /Teacher review is required/);
+  await assert.rejects(HEY.teacher.exportActivityHandoutMarkdown(handout, {
+    ...teacherContext(), accountScope: "account:teacher-2", safetyReview,
+  }), /Authenticated teacher access|failed verification/);
+  await assert.rejects(HEY.teacher.exportActivityHandoutMarkdown(handout, {
+    ...teacherContext(), safetyReview: { ...safetyReview, workspaceId: "other-space" },
+  }), /must match the active account, workspace, and handout author/);
+  let getterCalls = 0;
+  const hostileReview = { ...safetyReview };
+  Object.defineProperty(hostileReview, "reviewedAt", { enumerable: true, get() { getterCalls += 1; return safetyReview.reviewedAt; } });
+  await assert.rejects(HEY.teacher.exportActivityHandoutMarkdown(handout, {
+    ...teacherContext(), safetyReview: hostileReview,
+  }), /safe, bounded data/);
+  assert.equal(getterCalls, 0);
 });
 
 test("Teacher activity handout denies unauthorized class access and fails when Forge is unavailable", async () => {
