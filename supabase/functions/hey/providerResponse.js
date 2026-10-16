@@ -11,6 +11,32 @@ export function cancelProviderResponse(response) {
   cancelQuietly(response?.body);
 }
 
+function normaliseProviderContent(content) {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => typeof part === "string" ? part : part?.text || "")
+      .join("")
+      .trim();
+  }
+  return "";
+}
+
+/** Return usable text from supported provider response shapes, or an empty string. */
+export function extractProviderText(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+
+  const choices = Array.isArray(data.choices) ? data.choices : [];
+  const choiceMessage = choices[0]?.message;
+  const choiceText = normaliseProviderContent(choiceMessage?.content);
+  if (choiceText) return choiceText;
+
+  const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+  const candidateContent = candidates[0]?.content;
+  const parts = Array.isArray(candidateContent?.parts) ? candidateContent.parts : [];
+  return normaliseProviderContent(parts);
+}
+
 function cancelBody(reader) {
   cancelQuietly(reader);
 }

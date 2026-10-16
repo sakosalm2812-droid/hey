@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
-import { cancelProviderResponse, readProviderJson } from "./providerResponse.js";
+import { cancelProviderResponse, extractProviderText, readProviderJson } from "./providerResponse.js";
 import { createProviderExecutionReceipt } from "../../../src/core/providerExecutionReceipt.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
 import {
@@ -159,6 +159,11 @@ async function callProvider(
         continue;
       }
       const data = parsedResponse.data;
+      if (!extractProviderText(data)) {
+        lastError = `${provider.id}: empty response`;
+        console.error("HEY provider response rejected", provider.id, "empty response");
+        continue;
+      }
       const providerElapsedMs = Math.max(0, Math.min(35_000, Date.now() - providerStartedAt));
       if (signal?.aborted) {
         throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
@@ -278,26 +283,6 @@ function normaliseContent(content: unknown) {
       .trim();
   }
   return "";
-}
-
-function extractProviderText(data: Record<string, unknown>) {
-  if (!data || typeof data !== "object") return "";
-
-  const choices = Array.isArray(data.choices)
-    ? data.choices as Array<Record<string, unknown>>
-    : [];
-  const choiceMessage = choices[0]?.message as Record<string, unknown> | undefined;
-  const choiceText = normaliseContent(choiceMessage?.content);
-  if (choiceText) return choiceText;
-
-  const candidates = Array.isArray(data.candidates)
-    ? data.candidates as Array<Record<string, unknown>>
-    : [];
-  const candidateContent = candidates[0]?.content as Record<string, unknown> | undefined;
-  const parts = Array.isArray(candidateContent?.parts)
-    ? candidateContent.parts as Array<Record<string, unknown>>
-    : [];
-  return normaliseContent(parts);
 }
 
 function validRequestId(value: unknown) {
