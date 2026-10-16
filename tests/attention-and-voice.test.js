@@ -133,6 +133,29 @@ test("dictation cancellation during permission prompt cannot start recognition o
   session.destroy();
 });
 
+test("voice cancellation during a pending permission prompt settles and releases any late stream", async () => {
+  let resolvePermission;
+  let recognitionStarts = 0;
+  let trackStops = 0;
+  const session = createVoiceSession({
+    speechProvider: { start() { recognitionStarts += 1; return {}; }, stop() {} },
+    environment: { navigator: { onLine: true, mediaDevices: { getUserMedia: () => new Promise((resolve) => { resolvePermission = resolve; }) } } },
+  });
+
+  const starting = session.start();
+  await Promise.resolve();
+  session.stop();
+  const result = await Promise.race([starting, new Promise((resolve) => setTimeout(() => resolve("still_pending"), 100))]);
+  assert.notEqual(result, "still_pending");
+  assert.equal(result.status, "cancelled");
+  resolvePermission({ getTracks: () => [{ stop() { trackStops += 1; } }] });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(trackStops, 1);
+  assert.equal(recognitionStarts, 0);
+  session.destroy();
+});
+
 test("dictation account switch ends the session and suppresses late transcript callbacks", async () => {
   let callbacks;
   let stops = 0;

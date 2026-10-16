@@ -182,6 +182,7 @@ test("per-attempt transcript counters stay capped under excessive provider callb
 test("cancellation during permission is reported once and late completion cannot start the provider", async () => {
   let resolvePermission;
   let starts = 0;
+  let trackStops = 0;
   const reports = [];
   const session = createDictationSession({
     speechProvider: { start() { starts += 1; return {}; }, stop() {} },
@@ -192,11 +193,45 @@ test("cancellation during permission is reported once and late completion cannot
   const pending = session.start({ consentGiven: true });
   await Promise.resolve();
   session.stop();
-  resolvePermission({ getTracks: () => [] });
-  assert.equal((await pending).status, "cancelled");
+  const cancelled = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve("still_pending"), 100))]);
+  assert.notEqual(cancelled, "still_pending");
+  assert.equal(cancelled.status, "cancelled");
   assert.equal(starts, 0);
   assert.equal(reports.length, 1);
   assert.equal(reports[0].status, "cancelled");
+  resolvePermission({ getTracks: () => [{ stop() { trackStops += 1; } }] });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(trackStops, 1);
+  assert.equal(starts, 0);
+  session.destroy();
+});
+
+test("a cancelled permission prompt can be retried without accepting its late stream", async () => {
+  const permissionResolvers = [];
+  const stoppedStreams = [];
+  let starts = 0;
+  const session = createDictationSession({
+    speechProvider: { start() { starts += 1; return {}; }, stop() {} },
+    environment: environmentWithPermission(() => new Promise((resolve) => permissionResolvers.push(resolve))),
+  });
+
+  const first = session.start({ consentGiven: true });
+  while (permissionResolvers.length < 1) await Promise.resolve();
+  session.stop();
+  assert.equal((await first).status, "cancelled");
+
+  const second = session.start({ consentGiven: true });
+  while (permissionResolvers.length < 2) await Promise.resolve();
+  permissionResolvers[1]({ getTracks: () => [{ stop() { stoppedStreams.push("new"); } }] });
+  assert.equal((await second).success, true);
+  assert.equal(starts, 1);
+
+  permissionResolvers[0]({ getTracks: () => [{ stop() { stoppedStreams.push("late-old"); } }] });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(stoppedStreams, ["new", "late-old"]);
+  assert.equal(starts, 1);
   session.destroy();
 });
 

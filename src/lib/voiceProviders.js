@@ -76,6 +76,17 @@ export async function requestMicrophonePermission(environment = globalThis) {
   }
 }
 
+function waitForMicrophonePermission(environment, cancellation) {
+  const permissionRequest = requestMicrophonePermission(environment).then(
+    (permission) => ({ permission }),
+    () => ({ permission: { granted: false, error: "Microphone access failed." } }),
+  );
+  return Promise.race([
+    permissionRequest,
+    cancellation.then(() => ({ cancelled: true })),
+  ]);
+}
+
 function stopMicrophoneProbeTracks(stream) {
   try {
     if (typeof stream?.getTracks !== "function") return false;
@@ -246,6 +257,7 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
   let destroyed = false;
   let generation = 0;
   let starting = null;
+  let cancelPermissionStart = null;
   let activeTurn = null;
 
   function transition(nextState, error = null) {
@@ -274,7 +286,17 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
       transition(VOICE_STATES.offline, "The browser is offline.");
       return { success: false, status: VOICE_STATES.offline, error: "The browser is offline." };
     }
-    const permission = await requestMicrophonePermission(environment);
+    const currentGeneration = ++generation;
+    let resolveStartupCancellation;
+    const startupCancellation = new Promise((resolve) => { resolveStartupCancellation = resolve; });
+    const cancelThisStart = () => resolveStartupCancellation();
+    cancelPermissionStart = cancelThisStart;
+    const permissionResult = await waitForMicrophonePermission(environment, startupCancellation);
+    if (cancelPermissionStart === cancelThisStart) cancelPermissionStart = null;
+    if (permissionResult.cancelled || destroyed || currentGeneration !== generation) {
+      return { success: false, status: "cancelled", error: "Voice start was cancelled." };
+    }
+    const permission = permissionResult.permission;
     if (!permission.granted) {
       transition(VOICE_STATES.permissionRequired, permission.error);
       return { success: false, status: VOICE_STATES.permissionRequired, error: permission.error };
@@ -283,7 +305,6 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
       state.transition(VOICE_STATES.idle);
     }
     transition(VOICE_STATES.listening);
-    const currentGeneration = ++generation;
     try {
       recognition = speechProvider.start({
       onTranscript: async (transcript) => {
@@ -326,6 +347,9 @@ export function createVoiceSession({ speechProvider, synthesisProvider, ask, env
 
   function stop() {
     generation += 1;
+    const cancelPendingPermission = cancelPermissionStart;
+    cancelPermissionStart = null;
+    cancelPendingPermission?.();
     activeTurn?.abort();
     activeTurn = null;
     try { speechProvider?.stop(recognition); } catch { /* A stopped provider cannot keep the session alive. */ }
@@ -425,6 +449,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
 
   function stop(terminalStatus = "stopped") {
     generation += 1;
+    attempt?.cancelStartup?.();
     if (terminalStatus === "visibility_hidden") visibilityInterruptedAt = now();
     else if (terminalStatus === "account_changed") visibilityInterruptedAt = null;
     finishAttempt(["account_changed", "visibility_hidden"].includes(terminalStatus) ? terminalStatus : active ? terminalStatus : "cancelled");
@@ -498,11 +523,17 @@ export function createDictationSession({ speechProvider, environment = globalThi
       return { success: false, status: VOICE_STATES.offline, error: "The browser is offline." };
     }
     const currentGeneration = ++generation;
-    const permission = await requestMicrophonePermission(environment);
-    if (destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) {
+    let cancelStartup;
+    const startupCancelled = new Promise((resolve) => { cancelStartup = resolve; });
+    const currentAttempt = attempt;
+    currentAttempt.cancelStartup = cancelStartup;
+    const permissionResult = await waitForMicrophonePermission(environment, startupCancelled);
+    if (currentAttempt.cancelStartup === cancelStartup) currentAttempt.cancelStartup = null;
+    if (permissionResult.cancelled || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) {
       finishAttempt("cancelled");
       return { success: false, status: "cancelled", error: "Dictation start was cancelled." };
     }
+    const permission = permissionResult.permission;
     if (isDocumentHidden()) {
       finishAttempt("visibility_hidden");
       return { success: false, status: "visibility_hidden", error: "Dictation can only start while the page is visible." };
@@ -519,7 +550,6 @@ export function createDictationSession({ speechProvider, environment = globalThi
     if ([VOICE_STATES.error, VOICE_STATES.offline, VOICE_STATES.permissionRequired].includes(state.state)) state.transition(VOICE_STATES.idle);
     active = true;
     transition(VOICE_STATES.listening);
-    const currentAttempt = attempt;
     currentAttempt.providerRequestedAt = now();
     try {
       recognition = activeSpeechProvider.start({
