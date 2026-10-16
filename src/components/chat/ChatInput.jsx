@@ -4,6 +4,7 @@ import { confirmSound } from "../../lib/heyFeedback";
 import { useLocale } from "../../i18n/LocaleContext.jsx";
 import { useAuth } from "../../AuthContext.jsx";
 import DictationControl from "./DictationControl.jsx";
+import DictationEditControl from "./DictationEditControl.jsx";
 
 export default function ChatInput({
   value,
@@ -63,6 +64,7 @@ export default function ChatInput({
       <div className="hey-chat-input-shell">
         <textarea
           ref={inputRef}
+          id="hey-chat-message-composer"
           maxLength={8000}
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -100,6 +102,7 @@ export default function ChatInput({
           </button>
         </div>
       </div>
+      <DictationEditControl inputRef={inputRef} setValue={setValue} disabled={disabled} userId={user?.id} />
     </div>
   );
 }

@@ -11,7 +11,7 @@ const isRecognitionAvailable = (environment) => Boolean(
   environment?.SpeechRecognition || environment?.webkitSpeechRecognition
 );
 
-export default function DictationControl({ onInsert, disabled = false, applicationId }) {
+export default function DictationControl({ onInsert, onCapture, captureLabel, disabled = false, applicationId }) {
   const { user } = useAuth();
   const { t } = useLocale();
   const translateRef = useRef(t);
@@ -244,10 +244,13 @@ export default function DictationControl({ onInsert, disabled = false, applicati
     restoreActionFocusRef.current = false;
     disclosureWasOpenRef.current = false;
     sessionRef.current?.stop();
-    onInsert(text);
+    if (onCapture) {
+      onCapture(text);
+      setStatus("Transcript captured for voice edit. Your draft is unchanged.");
+    } else onInsert(text);
     setTranscript("");
     setDisclosureOpen(false);
-    setStatus(translateRef.current("chat.dictation.inserted"));
+    if (!onCapture) setStatus(translateRef.current("chat.dictation.inserted"));
   }
 
   return (
@@ -361,7 +364,7 @@ export default function DictationControl({ onInsert, disabled = false, applicati
             )}
             {!isActive && (
               <>
-                <button ref={insertButtonRef} type="button" onClick={insertTranscript} disabled={disabled}>{t("chat.dictation.insert")}</button>
+                <button ref={insertButtonRef} type="button" onClick={insertTranscript} disabled={disabled}>{captureLabel || t("chat.dictation.insert")}</button>
                 <button type="button" className="hey-dictation__quiet" onClick={stopAndDiscard}>{t("chat.dictation.discard")}</button>
               </>
             )}

@@ -197,6 +197,10 @@
 .hey-chat-input-actions .hey-chat-send:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
 .hey-chat-disclaimer { margin: 9px 0 0; text-align: center; font-size: 9px; letter-spacing: .04em; text-transform: none; }
 .hey-chat-drawer-backdrop { display: none; }
+.hey-dictation-edit { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-2); color: var(--text-secondary); font-size: 12px; }
+.hey-dictation-edit > p { margin: 4px 0 10px; }
+.hey-dictation-edit__preview { display: grid; gap: 8px; }
+.hey-dictation-edit__preview blockquote { margin: 0; padding: 10px 12px; white-space: pre-wrap; border-left: 2px solid var(--accent); background: var(--surface-1); color: var(--text-primary); }
 
 @media (max-width: 900px) {
   .hey-chat-page { min-height: calc(100vh - 124px); }
