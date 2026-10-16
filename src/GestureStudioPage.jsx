@@ -104,7 +104,9 @@ export default function GestureStudioPage() {
   const custom = customGestures.find((item) => item.id === customGestureId);
   const customConflicts = custom ? gestureEngine.getCustomGestureConflicts(custom.id) : { status: "insufficient_samples", conflicts: [] };
   const supportedGestureIds = capability?.supportedGestureIds || [];
-  const canUseActiveMode = bindings.some((binding) => binding.enabled);
+  const enabledProfileMappings = bindings.filter((binding) => binding.enabled
+    && binding.profileId === profileId && binding.actionType === "ui" && binding.action === "summon");
+  const canUseActiveMode = enabledProfileMappings.length > 0;
 
   async function createProfile(event) {
     event.preventDefault(); setError(""); setMessage("");
@@ -230,6 +232,9 @@ export default function GestureStudioPage() {
         <section className="hey-gesture-studio__card" aria-labelledby="gesture-recognition-title">
           <div className="hey-gesture-studio__section-heading"><Camera size={20}/><div><h2 id="gesture-recognition-title">Camera and recognition</h2><p>{capabilityMessage(capability)}</p></div></div>
           <p className="hey-gesture-studio__privacy">Camera access is requested only after your explicit consent and Start. Camera frames and hand poses are processed on this device and are not sent to Google. Separately, the MediaPipe Tasks SDK sends performance and utilization metrics to Google. Raw video is not saved. Test mode never dispatches mapped actions.</p>
+          {profileId && !active && !paused && <p className="hey-gesture-studio__status" role="status" aria-live="polite">{canUseActiveMode
+            ? `This profile has ${enabledProfileMappings.length} enabled safe mapping${enabledProfileMappings.length === 1 ? "" : "s"}. Gesture mappings only request supported low-risk UI actions and do not grant higher-risk permission.`
+            : <>Active mode is unavailable for this profile until you add an enabled safe mapping. <a href="#gesture-mapping-title">Go to Safe mappings</a>. Test mode remains available and never dispatches actions.</>}</p>}
           <div className="hey-gesture-studio__session-controls">
             {!active && !paused && <><label>Session mode<select value={mode} onChange={(event) => setMode(event.target.value)} disabled={busy}><option value="test">Test only · no actions</option><option value="active" disabled={!canUseActiveMode}>Active · mapped actions</option></select></label><label className="hey-gesture-studio__consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} disabled={busy || !profileId || cameraBlocked}/><span>I consent to camera use for this gesture session.</span></label><button type="button" onClick={startSession} disabled={busy || !consent || !profileId || cameraBlocked}><Camera size={16}/>{busy ? "Starting…" : "Start recognition"}</button></>}
             {active && <><button type="button" onClick={() => gestureEngine.pauseRecognition()}><Pause size={16}/> Pause</button><button type="button" className="secondary" onClick={stopSession}><Square size={16}/> Stop</button></>}

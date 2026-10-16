@@ -44,6 +44,17 @@ test("Gesture Studio offers camera permission recovery for denied and revoked ac
   assert.match(studioSource, /Reconfirm consent and start recognition when ready/);
 });
 
+test("Gesture Studio explains profile-specific active mode recovery without granting action permission", () => {
+  assert.match(studioSource, /const enabledProfileMappings = bindings\.filter/);
+  assert.match(studioSource, /binding\.profileId === profileId && binding\.actionType === "ui" && binding\.action === "summon"/);
+  assert.match(studioSource, /Active mode is unavailable for this profile until you add an enabled safe mapping/);
+  assert.match(studioSource, /href="#gesture-mapping-title">Go to Safe mappings<\/a>/);
+  assert.match(studioSource, /Test mode remains available and never dispatches actions/);
+  assert.match(studioSource, /do not grant higher-risk permission/);
+  assert.match(studioSource, /if \(mode === "active" && !canUseActiveMode\)/);
+  assert.match(bridgeSource, /gestureEngine\.getRecognitionMode\(\) !== "active"/);
+});
+
 test("Gesture Studio explains camera track loss separately from permission revocation", () => {
   assert.match(studioSource, /reason === "camera_track_ended"\) \{ setConsent\(false\); setError\("The camera feed ended\./);
   assert.match(studioSource, /reason === "permission_revoked"\) \{ setConsent\(false\); setError\("Camera access was revoked\./);
