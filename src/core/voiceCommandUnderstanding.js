@@ -14,6 +14,12 @@ const pendingCommandPreviews = new Map();
 
 subscribeAccountScope(() => pendingCommandPreviews.clear());
 
+/** Recognize an explicit cancellation utterance without coercing non-string input. */
+export function isVoiceCommandCancellation(input) {
+  if (typeof input !== "string" || input.length > MAX_TEXT_LENGTH) return false;
+  return CANCEL_TERMS.test(input.trim());
+}
+
 function readDataObject(value, name) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${name} must be a plain data object.`);
   const prototype = Object.getPrototypeOf(value);

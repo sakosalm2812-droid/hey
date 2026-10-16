@@ -64,6 +64,7 @@ test("VoiceOS preview labels and status copy are accessible and translated for e
     "reviewedStatus", "dismiss", "reviewedAction", "cancelAction", "accountChanged",
     "accountRequiredVoice", "accountRequired", "differentAccount", "expired",
     "expiredRefresh", "expiredNotice", "refreshPreview", "cancelRefresh", "previewRefreshCancelled", "previewRefreshFailed", "previewFreshReady",
+    "cancelledByCommand", "preparationCancelled", "noPendingPreview", "cancelPreparationAction",
     "reviewNeedsAuthorization", "cancelled", "previewOnly", "voicePrepared",
     "capabilityAppOpen", "capabilityBrowserNavigate", "capabilityBrowserOpenUrl",
   ];
@@ -78,7 +79,8 @@ test("VoiceOS preview labels and status copy are accessible and translated for e
   }
 
   assert.match(source, /aria-label=\{t\("chat\.voiceOS\.sectionLabel"/);
-  assert.match(source, /role="status">\{t\("chat\.voiceOS\.checking"/);
+  assert.match(source, /<div className="hey-chat-preview-checking" role="status">/);
+  assert.match(source, /<span>\{t\("chat\.voiceOS\.checking"/);
   assert.match(source, /<p role="status">\{t\("chat\.voiceOS\.reviewedStatus"/);
   assert.match(source, /setExecutionStatus\(t\("chat\.voiceOS\.accountChanged"/);
   assert.match(source, /setExecutionStatus\(t\("chat\.voiceOS\.cancelled"/);
@@ -95,7 +97,7 @@ test("expired previews offer only a fresh preview and keep the original request 
   const refreshEnd = source.indexOf("function cancelComputerPreview()", refreshStart);
   assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
   const refreshHandler = source.slice(refreshStart, refreshEnd);
-  assert.match(refreshHandler, /createSafeComputerPreview\(pending\.message, controller\.signal\)/);
+  assert.match(refreshHandler, /createSafeComputerPreview\(pending\.message, previewController\.signal\)/);
   assert.match(refreshHandler, /storeComputerPreview\(\{ \.\.\.nextPreview, source: pending\.source \}\)/);
   assert.match(refreshHandler, /setMessage\(pending\.message\)/);
   assert.doesNotMatch(refreshHandler, /sendUserMessage|askHEY|executeRequest|invoke\(/);
@@ -110,6 +112,58 @@ test("expired preview refresh remains cancellable and keeps the original request
   assert.match(cancelHandler, /controller\.abort\(\)/);
   assert.match(cancelHandler, /chat\.voiceOS\.previewRefreshCancelled/);
   assert.doesNotMatch(cancelHandler, /storeComputerPreview\(null\)|setMessage\(/);
-  assert.match(source, /pendingComputerPreview\?\.expired && previewRefreshActive && <button[^>]*onClick=\{cancelComputerPreviewRefresh\}/);
-  assert.match(source, /if \(controller\.signal\.aborted\) \{[\s\S]*?cancelVoiceCommandPreview\(nextPreview\.preview\.previewId\)/);
+  assert.match(source, /onClick=\{refreshing \? cancelComputerPreviewRefresh : cancelComputerPreviewPreparation\}/);
+  assert.match(source, /if \(previewController\.signal\.aborted\) \{[\s\S]*?cancelVoiceCommandPreview\(nextPreview\.preview\.previewId\)/);
+});
+
+test("spoken or typed cancellation revokes a pending preview and aborts in-flight preview creation", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  assert.match(source, /if \(isVoiceCommandCancellation\(text\)\)/);
+  assert.match(source, /if \(isVoiceCommandCancellation\(trimmedMessage\)\)/);
+  assert.match(source, /previewController\.signal\.aborted\) return/);
+
+  const cancelStart = source.indexOf("const cancelPendingComputerPreviewFromCommand = useCallback(");
+  const cancelEnd = source.indexOf("useEffect(() => {", cancelStart);
+  assert.ok(cancelStart >= 0 && cancelEnd > cancelStart);
+  const cancelHandler = source.slice(cancelStart, cancelEnd);
+  assert.match(cancelHandler, /previewRequestControllerRef\.current\?\.abort\(\)/);
+  assert.match(cancelHandler, /pending\.accountScope !== getAccountScope\(\)/);
+  assert.match(cancelHandler, /cancelVoiceCommandPreview\(pending\.preview\.previewId\)/);
+  assert.match(cancelHandler, /storeComputerPreview\(null\)/);
+  assert.doesNotMatch(cancelHandler, /askHEY|sendUserMessage|executeRequest|invoke\(/);
+
+  const sendStart = source.indexOf("async function sendUserMessage(userMessage)");
+  const previewGuard = source.indexOf("if (previewRequestInFlightRef.current) return", sendStart);
+  const cancelGuard = source.indexOf("if (isVoiceCommandCancellation(trimmedMessage))", sendStart);
+  assert.ok(cancelGuard >= 0 && previewGuard > cancelGuard, "cancellation is handled before the in-flight preview guard");
+});
+
+test("the preview remains cancellable while refresh is pending and discards any late result", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const renderStart = source.indexOf("function renderComputerPreview()");
+  const renderEnd = source.indexOf("async function pinMessage", renderStart);
+  assert.ok(renderStart >= 0 && renderEnd > renderStart);
+  const renderHandler = source.slice(renderStart, renderEnd);
+  assert.match(renderHandler, /const checkingStatus = previewChecking \?/);
+  assert.match(renderHandler, /onClick=\{refreshing \? cancelComputerPreviewRefresh : cancelComputerPreviewPreparation\}/);
+  assert.doesNotMatch(renderHandler, /if \(previewChecking\)\s*\{\s*return/);
+
+  const preparationStart = source.indexOf("function cancelComputerPreviewPreparation()");
+  const preparationEnd = source.indexOf("useEffect(() => {", preparationStart);
+  assert.ok(preparationStart >= 0 && preparationEnd > preparationStart);
+  const preparationHandler = source.slice(preparationStart, preparationEnd);
+  assert.match(preparationHandler, /previewRequestControllerRef\.current\?\.abort\(\)/);
+  assert.doesNotMatch(preparationHandler, /storeComputerPreview\(null\)/);
+
+  const cancelStart = source.indexOf("function cancelComputerPreview()");
+  const cancelEnd = source.indexOf("function dismissComputerPreview()", cancelStart);
+  const cancelHandler = source.slice(cancelStart, cancelEnd);
+  assert.match(cancelHandler, /previewRequestControllerRef\.current\?\.abort\(\)/);
+
+  const refreshStart = source.indexOf("async function refreshComputerPreview()");
+  const refreshEnd = source.indexOf("function cancelComputerPreview()", refreshStart);
+  const refreshHandler = source.slice(refreshStart, refreshEnd);
+  assert.match(refreshHandler, /createSafeComputerPreview\(pending\.message, previewController\.signal\)/);
+  assert.match(refreshHandler, /if \(previewController\.signal\.aborted\) \{/);
+  assert.match(refreshHandler, /cancelVoiceCommandPreview\(nextPreview\.preview\.previewId\)/);
 });

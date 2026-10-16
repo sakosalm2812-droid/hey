@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
-import { cancelVoiceCommandPreview, understandVoiceCommand, validateVoiceCommandPreview, reviewVoiceCommandPreview } from "../src/core/voiceCommandUnderstanding.js";
+import { cancelVoiceCommandPreview, isVoiceCommandCancellation, understandVoiceCommand, validateVoiceCommandPreview, reviewVoiceCommandPreview } from "../src/core/voiceCommandUnderstanding.js";
 import HEY, { understandVoiceCommand as publicUnderstandVoiceCommand, validateVoiceCommandPreview as publicValidateVoiceCommandPreview, reviewVoiceCommandPreview as publicReviewVoiceCommandPreview } from "../src/core/index.js";
 
 test("voice command understanding is exposed through the canonical HEY API without execution behavior", async () => {
@@ -41,6 +41,21 @@ test("review records one account-scoped acknowledgment without authorizing execu
   } finally {
     setAccountScope(null);
   }
+});
+
+test("explicit cancellation detection is exact, bounded, and never coerces hostile input", () => {
+  assert.equal(isVoiceCommandCancellation("cancel"), true);
+  assert.equal(isVoiceCommandCancellation("Never mind."), true);
+  assert.equal(isVoiceCommandCancellation("stop"), true);
+  assert.equal(isVoiceCommandCancellation("cancel opening calculator"), false);
+  assert.equal(isVoiceCommandCancellation("x".repeat(4097)), false);
+
+  let getterCalls = 0;
+  const hostile = Object.defineProperty({}, "toString", {
+    get() { getterCalls += 1; throw new Error("input coercion must not run"); },
+  });
+  assert.equal(isVoiceCommandCancellation(hostile), false);
+  assert.equal(getterCalls, 0);
 });
 
 test("a command preview expires and its cancellation fence is one-use", async () => {
