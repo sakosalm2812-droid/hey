@@ -35,7 +35,6 @@ import {
   SlidersHorizontal,
   Wrench,
   Layers3,
-  GraduationCap,
   Hand,
 } from "lucide-react";
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -68,7 +67,6 @@ const sidebarNavItems = [
   { label: "Analytics", path: "/analytics", icon: BarChart3, roles: ['user', 'admin'] },
   { label: "Deen", path: "/deen", icon: Moon, roles: ['user', 'admin'] },
   { label: "Learn", path: "/learn", icon: BookOpen, roles: ['user', 'admin'] },
-  { label: "Teacher", path: "/teacher", icon: GraduationCap, roles: ['user', 'admin'] },
   { label: "Finance", path: "/finance", icon: CreditCard, roles: ['user', 'admin'] },
   { label: "Goals", path: "/goals", icon: Target, roles: ['user', 'admin'] },
   { label: "Habits", path: "/habits", icon: CheckSquare, roles: ['user', 'admin'] },
