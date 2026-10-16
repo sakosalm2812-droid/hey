@@ -1199,3 +1199,22 @@ Current root checkout has no uncommitted tracked source changes; keep `docs/requ
 
 - **Current status:** assignments were sent successfully to all eleven IDs. App thread snapshot showed 10 tasks active; task 09 was not present in that one limited snapshot and needs a fresh status check. No new wave 4 commit had appeared at dispatch recording time. Uncommitted worker changes, if any, remain isolated and must be recovered from each task/worktree before integration.
 - **Exact next actions:** check all eleven thread states and branch/worktree SHAs; recover every uncommitted worker diff from its assigned isolated checkout; wait for work through bounded progress checks while continuing integration; review and adversarially test each resulting commit; update this file with each branch, task ID, base, latest SHA, verification and merge state. Keep the current root checkout at the pushed baseline until each worker commit is reviewed. All live backend/provider/native/device/deployment blockers from wave 3 remain unchanged.
+
+### Wave 4 branch and worker snapshot — 2026-10-16
+
+The existing specialist threads are active. New branch heads were created from the requested common base; at this snapshot all listed refs still point to the unchanged base commit `70e789174e62eeed2dc42716bdf836914951a386`, so no wave 4 source commit is ready to integrate yet.
+
+| Specialist / task reference | Wave 4 branch | Latest observed SHA / state |
+|---|---|---|
+| 01 Frontend / `01a14073-33bf-7403-940b-871cd0de9ebc` | Pending isolated branch creation; read-only inspection was observed from coordinator root | Shared root was not edited; isolation reminder sent; prior wave branch `codex/frontend-chat-action-accessibility` remains at `7122f4b` |
+| 02 Spaces / `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-archive-recovery-ui-70e7891` | `70e7891`, no new commit observed |
+| 03 Tool Library / `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-canonical-recovery-1016` | `70e7891`, no new commit observed |
+| 04 Edge / `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-lease-recovery-70e7891` | `70e7891`, no new commit observed |
+| 05 Gesture / `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-detector-lifecycle-70e7891` | `70e7891`, no new commit observed |
+| 06 Flow / `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/dictation-undo-account-fence-70e7891` | `70e7891`, no new commit observed |
+| 07 VoiceOS / `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/voiceos-expiry-recovery-70e7891` | `70e7891`, no new commit observed |
+| 08 Teacher / `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-atomic-recovery-70e7891` | `70e7891`, no new commit observed |
+| 09 HEY One / `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-client-response-deadline-70e7891` | `70e7891`, no new commit observed |
+| 10 UltraSparse / `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-punctuation-evasion` | `70e7891`, no new commit observed |
+| 11 Fusion / `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-bounded-retry-70e7891` | `70e7891`, no new commit observed |
+
