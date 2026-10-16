@@ -317,6 +317,65 @@ test("tool lifecycle reports only declared actions and requires canonical accoun
   }
 });
 
+test("lifecycle status reports bounded platform and dependency availability without invoking tools", () => {
+  const capability = "test.tool_library.lifecycle_availability";
+  const missingDependencyCapability = "test.tool_library.lifecycle_missing_dependency";
+  const names = ["test.tool_library.lifecycle_availability_tool", "test.tool_library.lifecycle_missing_dependency_tool"];
+  registerCapability({ id: capability, name: "Lifecycle availability capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  registerCapability({
+    id: missingDependencyCapability,
+    name: "Capability with missing lifecycle prerequisite",
+    platformSupport: { web: CAPABILITY_STATUS.supported },
+    dependencies: ["test.tool_library.lifecycle_prerequisite_not_registered"],
+  });
+  setAccountScope("lifecycle-availability-account");
+  let executions = 0;
+  try {
+    for (const [name, declaredCapability] of [[names[0], capability], [names[1], missingDependencyCapability]]) {
+      registerTool(name, async () => { executions += 1; return { success: true, verified: true }; }, {
+        capabilities: [declaredCapability],
+        permission: "filesystem.read",
+      });
+    }
+    const user = { id: "lifecycle-availability-account" };
+    const unsupported = getToolLifecycleContract(names[0], { user, platform: "ios" });
+    assert.equal(unsupported.status, "registered", "execution lifecycle remains distinct from platform readiness");
+    assert.equal(unsupported.readiness, "unavailable");
+    assert.deepEqual(unsupported.availability, {
+      platform: "ios",
+      status: CAPABILITY_STATUS.unsupported,
+      available: false,
+      reason: "Platform support or a required runtime dependency is unavailable.",
+      capabilities: [{ capability, status: CAPABILITY_STATUS.unsupported, available: false }],
+    });
+
+    const missingDependency = getToolLifecycleContract(names[1], { user, platform: "web" });
+    assert.equal(missingDependency.availability.status, CAPABILITY_STATUS.unsupported);
+    assert.equal(missingDependency.availability.available, false);
+    assert.equal(missingDependency.availability.capabilities[0].available, false);
+    assert.equal(missingDependency.readiness, "unavailable");
+
+    const supported = getToolLifecycleContract(names[0], { user, platform: "web" });
+    assert.equal(supported.availability.available, true);
+    assert.equal(supported.readiness, "permission_required");
+    seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], user.id);
+    assert.equal(getToolLifecycleContract(names[0], { user, platform: "web" }).readiness, "ready");
+    assert.equal(executions, 0, "status inspection must not dispatch the registered handler");
+
+    let getterCalls = 0;
+    const hostileContext = { user };
+    Object.defineProperty(hostileContext, "platform", { get() { getterCalls += 1; return "web"; } });
+    const hostile = getToolLifecycleContract(names[0], hostileContext);
+    assert.equal(hostile.status, "invalid_context");
+    assert.equal(getterCalls, 0, "hostile context accessors must not run during status inspection");
+    assert.equal(executions, 0);
+  } finally {
+    names.forEach(unregisterTool);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
 test("lifecycle start is denied after permission revocation and never dispatches the handler", () => {
   const name = "test.tool_library.revoked_lifecycle";
   const capability = "test.tool_library.revoked_lifecycle_capability";
