@@ -59,6 +59,16 @@ test("Teacher entrypoint explains denied access and exposes truthful readiness a
   assert.match(page, /status === "saved" && persistenceConfirmed/);
 });
 
+test("Teacher creation entrypoint is teacher-authored and requires preview before an explicit Forge save", () => {
+  assert.match(page, /This screen organizes the lesson and assessment content you enter/);
+  assert.match(page, /AI-generated drafting is unavailable here/);
+  assert.match(page, /HEY will not invent lesson or question content/);
+  assert.match(page, /Build lesson preview/);
+  assert.match(page, /Save all three to Forge/);
+  assert.match(page, /HEY\.teacher\.prepareLessonWorksheetJourney/);
+  assert.match(page, /HEY\.teacher\.createLessonWorksheetJourney\(journeySaveRequest\)/);
+});
+
 test("Forge output appears only after three matching persistence receipts and complete audience exports", () => {
   const context = { accountScope: "account:teacher", workspaceId: "project-id", classId: "class-a" };
   assert.equal(teacherJourneyPersistenceMatches(persistedJourney(), context), true);

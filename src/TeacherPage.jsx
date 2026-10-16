@@ -385,6 +385,7 @@ export default function TeacherPage() {
 
       {access.status === "ready" && classIds.length > 0 && projects.length > 0 && (
         <>
+          <p className="teacher-page__authoring-note" role="note">This screen organizes the lesson and assessment content you enter. AI-generated drafting is unavailable here, so HEY will not invent lesson or question content. Review the preview, then choose Save all three to Forge to persist the lesson, teacher-only answer key, and student worksheet.</p>
           <form className="teacher-page__form" onSubmit={prepareLessonPreview}>
             <fieldset className="teacher-page__form-fields" disabled={formLocked}>
             <section className="teacher-page__scope" aria-labelledby="teacher-scope-title">

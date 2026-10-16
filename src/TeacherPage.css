@@ -35,6 +35,7 @@
 .teacher-page__question-card .teacher-page__teacher-answer { grid-column: span 2; }
 .teacher-page__remove { position: absolute; top: 2px; right: 8px; min-width: 30px; min-height: 28px !important; padding: 4px !important; border-color: transparent !important; color: #ffb0a4 !important; }
 .teacher-page__privacy-note { margin: 15px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 11px; }
+.teacher-page__authoring-note { margin: 0 0 16px; padding: 12px 14px; border: 1px solid rgba(214,182,107,.2); border-radius: 11px; background: rgba(214,182,107,.055); color: var(--text-secondary, #c2bec8); font-size: 12px; line-height: 1.55; }
 .teacher-page__submit-row { justify-content: flex-end; margin-top: 18px; }
 .teacher-page .teacher-page__primary { min-height: 43px; padding: 9px 15px; border-color: rgba(214,182,107,.4); background: rgba(214,182,107,.15); color: var(--text-primary, #f5f2ec); font-size: 12px; font-weight: 600; }
 .teacher-page .teacher-page__secondary { color: var(--text-secondary, #c2bec8); }
