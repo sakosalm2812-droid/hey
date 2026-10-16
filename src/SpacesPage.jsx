@@ -4,6 +4,7 @@ import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
 import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
+import { spaceDetailsFromRecord, spaceDetailsMatchAccount } from "./spacePageDetails.js";
 import { parseSpacePreferenceDraft, spacePreferencesMatchAccount } from "./spacePagePreferences.js";
 import "./SpacesPage.css";
 
@@ -203,6 +204,165 @@ function preferenceDraftFrom(snapshot) {
     widgetIds: snapshot.widgetIds.join("\n"),
     shortcutIds: snapshot.shortcutIds.join("\n"),
   };
+}
+
+function SpaceDetailsEditor({ space, accountId, accountRef, accountIsCurrent }) {
+  const [expanded, setExpanded] = useState(false);
+  const [details, setDetails] = useState(null);
+  const [draft, setDraft] = useState({ name: "", description: "" });
+  const [conflict, setConflict] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const activeScope = `account:${accountId}`;
+  const editorId = `space-details-${encodeURIComponent(space.id)}`;
+
+  useEffect(() => {
+    setExpanded(false);
+    setDetails(null);
+    setDraft({ name: "", description: "" });
+    setConflict(null);
+    setLoading(false);
+    setSaving(false);
+    setError("");
+    setNotice("");
+  }, [accountId, space.id]);
+
+  function acceptDetails(snapshot, { replaceDraft = true } = {}) {
+    setDetails(snapshot);
+    if (replaceDraft) setDraft({ name: snapshot.name, description: snapshot.description });
+    setConflict(null);
+  }
+
+  async function loadDetails() {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    setConflict(null);
+    await Promise.resolve();
+    if (accountRef.current !== accountId || getAccountScope() !== activeScope) {
+      setLoading(false);
+      setError("Your account changed. Reopen this Space before editing its details.");
+      return;
+    }
+    try {
+      const records = HEY.spaces.getPrivateSpaces();
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      const record = Array.isArray(records) ? records.find((item) => item?.id === space.id && item?.accountScope === activeScope) : null;
+      const snapshot = spaceDetailsFromRecord(record, accountId);
+      if (!snapshot) {
+        setError("Current Space details could not be loaded. Try again.");
+        return;
+      }
+      acceptDetails(snapshot);
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setError("Current Space details could not be loaded. Try again.");
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setLoading(false);
+    }
+  }
+
+  async function saveDetails(event) {
+    event.preventDefault();
+    if (!details || conflict || saving || !accountIsCurrent) return;
+    if (!spaceDetailsMatchAccount(details, accountId, getAccountScope(), space.id)) {
+      setError("Your account or Space changed. Reload its details before saving.");
+      return;
+    }
+    const patch = {};
+    if (draft.name !== details.name) patch.name = draft.name.trim();
+    if (draft.description !== details.description) patch.description = draft.description;
+    if (!Object.keys(patch).length) {
+      setNotice("There are no detail changes to save.");
+      setError("");
+      return;
+    }
+    if (!patch.name && Object.hasOwn(patch, "name")) {
+      setError("Enter a Space name before saving.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const records = HEY.spaces.getPrivateSpaces();
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      const record = Array.isArray(records) ? records.find((item) => item?.id === space.id && item?.accountScope === activeScope) : null;
+      const latest = spaceDetailsFromRecord(record, accountId);
+      if (!latest) {
+        setError("Current Space details could not be refreshed. Reload and try again.");
+        return;
+      }
+      if (latest.revision !== details.revision || latest.name !== details.name || latest.description !== details.description) {
+        setConflict(latest);
+        setError("These Space details changed elsewhere. Review the latest values before saving again.");
+        return;
+      }
+      const result = HEY.spaces.updateDetails({
+        accountScope: activeScope,
+        spaceId: space.id,
+        expectedRevision: latest.revision,
+        ...patch,
+      });
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      if (result?.code === "stale_revision" && spaceDetailsMatchAccount(result.current, accountId, getAccountScope(), space.id)) {
+        setConflict(result.current);
+        setError("These Space details changed while saving. Review the latest values before saving again.");
+        return;
+      }
+      const saved = result?.success === true ? { accountScope: result.accountScope, spaceId: result.spaceId, revision: result.revision, name: result.name, description: result.description } : null;
+      if (!spaceDetailsMatchAccount(saved, accountId, getAccountScope(), space.id)) {
+        setError(result?.error || "Space details were not saved. Reload and try again.");
+        return;
+      }
+      acceptDetails(saved);
+      setNotice(`Saved Space details at revision ${saved.revision}.`);
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setError("Space details were not saved. Reload and try again.");
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setSaving(false);
+    }
+  }
+
+  return <div className="spaces-page__details-editor">
+    <button type="button" className="spaces-page__membership-toggle" aria-expanded={expanded} aria-controls={editorId} onClick={() => {
+      const nextExpanded = !expanded;
+      setExpanded(nextExpanded);
+      if (nextExpanded && !details && !loading) loadDetails();
+    }}>
+      {expanded ? "Hide details" : "Edit Space details"}
+    </button>
+    {expanded && <section id={editorId} className="spaces-page__details-panel" aria-label={`Details for ${space.name}`}>
+      <p className="spaces-page__membership-note">Edit this private Space&apos;s name and description. Changes are saved only when you select Save details.</p>
+      {loading && <p className="spaces-page__status" role="status"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading current Space details…</p>}
+      {details && !loading && <form onSubmit={saveDetails}>
+        <div className="spaces-page__preference-fields">
+          <div className="spaces-page__preference-field"><label htmlFor={`${editorId}-name`}>Space name</label><p id={`${editorId}-name-help`}>A private name for this Space.</p><input id={`${editorId}-name`} aria-describedby={`${editorId}-name-help`} value={draft.name} maxLength={HEY.spaces.limits.maxNameLength} disabled={saving || !accountIsCurrent} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></div>
+          <div className="spaces-page__preference-field"><label htmlFor={`${editorId}-description`}>Description</label><p id={`${editorId}-description-help`}>Optional context, up to 240 characters.</p><textarea id={`${editorId}-description`} aria-describedby={`${editorId}-description-help`} value={draft.description} rows={3} maxLength={240} disabled={saving || !accountIsCurrent} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} /></div>
+        </div>
+        {conflict && <div className="spaces-page__preference-conflict" role="alert">
+          <p>Latest saved revision: {conflict.revision}. Review the current values against your draft before saving again.</p>
+          <p><strong>Space name:</strong> {conflict.name}</p><p><strong>Description:</strong> {conflict.description || "None"}</p>
+          <div className="spaces-page__actions">
+            <button type="button" className="spaces-page__secondary" onClick={() => { acceptDetails(conflict); setError(""); setNotice("Loaded the latest details; your draft was discarded."); }}>Load latest and discard my draft</button>
+            <button type="button" className="spaces-page__secondary" onClick={() => { acceptDetails(conflict, { replaceDraft: false }); setError(""); setNotice(`Latest revision ${conflict.revision} loaded. Review your draft and save it when ready.`); }}>Keep my draft and review latest</button>
+          </div>
+        </div>}
+        {error && !conflict && <p className="spaces-page__membership-error" role="alert">{error}</p>}
+        {notice && <p className="spaces-page__notice" role="status"><Check size={15} aria-hidden="true" /> {notice}</p>}
+        <div className="spaces-page__actions">
+          <button type="button" className="spaces-page__secondary" onClick={loadDetails} disabled={saving || loading}>Discard draft and reload</button>
+          <button type="submit" className="spaces-page__primary" disabled={saving || loading || Boolean(conflict) || !accountIsCurrent}>
+            {saving ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Check size={15} aria-hidden="true" />} Save details
+          </button>
+        </div>
+        <p className="spaces-page__preference-revision">Editing revision {details.revision}</p>
+      </form>}
+      {!details && !loading && <div className="spaces-page__message spaces-page__message--error" role="alert"><p>{error || "Space details are unavailable."}</p><button type="button" className="spaces-page__secondary" onClick={loadDetails} disabled={!accountIsCurrent}><RotateCw size={14} aria-hidden="true" /> Try again</button></div>}
+    </section>}
+  </div>;
 }
 
 function SpaceSavedPreferences({ space, accountId, accountRef }) {
@@ -799,6 +959,7 @@ export default function SpacesPage() {
             toolsStatus={toolCatalogAccountId === accountId ? toolCatalogStatus : "loading"}
             retryTools={loadToolCatalog}
           />
+          <SpaceDetailsEditor space={space} accountId={accountId} accountRef={accountRef} accountIsCurrent={accountIsCurrent} />
           <SpaceSavedPreferences space={space} accountId={accountId} accountRef={accountRef} />
         </li>)}</ul>}
       </section>
