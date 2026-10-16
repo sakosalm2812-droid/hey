@@ -10,6 +10,7 @@ const activeToolSessions = new Map();
 const toolSessionActivity = new Map();
 const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
+const MAX_ACTIVE_TOOL_SESSIONS_PER_ACCOUNT = 16;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
 const invocationPlans = new WeakMap();
 let capabilityAvailabilityResolver = null;
@@ -470,6 +471,13 @@ export function startToolLibraryEntry(name, input, context = {}) {
   if (current && ["starting", "running", "stopping"].includes(current.status)) {
     appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "conflict", at: new Date().toISOString() });
     return { success: false, status: "conflict", error: "This account already has an active run for this tool." };
+  }
+  const activeSessionCount = [...activeToolSessions.values()].filter((session) =>
+    session.accountId === identity.accountId && ["starting", "running", "stopping"].includes(session.status),
+  ).length;
+  if (activeSessionCount >= MAX_ACTIVE_TOOL_SESSIONS_PER_ACCOUNT) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "capacity", at: new Date().toISOString() });
+    return { success: false, status: "capacity", error: "This account has reached its active tool run limit." };
   }
 
   const id = crypto.randomUUID();

@@ -521,6 +521,48 @@ test("account-scoped lifecycle sessions resist concurrent reuse, cross-account s
   }
 });
 
+test("public lifecycle start enforces an account-scoped active session limit and recovers capacity", async () => {
+  const capability = "test.tool_library.lifecycle_capacity_capability";
+  const names = Array.from({ length: 17 }, (_, index) => `test.tool_library.lifecycle_capacity_${index}`);
+  registerCapability({ id: capability, name: "Lifecycle capacity capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-capacity-owner");
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-capacity-owner");
+  const owner = { user: { id: "lifecycle-capacity-owner", plan: "elite", entitlements: ["elite"] } };
+  try {
+    for (const name of names) {
+      registerTool(name, async (_input, { signal }) => {
+        await new Promise((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", resolve, { once: true });
+        });
+        return { success: false, error: "cancelled" };
+      }, {
+        capabilities: [capability],
+        permission: "filesystem.write",
+        lifecycle: { start: true, stop: true },
+      });
+    }
+
+    assert.equal(HEY.tools.start, startToolLibraryEntry);
+    assert.equal(HEY.tools.start(names[0], {}, { user: { id: "attacker", plan: "elite", entitlements: ["elite"] } }).status, "denied");
+    const starts = await Promise.all(names.map(async (name) => HEY.tools.start(name, {}, owner)));
+    assert.equal(starts.filter(({ success }) => success).length, 16);
+    assert.equal(starts[16].status, "capacity");
+    assert.deepEqual(HEY.tools.lifecycleActivity(names[16], owner).activity.map(({ status }) => status), ["capacity"]);
+
+    const stopped = HEY.tools.stop(names[0], starts[0].sessionId, owner);
+    assert.equal(stopped.status, "stopping");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(HEY.tools.lifecycle(names[0], owner).status, "cancelled");
+    const recovered = HEY.tools.start(names[16], {}, owner);
+    assert.equal(recovered.success, true, "settling a run frees a slot for the account");
+  } finally {
+    for (const name of names) unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
 test("a non-cooperative handler is never reported as stopped when it completes after a stop request", async () => {
   const name = "test.tool_library.lifecycle_noncooperative";
   const capability = "test.tool_library.lifecycle_noncooperative_capability";
