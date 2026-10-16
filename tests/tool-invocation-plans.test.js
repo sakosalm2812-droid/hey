@@ -165,6 +165,38 @@ test("output schema violations stop a plan and report a contract failure", async
   }
 });
 
+test("hostile handler output accessors are rejected before Tool Library can inspect them", async () => {
+  const name = "test.plan.hostile_output_accessor";
+  const capability = "test.plan.hostile_output_accessor_capability";
+  addCapability(capability);
+  setAccountScope("hostile-output-account");
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], "hostile-output-account");
+  let getterCalls = 0;
+  try {
+    registerTool(name, async () => {
+      const output = {};
+      Object.defineProperty(output, "verified", {
+        enumerable: true,
+        get() { getterCalls += 1; return true; },
+      });
+      return output;
+    }, { capabilities: [capability], permission: "filesystem.read", inputSchema: objectSchema({}) });
+
+    const result = await executeToolInvocationPlan(
+      createToolInvocationPlan([{ id: "hostile-output", toolName: name, input: {} }]),
+      { platform: "web", user: { id: "hostile-output-account", plan: "elite", entitlements: ["elite"] } },
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.status, "invalid_output");
+    assert.equal(result.results[0].result, null);
+    assert.equal(getterCalls, 0);
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
 test("Tool Library plans share the per-account capacity reservation and record plan activity", async () => {
   const accountId = "plan-capacity-account";
   const capability = "test.plan.capacity_capability";

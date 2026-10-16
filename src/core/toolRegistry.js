@@ -811,11 +811,24 @@ export async function executeTool(name, input, context = {}) {
     }, () => runWithRetries(tool, safeInput, { ...context, requestId }));
 
     if (permissionResult.result && typeof permissionResult.result === "object") {
+      let safeResult;
+      try {
+        safeResult = snapshotToolData(permissionResult.result, `Result from ${name}`);
+      } catch {
+        recordAudit({ action: "tool.rejected", tool: name, status: "invalid_output", requestId, metadata: { reason: "unsafe_output" } });
+        return {
+          success: false,
+          result: null,
+          error: "Tool output could not be safely displayed.",
+          status: "invalid_output",
+          metadata: { requestId, source: metadata.source || "tool_registry", confidence: 0 },
+        };
+      }
       return {
-        ...permissionResult.result,
+        ...safeResult,
         request: permissionResult.request,
         authorization: authResult,
-        metadata: { ...permissionResult.result.metadata, requestId, source: metadata.source || "tool_registry" },
+        metadata: { ...safeResult.metadata, requestId, source: metadata.source || "tool_registry" },
       };
     }
 
