@@ -47,12 +47,23 @@ export function registerComputerTools() {
   setToolCapabilityAvailabilityResolver((capability, platform) => getCapabilityAvailability(capability, platform, activeAdapter), COMPUTER_TOOL_OWNER);
   registerOwnedTool("computer.system_info", computerToolHandlers.get(OS_CAPABILITIES.systemInfo), {
     category: "system",
-    description: "Read basic information about this device using an available platform adapter.",
+    description: "Check this browser's device readiness using its reported platform, language, connection hint, screen, and resource hints. Values depend on browser support and do not confirm internet reachability.",
     capabilities: [OS_CAPABILITIES.systemInfo],
     permissions: ["system.info"],
     permission: "system.info",
     riskLevel: "low",
     inputSchema: { type: "object", properties: {} },
+    outputSchema: {
+      type: "object",
+      required: ["success", "platform", "data", "verified"],
+      properties: {
+        success: { type: "boolean" },
+        platform: { type: "string", maxLength: 32 },
+        data: { type: "object", additionalProperties: true },
+        verified: { type: "boolean" },
+      },
+      additionalProperties: true,
+    },
     source: "browser_adapter",
   }, COMPUTER_TOOL_OWNER);
 

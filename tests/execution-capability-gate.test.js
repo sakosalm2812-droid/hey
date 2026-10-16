@@ -60,6 +60,58 @@ test("natural URL execution uses the configured capability, requires approval, a
   }
 });
 
+test("Tool Library device-readiness check is read-only, permission-gated, schema-validated, and reports browser API failure", async () => {
+  const accountId = "device-readiness-tool-account";
+  const previousGlobals = Object.fromEntries(["navigator", "window", "screen"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  let browserReads = 0;
+  const browserNavigator = {
+    get connection() { browserReads += 1; return { effectiveType: "4g", downlink: 12, rtt: 50 }; },
+    get language() { browserReads += 1; return "en-US"; },
+    get onLine() { browserReads += 1; return false; },
+    get userAgent() { browserReads += 1; return "HEY test browser"; },
+    get deviceMemory() { browserReads += 1; return 4; },
+    get hardwareConcurrency() { browserReads += 1; return 8; },
+    async getBattery() { throw new Error("Battery API unavailable"); },
+  };
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: browserNavigator });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { ontouchstart: null, PointerEvent: function PointerEvent() {}, devicePixelRatio: 2 } });
+  Object.defineProperty(globalThis, "screen", { configurable: true, value: { width: 1366, height: 768, availWidth: 1366, availHeight: 728, orientation: { type: "landscape-primary" } } });
+  setAccountScope(accountId);
+  seedPermissions([], accountId);
+  try {
+    registerComputerTools();
+    const entry = listToolCatalog({ platform: "web" }).find(({ name }) => name === "computer.system_info");
+    assert.equal(entry.status, "supported");
+    assert.match(entry.description, /device readiness/i);
+
+    const denied = await runToolLibraryEntry("computer.system_info", {}, { platform: "web", user: { id: accountId, plan: "pro" } });
+    assert.equal(denied.success, false);
+    assert.equal(denied.status, "denied");
+    assert.equal(browserReads, 0, "permission denial must happen before reading browser state");
+
+    seedPermissions([{ permission: "system.info", status: "granted", scope: "account" }], accountId);
+    const failed = await runToolLibraryEntry("computer.system_info", {}, { platform: "web", user: { id: accountId, plan: "pro" } });
+    assert.equal(failed.success, false);
+    assert.match(failed.error, /Battery API unavailable/);
+    assert.notEqual(failed.metadata.verified, true, "a failed browser read must never carry verification evidence");
+
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { ...browserNavigator, getBattery: undefined } });
+    const checked = await runToolLibraryEntry("computer.system_info", {}, { platform: "web", user: { id: accountId, plan: "pro" } });
+    assert.equal(checked.success, true);
+    assert.equal(checked.result.verified, true);
+    assert.equal(checked.result.platform, "web");
+    assert.equal(checked.result.data.online, false, "the browser's offline hint is reported without claiming internet reachability");
+    assert.equal(checked.result.data.screen.orientation, "landscape-primary");
+  } finally {
+    clearPermissions();
+    setAccountScope(null);
+    for (const key of ["navigator", "window", "screen"]) {
+      if (previousGlobals[key]) Object.defineProperty(globalThis, key, previousGlobals[key]);
+      else delete globalThis[key];
+    }
+  }
+});
+
 test("execution refuses a browser capability absent from the configured adapter", async () => {
   let dispatched = 0;
   registerComputerTools();

@@ -597,10 +597,14 @@ test("permission policy enforces account tier boundaries", () => {
   const elitePolicy = getPermissionPolicy("elite");
 
   assert.equal(freePolicy.allowed.includes("web.search"), true);
+  assert.equal(freePolicy.allowed.includes("system.info"), true, "read-only device readiness is available to every account tier when granted");
   assert.equal(freePolicy.allowed.includes("device.control"), false);
   assert.equal(isPermissionAllowed({ plan: "free", permission: "device.control" }), false);
   assert.equal(isPermissionAllowed({ plan: "pro", permission: "device.control", granted: true }), true);
   assert.equal(isPermissionAllowed({ plan: "elite", permission: "terminal.execute", granted: true }), true);
+  assert.equal(isPermissionAllowed({ plan: "free", permission: "system.info", granted: true }), true);
+  assert.equal(isPermissionAllowed({ plan: "pro", permission: "system.info", granted: true }), true);
+  assert.equal(isPermissionAllowed({ plan: "elite", permission: "system.info", granted: true }), true);
   assert.equal(isPermissionAllowed({ plan: "pro", permission: "terminal.execute", granted: true }), false);
   assert.equal(proPolicy.allowed.includes("device.control"), true);
   assert.equal(elitePolicy.allowed.includes("terminal.execute"), true);
