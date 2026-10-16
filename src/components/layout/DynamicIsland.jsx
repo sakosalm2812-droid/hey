@@ -31,6 +31,7 @@ import { useLongPress } from "../../hooks/useLongPress.js";
 import { buzz, confirmSound } from "../../lib/heyFeedback.js";
 import { springs } from "../../lib/heyMotion.js";
 import { loadStoredProactiveSettings } from "../../lib/proactiveStore.js";
+import { getSafeNotificationActions, getSafeNotificationPath } from "../../lib/notificationNavigation.js";
 
 const CATEGORY_STYLES = {
   success: { color: "var(--green-accent)", Icon: CheckCircle2 },
@@ -136,8 +137,9 @@ export default function DynamicIsland() {
 
   function openItem(item) {
     markNotificationRead(item.id);
-    if (item.path) {
-      navigate(item.path);
+    const path = getSafeNotificationPath(item.path);
+    if (path) {
+      navigate(path);
       buzz("light");
     }
   }
@@ -200,8 +202,10 @@ export default function DynamicIsland() {
                 {visible.map((item) => {
                   const style = CATEGORY_STYLES[item.category] || CATEGORY_STYLES.info;
                   const Icon = style.Icon;
+                  const itemPath = getSafeNotificationPath(item.path);
+                  const actions = getSafeNotificationActions(item.actions);
                   return (
-                    <motion.div
+                    <motion.article
                       key={item.id}
                       layout
                       initial={{ opacity: 0, y: 6 }}
@@ -212,10 +216,8 @@ export default function DynamicIsland() {
                         alignItems: "flex-start",
                         padding: "10px 12px",
                         borderRadius: 14,
-                        cursor: item.path || item.actions.length ? "pointer" : "default",
                         background: item.read ? "rgba(255,255,255,.03)" : "rgba(255,255,255,.06)",
                       }}
-                      onClick={() => openItem(item)}
                     >
                       <Icon size={16} style={{ marginTop: 2, flexShrink: 0 }} color={style.color} />
                       <div style={{ minWidth: 0, flex: 1 }}>
@@ -226,13 +228,16 @@ export default function DynamicIsland() {
                         {item.body && (
                           <p style={{ marginTop: 3, fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>{item.body}</p>
                         )}
-                        {item.actions?.map((action) => (
+                        {itemPath
+                          ? <button type="button" className="hey-btn-ghost" style={{ marginTop: 8, gap: 6, padding: "5px 10px", fontSize: 12.5 }} onClick={() => openItem(item)} aria-label={`Open ${item.title}`}>Open notification <ArrowRight size={12} /></button>
+                          : !item.read && <button type="button" className="hey-btn-ghost" style={{ marginTop: 8, gap: 6, padding: "5px 10px", fontSize: 12.5 }} onClick={() => markNotificationRead(item.id)} aria-label={`Mark ${item.title} as read`}>Mark as read</button>}
+                        {actions.map((action) => (
                           <button
                             key={action.label}
                             type="button"
                             className="hey-btn-ghost"
                             style={{ marginTop: 8, gap: 6, padding: "5px 10px", fontSize: 12.5 }}
-                            onClick={(event) => { event.stopPropagation(); markNotificationRead(item.id); if (action.path) navigate(action.path); }}
+                            onClick={() => { markNotificationRead(item.id); const path = getSafeNotificationPath(action.path); if (path) navigate(path); }}
                           >
                             {action.label} <ArrowRight size={12} />
                           </button>
@@ -243,11 +248,11 @@ export default function DynamicIsland() {
                         aria-label={`Dismiss ${item.title}`}
                         className="hey-btn-ghost"
                         style={{ padding: 4 }}
-                        onClick={(event) => { event.stopPropagation(); dismissNotification(item.id); buzz("light"); }}
+                        onClick={() => { dismissNotification(item.id); buzz("light"); }}
                       >
                         <X size={13} />
                       </button>
-                    </motion.div>
+                    </motion.article>
                   );
                 })}
               </div>
