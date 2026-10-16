@@ -17,7 +17,7 @@ import {
   selectResponseStyle,
 } from "./responseStyleEngine.js";
 import { buildQualityInstruction } from "./qualityEngine.js";
-import { createProviderPlan } from "./providerRouter.js";
+import { createUltraSparsePlan } from "./ultrasparseRouter.js";
 import { parseNaturalCommand } from "./commandParser.js";
 import { registerComputerTools } from "./computerTools.js";
 import { registerGenerationTools } from "./generationTools.js";
@@ -244,9 +244,10 @@ export function processInput(message) {
         )
       : null;
 
-  const providerPlan = createProviderPlan({
+  const adaptivePlan = createUltraSparsePlan(normalizedInput, {
     intent: analysis.intent,
   });
+  const providerPlan = adaptivePlan.providerPlan;
 
   addConversationMessage({
     role: "user",

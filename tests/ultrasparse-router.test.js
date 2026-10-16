@@ -19,6 +19,27 @@ test("ultrasparse selector chooses matching experts deterministically and sparse
   assert.equal(selectUltraSparseExperts("Please debug this JavaScript function and cite the source.").experts[0].id, "coding");
 });
 
+test("UltraSparse capability hints are advisory and retain the ordinary provider plan when unavailable", () => {
+  clearProviders();
+  const coding = createUltraSparsePlan("Implement a JavaScript function and fix this bug", { intent: "task" });
+  assert.equal(coding.experts.experts[0].id, "coding");
+  assert.equal(coding.providerPlan.adaptiveRouting.kind, "lexical-capability-hint");
+  assert.equal(coding.providerPlan.adaptiveRouting.requestedCapability, "coding");
+  if (coding.providerPlan.adaptiveRouting.applied) {
+    assert.equal(coding.providerPlan.capability, "coding");
+    assert.ok(coding.providerPlan.selected.capabilities.includes("coding"));
+  } else {
+    assert.equal(coding.providerPlan.adaptiveRouting.fallback, "no_capable_permitted_model");
+    assert.equal(coding.providerPlan.capability, "chat");
+  }
+  assert.equal(coding.inferencePerformed, false);
+
+  const unmatched = createUltraSparsePlan("Hello there", { intent: "conversation" });
+  assert.equal(unmatched.providerPlan.capability, "chat");
+  assert.equal(unmatched.providerPlan.adaptiveRouting.requestedCapability, null);
+  assert.equal(unmatched.providerPlan.adaptiveRouting.applied, false);
+});
+
 test("selector rejects non-text input and leaves unsupported text unassigned", () => {
   assert.equal(selectUltraSparseExperts(null).status, "invalid_input");
   assert.deepEqual(selectUltraSparseExperts("hello there").experts, []);

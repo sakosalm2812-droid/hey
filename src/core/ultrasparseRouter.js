@@ -15,6 +15,11 @@ const MAX_EXPERTS = 3;
 const MAX_CATALOG_EXPERTS = 10_000;
 const MAX_CATALOG_TERMS = 250_000;
 export const ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS = 4_000_000;
+const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
+  coding: "coding",
+  research: "reasoning",
+  math: "reasoning",
+});
 const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
 const TOKEN_EXPERT_INDEX = new Map();
 const TOKEN_EXPERT_MASK_INDEX = new Map();
@@ -273,10 +278,30 @@ export function selectUltraSparseExpertsMasked(input, { limit = 2 } = {}) {
  * validate provider inference through the existing trusted runtime.
  */
 export function createUltraSparsePlan(input, { intent = "conversation", limit = 2 } = {}) {
+  const selection = selectUltraSparseExperts(input, { limit });
+  const primaryExpert = selection.experts[0]?.id || null;
+  const capabilityHint = primaryExpert ? PROVIDER_CAPABILITY_BY_EXPERT[primaryExpert] || null : null;
+  const hintedProviderPlan = capabilityHint
+    ? createProviderPlan({ intent, capability: capabilityHint })
+    : null;
+  const useHintedPlan = Boolean(hintedProviderPlan?.selected);
+  const selectedProviderPlan = useHintedPlan
+    ? hintedProviderPlan
+    : createProviderPlan({ intent });
+
   return {
     prototype: "lexical-ultrasparse-v1",
-    experts: selectUltraSparseExperts(input, { limit }),
-    providerPlan: createProviderPlan({ intent }),
+    experts: selection,
+    providerPlan: {
+      ...selectedProviderPlan,
+      adaptiveRouting: {
+        kind: "lexical-capability-hint",
+        expert: primaryExpert,
+        requestedCapability: capabilityHint,
+        applied: useHintedPlan,
+        fallback: capabilityHint && !useHintedPlan ? "no_capable_permitted_model" : null,
+      },
+    },
     inferencePerformed: false,
   };
 }
