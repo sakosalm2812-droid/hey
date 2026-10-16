@@ -193,7 +193,7 @@ function estimateInputTokenCeiling(messages, additionalContextBytes = 0) {
   return new TextEncoder().encode(`${content}\n\n${FUSION_INSTRUCTION}`).byteLength + messages.length * 16 + 128 + additionalContextBytes;
 }
 
-async function requestProvider({ provider, attempt, messages, candidate, signal, fetchImpl, onDispatch }) {
+async function requestProvider({ provider, attempt, messages, candidate, signal, fetchImpl, onDispatch, onUsageReported }) {
   if (signal?.aborted) throw new Error("Provider request cancelled");
   const startedAt = Date.now();
   let url;
@@ -267,6 +267,14 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
   } catch {
     throw new Error("Provider returned malformed data");
   }
+  const usage = readUsage(provider.id, data);
+  if (!usage) throw new Error("Provider usage is unavailable");
+  if (usage.inputTokens > provider.maxInputTokens || usage.outputTokens > provider.maxOutputTokens) {
+    throw new Error("Provider usage exceeded its reserved token bounds");
+  }
+  const costUsd = calculateCost(usage, provider);
+  if (costUsd > provider.reservedCostUsd) throw new Error("Provider usage exceeded its reserved cost");
+  onUsageReported?.(costUsd);
   const text = readProviderText(provider.id, data);
   if (text.length > 16_000) throw new Error("Provider output too large");
   let parsed;
@@ -276,13 +284,6 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
     throw new Error("Provider output did not match the structured response contract");
   }
   if (!hasBoundAnswerEvidence(parsed)) throw new Error("Provider answer was not bound to its evidence claim");
-  const usage = readUsage(provider.id, data);
-  if (!usage) throw new Error("Provider usage is unavailable");
-  if (usage.inputTokens > provider.maxInputTokens || usage.outputTokens > provider.maxOutputTokens) {
-    throw new Error("Provider usage exceeded its reserved token bounds");
-  }
-  const costUsd = calculateCost(usage, provider);
-  if (costUsd > provider.reservedCostUsd) throw new Error("Provider usage exceeded its reserved cost");
   return {
     ...parsed,
     costUsd,
@@ -424,12 +425,13 @@ export async function runFusionChatRequest({
         attemptReceipt = { providerId, modelId: provider.model, role, usageStatus: "unknown" };
         providerAttempts.push(attemptReceipt);
       };
-      if (typeof getCurrentEntitlements !== "function") {
-        const output = await requestProvider({ provider, attempt, messages, candidate, signal: providerSignal, fetchImpl, onDispatch });
+      const onUsageReported = (costUsd) => {
         callsMetered += 1;
-        providerReportedUsd += output.costUsd;
+        providerReportedUsd += costUsd;
         attemptReceipt.usageStatus = "reported";
-        return output;
+      };
+      if (typeof getCurrentEntitlements !== "function") {
+        return await requestProvider({ provider, attempt, messages, candidate, signal: providerSignal, fetchImpl, onDispatch, onUsageReported });
       }
 
       const authorityController = new AbortController();
@@ -472,13 +474,10 @@ export async function runFusionChatRequest({
       pollTimer = setInterval(() => { void pollAuthority(); }, authorityRecheckIntervalMs);
       if (authorityController.signal.aborted) stopPolling();
       try {
-        const result = await requestProvider({ provider, attempt, messages, candidate, signal: authorityController.signal, fetchImpl, onDispatch });
+        const result = await requestProvider({ provider, attempt, messages, candidate, signal: authorityController.signal, fetchImpl, onDispatch, onUsageReported });
         if (authorityFailure) {
           throw Object.assign(new Error("Provider authorization changed"), { providerAuthorization: authorityFailure });
         }
-        callsMetered += 1;
-        providerReportedUsd += result.costUsd;
-        attemptReceipt.usageStatus = "reported";
         return result;
       } catch (error) {
         if (authorityFailure) {

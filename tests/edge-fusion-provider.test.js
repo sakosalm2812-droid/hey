@@ -540,6 +540,13 @@ test("Fusion withholds the candidate when verifier evidence does not bind to its
   assert.equal(result.reason, "independent_provider_failed");
   assert.equal(calls.length, 2);
   assert.equal("answer" in result, false);
+  assert.equal(result.costReceipt.callsMetered, 2);
+  assert.ok(Math.abs(result.costReceipt.providerReportedUsd - 0.00018) < 1e-9);
+  assert.equal(result.costReceipt.providerAttempts.length, 2);
+  assert.ok(result.costReceipt.providerAttempts.every((attempt) => attempt.usageStatus === "reported"));
+  const serializedResult = JSON.stringify(result);
+  assert.equal(serializedResult.includes("The answer is 42."), false);
+  assert.equal(serializedResult.includes("The answer is 43."), false);
   assert.deepEqual(result.partialProviderFailure, {
     policy: "require_independent_confirmation",
     disposition: "answer_withheld",
