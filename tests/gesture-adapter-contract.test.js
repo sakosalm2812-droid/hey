@@ -1302,6 +1302,99 @@ test("browser camera permission revocation stops the session and unregisters its
   assert.equal(engine.gestureCooldowns.size, 0);
 });
 
+test("permission reset to prompt stops capture, permits a consented retry, and fences the old listener", async () => {
+  const { engine, profile } = makeEngine();
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousDocument = globalThis.document;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
+  const permissionListeners = new Set();
+  const permissionStatus = {
+    state: "granted",
+    addEventListener(name, listener) { if (name === "change") permissionListeners.add(listener); },
+    removeEventListener(name, listener) { if (name === "change") permissionListeners.delete(listener); },
+  };
+  const tracks = [];
+  const streams = [];
+  const videos = [];
+  let cameraRequests = 0;
+  let adapterStops = 0;
+  const states = [];
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        async getUserMedia() {
+          cameraRequests += 1;
+          const track = { readyState: "live", stop() { track.readyState = "ended"; track.stops = (track.stops || 0) + 1; }, addEventListener() {} };
+          const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+          tracks.push(track);
+          streams.push(stream);
+          return stream;
+        },
+      },
+      permissions: { async query({ name }) { assert.equal(name, "camera"); return permissionStatus; } },
+    },
+  });
+  globalThis.document = {
+    createElement(kind) {
+      if (kind !== "video") return {};
+      const video = { readyState: 1, srcObject: null, async play() {}, pause() {} };
+      videos.push(video);
+      return video;
+    },
+  };
+  globalThis.requestAnimationFrame = () => 1;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+  engine.subscribe((event, payload) => { if (event === "recognition_state_changed") states.push(payload); });
+  const originalPermissionListenerCount = permissionListeners.size;
+
+  try {
+  assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "test" })).success, true);
+  const firstListener = [...permissionListeners][0];
+  assert.equal(typeof firstListener, "function");
+  permissionStatus.state = "prompt";
+  firstListener();
+
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.cameraCapabilityStatus, "revoked");
+  assert.equal(tracks[0].readyState, "ended");
+  assert.equal(tracks[0].stops, 1);
+  assert.equal(adapterStops, 1);
+  assert.equal(permissionListeners.size, originalPermissionListenerCount);
+  assert.equal(states.at(-1)?.reason, "permission_revoked");
+
+  const recovered = await engine.recheckCameraAccess();
+  assert.equal(recovered.status, "supported");
+  assert.equal(recovered.permission, "prompt");
+  assert.equal(recovered.sessionState, GESTURE_STATES.INACTIVE);
+  permissionStatus.state = "granted";
+  assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "test" })).success, true);
+  assert.equal(cameraRequests, 2);
+  assert.equal(videos[1].srcObject, streams[1]);
+  firstListener(); // A queued event from the stopped session must not close the replacement session.
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
+  assert.equal(tracks[1].readyState, "live");
+  assert.equal(adapterStops, 1);
+
+  permissionStatus.state = "denied";
+  [...permissionListeners][0]();
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.cameraCapabilityStatus, "revoked");
+  assert.equal(tracks[1].readyState, "ended");
+  assert.equal(tracks[1].stops, 1);
+  assert.equal(adapterStops, 2);
+  assert.equal(permissionListeners.size, 0);
+  } finally {
+    if (engine.getRecognitionState() !== GESTURE_STATES.INACTIVE) engine.stopRecognition("test_cleanup");
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete globalThis.navigator;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousAnimationFrame;
+  }
+});
+
 test("an ended camera track stops recognition without misreporting permission revocation", async () => {
   const { engine, profile } = makeEngine();
   const camera = installCamera();

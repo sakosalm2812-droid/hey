@@ -72,7 +72,7 @@ export default function GestureStudioPage() {
       if (event === "recognition_state_changed") {
         setSessionState(payload?.state || gestureEngine.getRecognitionState());
         void gestureEngine.getRecognitionCapability().then(setCapability);
-        if (payload?.reason === "permission_revoked") { setConsent(false); setError("Camera access was revoked. Recognition stopped and camera tracks were released."); }
+        if (payload?.reason === "permission_revoked") { setConsent(false); setError("Camera permission was reset or revoked. Recognition stopped and camera tracks were released. Check camera access, then give consent and start again."); }
         if (payload?.reason === "camera_track_ended") { setConsent(false); setError("The camera feed ended. Recognition stopped and camera tracks were released. Check the camera and restart when ready."); }
         if (payload?.reason === "camera_frame_stalled") { setConsent(false); setError("Camera frames stopped advancing. Recognition stopped and camera tracks were released. Check the camera connection, then give consent again to restart."); }
         if (payload?.reason === "page_hidden") { setConsent(false); setError("Gesture recognition stopped because this page became hidden. Camera access was released; give consent to start again."); }

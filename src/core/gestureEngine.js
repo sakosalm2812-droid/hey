@@ -458,6 +458,7 @@ export class GestureEngine {
     let status;
     if (!cameraSupported) status = "unavailable";
     else if (permission === "denied") status = this.cameraCapabilityStatus === "revoked" ? "revoked" : "permission_denied";
+    else if (permission === "prompt") status = "supported";
     else if (this.cameraCapabilityStatus === "revoked" && permission !== "granted") status = "revoked";
     else status = "supported";
     this.setCameraCapabilityStatus(status);
@@ -1006,7 +1007,10 @@ export class GestureEngine {
       }
 
       const onChange = () => {
-        if (generation === this.recognitionGeneration && status.state === "denied") {
+        if (generation !== this.recognitionGeneration) return;
+        let permissionState;
+        try { permissionState = status.state; } catch { permissionState = "unavailable"; }
+        if (permissionState !== "granted") {
           this.setCameraCapabilityStatus("revoked", "permission_revoked");
           this.stopRecognition("permission_revoked");
         }

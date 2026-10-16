@@ -60,6 +60,8 @@ test("Gesture Studio offers camera permission recovery for denied and revoked ac
   assert.match(studioSource, /void recheckCameraAccess\(\)/);
   assert.match(studioSource, /setConsent\(false\)/);
   assert.match(studioSource, /Reconfirm consent and start recognition when ready/);
+  assert.match(studioSource, /Camera permission was reset or revoked/);
+  assert.match(studioSource, /Check camera access, then give consent and start again/);
 });
 
 test("Gesture Studio explains profile-specific active mode recovery without granting action permission", () => {
@@ -75,7 +77,7 @@ test("Gesture Studio explains profile-specific active mode recovery without gran
 
 test("Gesture Studio explains camera track loss separately from permission revocation", () => {
   assert.match(studioSource, /reason === "camera_track_ended"\) \{ setConsent\(false\); setError\("The camera feed ended\./);
-  assert.match(studioSource, /reason === "permission_revoked"\) \{ setConsent\(false\); setError\("Camera access was revoked\./);
+  assert.match(studioSource, /reason === "permission_revoked"\) \{ setConsent\(false\); setError\("Camera permission was reset or revoked\./);
 });
 
 test("Gesture Studio asks for fresh consent after the camera feed stalls", () => {
