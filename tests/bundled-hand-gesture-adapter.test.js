@@ -84,6 +84,47 @@ test("bundled adapter initializes local MediaPipe assets, emits hand detections,
   assert.equal(detectorClosed, 1);
 });
 
+test("explicit handedness profiles reject unknown detector labels before pose calibration", async () => {
+  const previousDocument = globalThis.document;
+  class UnknownHandLandmarker {
+    static async createFromOptions() { return new UnknownHandLandmarker(); }
+    detectForVideo() {
+      return {
+        landmarks: [makeLandmarks([true, true, true, true, true])],
+        handedness: [[{ score: 0.98, categoryName: "unclassified" }]],
+      };
+    }
+    close() {}
+  }
+  globalThis.document = {
+    createElement() {
+      return { getContext() { return { putImageData() {} }; } };
+    },
+  };
+  const adapter = createBundledHandGestureAdapter({
+    assetBaseUrl: "https://local.test/app/mediapipe/vision/",
+    handsLoader: async () => ({ HandLandmarker: UnknownHandLandmarker }),
+  });
+
+  try {
+    assert.equal(await adapter.prepare({ signal: new AbortController().signal }), true);
+    const frame = { width: 640, height: 480, data: new Uint8ClampedArray(4) };
+    const signal = new AbortController().signal;
+
+    assert.equal(await adapter.detect(frame, { handedness: "left", sensitivity: 0.8 }, { signal }), null);
+    assert.equal(adapter.getLatestObservation(), null);
+
+    assert.deepEqual(
+      await adapter.detect(frame, { handedness: "both", sensitivity: 0.8 }, { signal }),
+      { id: "G01", confidence: 0.98, handedness: "unknown" },
+    );
+    assert.equal(adapter.getLatestObservation().handedness, "unknown");
+  } finally {
+    adapter.stop("test_cleanup");
+    globalThis.document = previousDocument;
+  }
+});
+
 test("cancelled detector preparation cannot publish a ready instance", async () => {
   let resolveLoader;
   const adapter = createBundledHandGestureAdapter({

@@ -152,7 +152,7 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
       const handLabel = String(handCategory?.categoryName || "").toLowerCase();
       const handedness = handLabel === "left" || handLabel === "right" ? handLabel : "unknown";
       const preferredHand = profile?.handedness || profile?.dominantHand || "both";
-      if (preferredHand !== "both" && handedness !== "unknown" && preferredHand !== handedness) {
+      if (preferredHand !== "both" && preferredHand !== handedness) {
         previousGesture = null;
         latestObservation = null;
         return null;
