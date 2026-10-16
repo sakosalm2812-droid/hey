@@ -10,6 +10,7 @@ import { resolveAccountPlan } from "./lib/accountRecords.js";
 import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryRecord } from "./lib/toolLibraryReceipts.js";
 import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolLibrarySearch.js";
 import { getDictationReadiness } from "./lib/dictationReadiness.js";
+import { getToolLibraryLifecycleView } from "./lib/toolLibraryLifecycleView.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
@@ -46,6 +47,7 @@ function initialInputValues(schema) {
 }
 
 function typedInputFromValues(schema, values) {
+  if (!schema || !schema.properties || typeof schema.properties !== "object") return {};
   const input = {};
   for (const [name, property] of Object.entries(schema.properties)) {
     const value = values[name];
@@ -116,8 +118,13 @@ function ToolCard({
   const [pendingRun, setPendingRun] = useState(null);
   const [receiptState, setReceiptState] = useState(null);
   const [activityState, setActivityState] = useState(null);
+  const [lifecycleState, setLifecycleState] = useState(null);
   const receipt = isToolLibraryRecordVisible(receiptState, accountId, getAccountScope()) ? receiptState : null;
   const activity = isToolLibraryRecordVisible(activityState, accountId, getAccountScope()) ? activityState.items : [];
+  const lifecycleRecord = isToolLibraryRecordVisible(lifecycleState, accountId, getAccountScope()) ? lifecycleState : null;
+  const lifecycleView = getToolLibraryLifecycleView(lifecycleRecord, accountId, getAccountScope(), tool.status);
+  const canStart = lifecycleView.canStart && tool.permissions.length === 1;
+  const hasLifecycleControls = lifecycleView.visible && (lifecycleView.startDeclared || lifecycleView.stopDeclared);
   const [running, setRunning] = useState(false);
   const runLock = useRef(false);
   const controllerRef = useRef(null);
@@ -140,6 +147,8 @@ function ToolCard({
     }
     const result = HEY.tools.lifecycleActivity(tool.name, { user });
     setActivityState(scopeToolLibraryRecord(accountId, { items: result?.success && Array.isArray(result.activity) ? result.activity : [] }));
+    const contract = HEY.tools.lifecycle(tool.name, { user, platform: "web" });
+    setLifecycleState(contract?.success ? scopeToolLibraryRecord(accountId, contract) : null);
   }, [accountId, tool.name, user]);
 
   useEffect(() => {
@@ -154,7 +163,14 @@ function ToolCard({
     setPendingRun(null);
     setReceiptState(null);
     setActivityState(null);
+    setLifecycleState(null);
   }), []);
+
+  useEffect(() => {
+    if (!lifecycleView.visible || !["starting", "running", "stopping"].includes(lifecycleView.status)) return undefined;
+    const timer = setInterval(refreshActivity, 750);
+    return () => clearInterval(timer);
+  }, [lifecycleView.visible, lifecycleView.status, lifecycleView.sessionId, refreshActivity]);
 
   async function invokePlan(run, confirmed = false) {
     if (runLock.current) return;
@@ -257,6 +273,83 @@ function ToolCard({
     void invokePlan(run);
   }
 
+  function submitLifecycleStart() {
+    if (!canStart || !accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "This tool cannot be launched in the current account or platform state." });
+      return;
+    }
+    let input;
+    try { input = typedInputFromValues(inputSchema, inputValues); }
+    catch (error) {
+      setReceipt({ status: "error", message: safeToolError(error instanceof Error ? error.message : null) });
+      return;
+    }
+    const run = { input, requestId: crypto.randomUUID(), stepId: `start-${crypto.randomUUID()}`, action: "start" };
+    setReceipt(null);
+    setPendingRun(run);
+    if (!HEY.permissions.has(permission, "account", accountId)) {
+      const request = HEY.permissions.request({ permission, scope: "account", riskLevel: tool.riskLevel || "medium", reason: `Launch ${tool.name} from the Tool Library.` });
+      if (!request || request.error) {
+        setReceipt({ status: "error", message: safeToolError(request?.error), requestId: run.requestId });
+        setPendingRun(null);
+        return;
+      }
+      setReceipt({ status: "authorization_required", message: `HEY needs account permission “${permission}” before this tool can launch.`, requestId: run.requestId });
+      return;
+    }
+    if (tool.requiresConfirmation) {
+      setReceipt({ status: "confirmation_required", message: "Review the launch details and confirm before starting this tool.", requestId: run.requestId });
+      return;
+    }
+    void startLifecycle(run, false);
+  }
+
+  function startLifecycle(run, confirmed) {
+    if (runLock.current) return;
+    if (!accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "Your signed-in account changed. No tool session was started." });
+      setPendingRun(null);
+      return;
+    }
+    const current = HEY.tools.lifecycle(tool.name, { user, platform: "web" });
+    if (!current?.success || current.actions?.start !== true || current.readiness === "unavailable") {
+      setReceipt({ status: "denied", message: safeToolError(current?.availability?.reason || "This tool is not ready to launch on this platform.") });
+      setPendingRun(null);
+      refreshActivity();
+      return;
+    }
+    runLock.current = true;
+    setRunning(true);
+    let response;
+    try {
+      response = HEY.tools.start(tool.name, run.input, { platform: "web", user, confirmed });
+    } finally {
+      runLock.current = false;
+      setRunning(false);
+    }
+    if (response?.success && response.status === "starting" && typeof response.sessionId === "string") {
+      setReceipt({ status: "starting", message: "HEY started the tool session.", requestId: run.requestId, sessionId: response.sessionId });
+      setPendingRun(null);
+      refreshActivity();
+      onActivityChanged();
+      return;
+    }
+    setReceipt({ status: response?.status || "error", message: safeToolError(response?.error), requestId: run.requestId });
+    setPendingRun(null);
+    refreshActivity();
+  }
+
+  function stopLifecycle() {
+    if (!lifecycleView.canStop || !lifecycleView.sessionId || !accountId || getAccountScope() !== `account:${accountId}`) return;
+    const response = HEY.tools.stop(tool.name, lifecycleView.sessionId, { user });
+    if (response?.success && response.status === "stopping") {
+      setReceipt({ status: "stopping", message: "Stop requested. HEY will report the session’s actual final state." });
+    } else {
+      setReceipt({ status: response?.status || "error", message: safeToolError(response?.error) });
+    }
+    refreshActivity();
+  }
+
   function allowPermission() {
     if (!pendingRun || !accountId || getAccountScope() !== `account:${accountId}`) {
       setReceipt({ status: "denied", message: "Your signed-in account changed. No permission was granted." });
@@ -275,7 +368,15 @@ function ToolCard({
       setPendingRun(null);
       return;
     }
-    void invokePlan(pendingRun);
+    if (pendingRun.action === "start") {
+      if (tool.requiresConfirmation) {
+        setReceipt({ status: "confirmation_required", message: "Review the launch details and confirm before starting this tool.", requestId: pendingRun.requestId });
+      } else {
+        startLifecycle(pendingRun, false);
+      }
+    } else {
+      void invokePlan(pendingRun);
+    }
   }
 
   function cancelRun() {
@@ -353,16 +454,21 @@ function ToolCard({
           <li key={`${item.id}-${item.status}-${item.at}`}><span>{item.status.replaceAll("_", " ")}</span><time dateTime={item.at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.at))}</time></li>
         ))}</ul> : <p className="tool-library__run-help">No Tool Library activity is recorded for this tool on this device.</p>}
       </details>
-      {canRun && <div className="tool-library__run-panel">
+      {hasLifecycleControls && <details className="tool-library__advanced-details tool-library__lifecycle" open={lifecycleView.status === "starting" || lifecycleView.status === "running" || lifecycleView.status === "stopping"}>
+        <summary>Session controls</summary>
+        <p className="tool-library__run-help">Status: <strong>{lifecycleView.status.replaceAll("_", " ")}</strong> · Readiness: {lifecycleView.readiness.replaceAll("_", " ")}</p>
+        {lifecycleView.canStop && <button type="button" className="tool-library__deny-button" disabled={running || getAccountScope() !== `account:${accountId}`} onClick={stopLifecycle}>Stop session</button>}
+      </details>}
+      {(canRun || canStart) && <div className="tool-library__run-panel">
         {!runPanelOpen ? <button type="button" className="tool-library__run-button" disabled={!accountId || getAccountScope() !== `account:${accountId}`} onClick={() => {
           setInputValues(initialInputValues(inputSchema));
           setReceipt(null);
           setPendingRun(null);
           setRunPanelOpen(true);
-        }}><Play size={15} aria-hidden="true" /> Customize and use</button> : <form onSubmit={submitRun}>
-          <div className="tool-library__run-heading"><h3>Run {describeName(tool.name)}</h3><button type="button" className="tool-library__close-run" disabled={running} aria-label={`Close ${describeName(tool.name)} run form`} onClick={() => { setRunPanelOpen(false); setPendingRun(null); }}><X size={16} aria-hidden="true" /></button></div>
-          <p className="tool-library__run-help">HEY checks current platform support and account permission again when you run this tool.</p>
-          {Object.entries(inputSchema.properties).map(([name, property]) => {
+        }}><Play size={15} aria-hidden="true" /> {canRun ? "Customize and use" : "Configure and launch"}</button> : <form onSubmit={submitRun}>
+          <div className="tool-library__run-heading"><h3>{canRun ? `Run ${describeName(tool.name)}` : `Launch ${describeName(tool.name)}`}</h3><button type="button" className="tool-library__close-run" disabled={running} aria-label={`Close ${describeName(tool.name)} form`} onClick={() => { setRunPanelOpen(false); setPendingRun(null); }}><X size={16} aria-hidden="true" /></button></div>
+          <p className="tool-library__run-help">HEY checks current platform support and account permission again before starting this tool.</p>
+          {Object.entries(inputSchema?.properties || {}).map(([name, property]) => {
             const fieldId = `tool-run-${encodeURIComponent(tool.name)}-${encodeURIComponent(name)}`;
             const required = inputSchema.required.includes(name);
             return <label className="tool-library__run-field" htmlFor={fieldId} key={name}>
@@ -373,14 +479,14 @@ function ToolCard({
               {property.description && <small>{property.description}</small>}
             </label>;
           })}
-          <div className="tool-library__run-actions"><button type="submit" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`}><Play size={15} aria-hidden="true" /> Run</button>{running && <button type="button" className="tool-library__deny-button" onClick={cancelRun}>Cancel</button>}</div>
+          <div className="tool-library__run-actions">{canRun && <button type="submit" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`}><Play size={15} aria-hidden="true" /> Run</button>}{canStart && <button type="button" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`} onClick={submitLifecycleStart}><Play size={15} aria-hidden="true" /> Start session</button>}{running && <button type="button" className="tool-library__deny-button" onClick={cancelRun}>Cancel</button>}</div>
         </form>}
         {receipt && <div className={`tool-library__receipt tool-library__receipt--${receipt.status}`} role={["error", "denied"].includes(receipt.status) ? "alert" : "status"} aria-live="polite">
           <div className="tool-library__receipt-heading">{receipt.status === "completed" ? <CheckCircle2 size={16} aria-hidden="true" /> : ["error", "denied"].includes(receipt.status) ? <CircleX size={16} aria-hidden="true" /> : <LockKeyhole size={16} aria-hidden="true" />}<strong>{receipt.status.replaceAll("_", " ")}</strong></div>
           <p>{receipt.message}</p>{receipt.requestId && <small>Receipt {receipt.requestId}</small>}
           {receipt.retryable && receipt.retryRun && !running && <button type="button" className="tool-library__run-button" onClick={() => { const retryRun = { ...receipt.retryRun, requestId: crypto.randomUUID(), stepId: `retry-${crypto.randomUUID()}` }; setReceipt(null); void invokePlan(retryRun); }}>Retry this run</button>}
           {receipt.status === "authorization_required" && pendingRun && <div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" onClick={allowPermission}>Allow account permission</button><button type="button" className="tool-library__deny-button" onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div>}
-          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{formatToolLibraryReceipt(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => void invokePlan(pendingRun, true)}>Confirm and run</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
+          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{formatToolLibraryReceipt(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => pendingRun.action === "start" ? startLifecycle(pendingRun, true) : void invokePlan(pendingRun, true)}>Confirm and {pendingRun.action === "start" ? "start" : "run"}</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
           {["completed", "unverified"].includes(receipt.status) && receipt.result !== undefined && <pre className="tool-library__result">{formatToolLibraryReceipt(receipt.result)}</pre>}
         </div>}
       </div>}

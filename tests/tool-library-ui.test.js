@@ -23,7 +23,7 @@ test("Tool Library renders only canonical catalog descriptors and communicates p
   assert.match(pageSource, /role="status"/);
   assert.match(pageSource, /No tools registered yet/);
   assert.match(pageSource, /role="note"/);
-  assert.doesNotMatch(pageSource, /\b(?:Start|Stop|Install|Uninstall)\b/);
+  assert.doesNotMatch(pageSource, /\b(?:Install|Uninstall)\b/);
 });
 
 test("Tool Library exposes labeled search and stable headings for assistive technology", () => {
@@ -45,6 +45,19 @@ test("Tool Library runs through the canonical plan API and offers only explicitl
   assert.match(pageSource, /subscribeAccountScope/);
   assert.match(pageSource, /controllerRef\.current !== controller/);
   assert.match(pageSource, /isToolLibraryRecordVisible\(receiptState, accountId, getAccountScope\(\)\)/);
+});
+
+test("Tool Library lifecycle controls use the declared canonical account session contract", () => {
+  assert.match(pageSource, /HEY\.tools\.lifecycle\(/);
+  assert.match(pageSource, /HEY\.tools\.start\(/);
+  assert.match(pageSource, /HEY\.tools\.stop\(/);
+  assert.match(pageSource, /lifecycleView\.startDeclared/);
+  assert.match(pageSource, /lifecycleView\.stopDeclared/);
+  assert.match(pageSource, /lifecycleView\.canStop/);
+  assert.match(pageSource, /pendingRun\.action === "start"/);
+  assert.match(pageSource, /Configure and launch/);
+  assert.match(pageSource, /Start session/);
+  assert.match(pageSource, /Stop session/);
 });
 
 test("Tool Library maps the V3 natural language dictation request to a truthful live entrypoint", () => {
