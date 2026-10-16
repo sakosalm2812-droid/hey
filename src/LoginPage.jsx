@@ -6,6 +6,7 @@ import { press, springs } from "./lib/heyMotion";
 
 import { useAuth } from "./AuthContext";
 import { getSafePostLoginPath } from "./lib/authRedirect.js";
+import { isSupabaseConfigured } from "./lib/supabase.js";
 
 import styles from "./pages/Auth.module.css";
 
@@ -32,6 +33,11 @@ const location=useLocation();
 
 const handleLogin=async()=>{
 
+if (!isSupabaseConfigured) {
+setError("Sign-in is unavailable because the HEY authentication service is not configured in this build. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart HEY.");
+return;
+}
+
 if (!email.trim() || !password) {
 setError("Enter your email address and password.");
 return;
@@ -40,27 +46,30 @@ return;
 setLoading(true);
 setError("");
 
+try {
 const {error}=await signIn(email.trim(),password);
-
-
 if(error){
-
-setError(error.message);
-setLoading(false);
-
-}
-
-else{
+setError(error.message || "Sign-in failed. Check your details and try again.");
+} else {
 const requestedPath = new URLSearchParams(location.search).get("next");
 const destination = getSafePostLoginPath(requestedPath, window.location.origin);
 navigate(destination);
-
+}
+} catch {
+setError("HEY could not reach the authentication service. Check your connection and try again.");
+} finally {
+setLoading(false);
 }
 
 
 };
 
 const handleReset=async()=>{
+
+if (!isSupabaseConfigured) {
+setError("Password reset is unavailable because the HEY authentication service is not configured in this build.");
+return;
+}
 
 if (!email.trim()) {
 setError("Enter the email address you signed up with.");
@@ -71,16 +80,18 @@ setResetLoading(true);
 setError("");
 setResetSent(false);
 
+try {
 const {error}=await resetPassword(email.trim());
-
-setResetLoading(false);
-
 if(error){
-setError(error.message);
+setError(error.message || "Password reset could not be completed. Try again.");
 return;
 }
-
 setResetSent(true);
+} catch {
+setError("HEY could not reach the authentication service. Check your connection and try again.");
+} finally {
+setResetLoading(false);
+}
 
 };
 
@@ -126,6 +137,12 @@ animate={{opacity:1,y:0}}
 {error}
 </p>
 
+}
+
+{!isSupabaseConfigured &&
+<p className={styles.error} role="status">
+Authentication is not configured in this local build. Sign-in and password reset need the HEY Supabase URL and public anon key.
+</p>
 }
 
 {resetSent &&
@@ -197,7 +214,7 @@ whileTap={{scale:.97, transition: press}}
 
 onClick={handleLogin}
 
-disabled={loading}
+disabled={loading || !isSupabaseConfigured}
 
 >
 
@@ -271,7 +288,7 @@ whileTap={{scale:.97, transition: press}}
 
 onClick={handleReset}
 
-disabled={resetLoading}
+disabled={resetLoading || !isSupabaseConfigured}
 
 >
 
