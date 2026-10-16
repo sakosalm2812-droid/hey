@@ -60,8 +60,9 @@ function ChatWorkspace() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
-  const [providerCatalog, setProviderCatalog] = useState({ status: "loading", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
+  const [providerCatalog, setProviderCatalog] = useState({ status: "loading", message: "Checking available model choices…", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
   const [providerProfile, setProviderProfile] = useState("automatic");
+  const [providerCatalogRetry, setProviderCatalogRetry] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatError, setChatError] = useState("");
   const [conversationsLoading, setConversationsLoading] = useState(true);
@@ -190,21 +191,22 @@ function ChatWorkspace() {
   useEffect(() => {
     let active = true;
     const catalogController = new AbortController();
-    setProviderCatalog({ status: "loading", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
+    setProviderCatalog({ status: "loading", message: "Checking available model choices…", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
     getHEYProviderCatalog({ signal: catalogController.signal }).then((catalog) => {
       if (!active) return;
-      setProviderCatalog(catalog);
-      setProviderProfile((current) => catalog.profiles.some((profile) => profile.id === current) ? current : "automatic");
-    }).catch(() => {
+      setProviderCatalog({ ...catalog, status: "ready", message: "Entitled model choices loaded." });
+    }).catch((error) => {
       if (active && !catalogController.signal.aborted) {
-        setProviderCatalog({ status: "unavailable", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
+        const message = error instanceof Error ? error.message : "Available model choices could not be loaded.";
+        const status = /sign in|authentication|permission|entitlement|authoriz|enabled remote/i.test(message) ? "permission_required" : "unavailable";
+        setProviderCatalog({ status, message, providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
       }
     });
     return () => {
       active = false;
       catalogController.abort();
     };
-  }, [user?.id]);
+  }, [user?.id, providerCatalogRetry]);
 
   async function retryServiceChecks() {
     setAIReadiness({ status: "checking", message: "Checking the HEY AI endpoint." });
@@ -262,6 +264,16 @@ function ChatWorkspace() {
     if (!trimmedMessage || isSending) return;
     const requestedFusion = fusionEnabled;
     const requestedProviderProfile = requestedFusion ? "automatic" : providerProfile;
+    if (!requestedFusion && requestedProviderProfile !== "automatic") {
+      const exactSelection = requestedProviderProfile && typeof requestedProviderProfile === "object";
+      const selectionAvailable = providerCatalog.status === "ready" && (exactSelection
+        ? providerCatalog.providers.some((provider) => provider.providerId === requestedProviderProfile.providerId && provider.modelId === requestedProviderProfile.modelId)
+        : providerCatalog.profiles.some((profile) => profile.id === requestedProviderProfile));
+      if (!selectionAvailable) {
+        setChatError("Your selected model is no longer available to this account. Choose another option or Automatic before sending.");
+        return;
+      }
+    }
     setFusionEnabled(false);
 
     if (displayUserMessage) setMessages((current) => [...current, { role: "user", text: trimmedMessage }]);
@@ -588,6 +600,7 @@ function ChatWorkspace() {
                 providerCatalog={providerCatalog}
                 providerProfile={providerProfile}
                 setProviderProfile={setProviderProfile}
+                onRetryProviderCatalog={() => setProviderCatalogRetry((current) => current + 1)}
                 onVoiceCall={toggleVoiceCall}
                 onDictationInsert={insertDictationTranscript}
               />

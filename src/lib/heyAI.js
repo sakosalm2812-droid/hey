@@ -52,6 +52,27 @@ export function withFusionRequestOptIn(payload, fusionEnabled = false) {
   return fusionEnabled === true ? { ...safePayload, fusion: true } : safePayload;
 }
 
+export function getProviderRouteRequest(providerProfile, fusion = false) {
+  if (fusion || providerProfile === "automatic") return {};
+  if (providerProfile === "lower_cost") return { routingProfile: "lower_cost" };
+  if (!isPlainDataRecord(providerProfile) || Reflect.ownKeys(providerProfile).length !== 2) {
+    throw new TypeError("Choose an available model or routing profile before sending.");
+  }
+  const providerDescriptor = Object.getOwnPropertyDescriptor(providerProfile, "providerId");
+  const modelDescriptor = Object.getOwnPropertyDescriptor(providerProfile, "modelId");
+  const providerId = providerDescriptor?.value;
+  const modelId = modelDescriptor?.value;
+  const hasDataFields = providerDescriptor?.enumerable && Object.hasOwn(providerDescriptor, "value")
+    && modelDescriptor?.enumerable && Object.hasOwn(modelDescriptor, "value");
+  const safeText = (value, maxLength) => typeof value === "string" && value.length > 0 && value.length <= maxLength
+    && value === value.trim() && !Array.from(value).some((character) => character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127);
+  if (!hasDataFields || !safeText(providerId, 64) || !/^[a-z][a-z0-9_-]*$/.test(providerId)
+    || !safeText(modelId, 128) || /[\\/]/.test(modelId)) {
+    throw new TypeError("The selected provider model is invalid. Choose a model from the available list.");
+  }
+  return { providerSelection: { providerId, modelId } };
+}
+
 export function isSameHEYAccount(requestSession, currentSession) {
   return Boolean(requestSession?.user?.id) && requestSession.user.id === currentSession?.user?.id;
 }
@@ -238,6 +259,7 @@ async function getExecutionIdentity(session) {
 export async function askHEY(message, { conversationId, onConversationId, onExecutionResult, onFusionVerification, confirmed = false, fusion = false, providerProfile = "automatic", signal } = {}) {
   try {
     if (signal?.aborted) throw new DOMException("The request was cancelled.", "AbortError");
+    const providerRouteRequest = getProviderRouteRequest(providerProfile, fusion);
     const brainResult = processInput(message);
     const session = await getHEYSession();
     const executionIdentity = fusion ? null : await getExecutionIdentity(session);
@@ -284,7 +306,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
         primaryTools: brainResult.primaryTools,
         responseStyle: brainResult.responseStyle,
         conversationId,
-        routingProfile: !fusion && providerProfile === "lower_cost" ? "lower_cost" : undefined,
+        ...providerRouteRequest,
       }, fusion))
       }, { signal });
     } catch (error) {

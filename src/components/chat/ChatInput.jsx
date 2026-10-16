@@ -18,9 +18,22 @@ export default function ChatInput({
   providerCatalog = { providers: [], profiles: [] },
   providerProfile = "automatic",
   setProviderProfile,
+  onRetryProviderCatalog,
 }) {
   const { t } = useLocale();
   const { user } = useAuth();
+  const providers = providerCatalog.providers || [];
+  const profiles = providerCatalog.profiles || [{ id: "automatic", label: "Automatic" }];
+  const exactSelection = providerProfile && typeof providerProfile === "object" ? providerProfile : null;
+  const selectedExactIndex = exactSelection
+    ? providers.findIndex((provider) => provider.providerId === exactSelection.providerId && provider.modelId === exactSelection.modelId)
+    : -1;
+  const selectedProfileAvailable = exactSelection
+    ? selectedExactIndex >= 0
+    : profiles.some((profile) => profile.id === providerProfile);
+  const routingChoice = exactSelection
+    ? selectedExactIndex >= 0 ? `exact:${selectedExactIndex}` : `unavailable:${exactSelection.providerId}:${exactSelection.modelId}`
+    : selectedProfileAvailable ? providerProfile : `unavailable:${providerProfile}`;
   const inputRef = useRef(null);
   const focusAfterDictationRef = useRef(false);
   useLayoutEffect(() => {
@@ -63,26 +76,51 @@ export default function ChatInput({
         />
         <span>Use model fusion for this request</span>
       </label>
-      {providerCatalog.profiles?.length > 1 && (
-        <label className="hey-chat-provider-profile">
-          <span>Model routing</span>
-          <select
-            value={providerProfile}
-            onChange={(event) => setProviderProfile?.(event.target.value)}
-            disabled={disabled}
-            aria-label="Model routing profile"
-          >
-            {providerCatalog.profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>{profile.label}</option>
-            ))}
-          </select>
-        </label>
+      <label className="hey-chat-provider-profile hey-chat-provider-profile--request">
+        <span>Model for this request</span>
+        <select
+          value={routingChoice}
+          onChange={(event) => {
+            const choice = event.target.value;
+            if (choice.startsWith("exact:")) {
+              const provider = providers[Number(choice.slice("exact:".length))];
+              if (provider) setProviderProfile?.({ providerId: provider.providerId, modelId: provider.modelId });
+            } else if (!choice.startsWith("unavailable:")) setProviderProfile?.(choice);
+          }}
+          disabled={disabled}
+          aria-label="Model for this request"
+        >
+          {!selectedProfileAvailable && <option value={routingChoice} disabled>Unavailable · {exactSelection ? `${exactSelection.providerId} · ${exactSelection.modelId}` : providerProfile}</option>}
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>{profile.label}</option>
+          ))}
+          {providers.length > 0 && (
+            <optgroup label="Exact entitled models">
+              {providers.map((provider, index) => (
+                <option key={`${provider.providerId}:${provider.modelId}`} value={`exact:${index}`}>
+                  {provider.providerName} · {provider.modelId}
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+      </label>
+      {providerCatalog.status === "loading" && (
+        <p className="hey-chat-provider-models" role="status" aria-live="polite">{providerCatalog.message || "Checking available model choices…"}</p>
       )}
-      {providerCatalog.providers?.length > 0 && (
-        <p className="hey-chat-provider-models" aria-live="polite">
-          Available models: {providerCatalog.providers.map((provider) => `${provider.providerName} · ${provider.modelId}`).join(", ")}
-        </p>
+      {(providerCatalog.status === "unavailable" || providerCatalog.status === "permission_required") && (
+        <div className="hey-chat-provider-catalog-status" role="status" aria-live="polite">
+          <p>{providerCatalog.status === "permission_required" ? "Model choices require sign-in and provider permission." : "Model choices are unavailable right now."} {providerCatalog.message} Choose Automatic to use server routing.</p>
+          <button type="button" className="hey-chat-provider-retry" onClick={onRetryProviderCatalog} disabled={disabled} aria-label="Retry model discovery">Retry</button>
+        </div>
       )}
+      {providerCatalog.status === "ready" && !providerCatalog.providers?.length && (
+        <p className="hey-chat-provider-models" role="status">No entitled provider models are available. Choose Automatic to use server routing.</p>
+      )}
+      {providerCatalog.status === "ready" && !selectedProfileAvailable && (
+        <p className="hey-chat-provider-models" role="alert">Your selected model is no longer available to this account. Choose another option or Automatic before sending.</p>
+      )}
+      {fusionEnabled && <p className="hey-chat-provider-models" role="status">Fusion is an independent opt-in and uses its own provider selection. The model choice above applies to standard chat requests.</p>}
       <DictationControl key={user?.id || "signed-out"} onInsert={insertDictation} disabled={disabled} />
       <div className="hey-chat-input-shell">
         <textarea

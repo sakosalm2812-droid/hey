@@ -120,8 +120,9 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(route, /providerAuthorizationUnavailable[\s\S]*?account_permissions_unavailable/);
   assert.match(client, /getHEYApiUrl\(\).*\/models/);
   assert.match(client, /access_token/);
-  assert.match(client, /routingProfile: !fusion && providerProfile === "lower_cost" \? "lower_cost" : undefined/);
+  assert.match(client, /providerSelection: \{ providerId, modelId \}/);
+  assert.match(client, /providerProfile === "lower_cost"/);
   assert.match(page, /providerProfile: requestedProviderProfile/);
-  assert.match(input, /Available models:/);
-  assert.match(input, /Model routing profile/);
+  assert.match(input, /Exact entitled models/);
+  assert.match(input, /Model for this request/);
 });

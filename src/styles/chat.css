@@ -127,7 +127,12 @@
 .hey-chat-fusion-opt-in:has(input:disabled) { opacity: .6; cursor: default; }
 .hey-chat-provider-profile { display: flex; align-items: center; gap: 8px; width: fit-content; color: var(--text-muted); font-size: 12px; }
 .hey-chat-provider-profile select { max-width: 180px; padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface); color: var(--text-primary); font: inherit; }
+.hey-chat-provider-profile--request select { max-width: min(360px, 76vw); }
+.hey-chat-exact-model select:disabled { opacity: .65; cursor: not-allowed; }
 .hey-chat-provider-models { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.hey-chat-provider-catalog-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.hey-chat-provider-catalog-status p { margin: 0; }
+.hey-chat-provider-retry { padding: 4px 8px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface); color: var(--text-primary); font: inherit; cursor: pointer; }
 .hey-dictation { display: grid; gap: 8px; min-width: 0; }
 .hey-dictation__preferences { padding: 8px 10px; border: 1px solid var(--border); border-radius: 11px; color: var(--text-secondary); font-size: 11px; }
 .hey-dictation__preferences summary { width: fit-content; color: var(--text-secondary); cursor: pointer; }
