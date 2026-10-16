@@ -5,6 +5,7 @@ import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { getToolLibraryPreferenceView } from "./lib/toolLibraryPreferenceView.js";
+import { getPurposePinRecommendations } from "./lib/purposePinRecommendations.js";
 import { canGrantPermission } from "./lib/permissionPolicy.js";
 import { resolveAccountPlan } from "./lib/accountRecords.js";
 import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryRecord } from "./lib/toolLibraryReceipts.js";
@@ -517,6 +518,20 @@ export default function ToolLibraryPage() {
   const preferenceLoading = preferenceStatus === "loading";
   const preferences = preferenceView.preferences;
   const displayedView = preferenceReady ? activeView : "all";
+  const purposeSetup = preferenceReady && accountId && getAccountScope() === `account:${accountId}`
+    ? HEY.onboarding.getPurposeSetup()
+    : null;
+  const purposeSetupAccountScope = purposeSetup ? getAccountScope() : null;
+  const purposePinView = !loading && preferenceReady && purposeSetup
+    ? getPurposePinRecommendations({
+      accountId,
+      activeScope: getAccountScope(),
+      setupAccountScope: purposeSetupAccountScope,
+      setup: purposeSetup,
+      catalog: tools,
+      pinned: preferences.pinned,
+    })
+    : null;
 
   const loadCatalog = useCallback(async () => {
     const request = ++requestRef.current;
@@ -590,6 +605,16 @@ export default function ToolLibraryPage() {
     } catch {
       setPreferenceError("Your tool preference could not be saved. Check browser storage and try again.");
     }
+  }
+
+  function pinPurposeRecommendation(tool) {
+    const expectedScope = `account:${accountId || ""}`;
+    if (!preferenceReady || purposePinView?.accountScope !== expectedScope || getAccountScope() !== expectedScope
+      || !purposePinView.recommendations.some((candidate) => candidate.name === tool.name && candidate.accountScope === expectedScope)) {
+      setPreferenceError("Your account changed. Reload Tools before adding this suggested pin.");
+      return;
+    }
+    updatePreference(tool.name, "pinned");
   }
 
   const filteredTools = useMemo(() => {
@@ -694,6 +719,17 @@ export default function ToolLibraryPage() {
           )}
         </div>
       </section>
+
+      {purposePinView && purposePinView.purposeSelections.length > 0 && <section className="tool-library__preference-panel tool-library__purpose-pins" aria-labelledby="tool-library-purpose-pins-title">
+        <h2 id="tool-library-purpose-pins-title">Suggested pins</h2>
+        <p>These suggestions use your selected purpose areas and tools registered for this account’s current platform. Adding a pin saves a shortcut; it does not grant permission or make unsupported tools available. Custom goal text is not interpreted.</p>
+        {purposePinView.recommendations.length > 0
+          ? <ul>{purposePinView.recommendations.map((tool) => <li key={tool.name}>
+            <span><strong>{describeName(tool.name)}</strong><small>{tool.status === "permission_required" ? "Permission required before use" : "Available on this platform"}</small></span>
+            <button type="button" className="tool-library__retry" disabled={!preferenceReady || getAccountScope() !== purposePinView.accountScope} onClick={() => pinPurposeRecommendation(tool)} aria-label={`Pin ${describeName(tool.name)}`}>Pin</button>
+          </li>)}</ul>
+          : <p role="status">No matching tools are currently available or permission-ready on this platform. Nothing was pinned; all tools remain available to browse.</p>}
+      </section>}
 
       {dictationDiscovery && <section className="tool-library__intent-suggestion" aria-labelledby="tool-library-dictation-title">
         <div>
