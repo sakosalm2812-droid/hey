@@ -684,6 +684,26 @@ test("a detector that exceeds its frame deadline aborts the session and releases
   }
 });
 
+test("camera track cleanup failure does not skip video and detector release", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera({ track: {
+    readyState: "live",
+    stop() { throw new Error("track cleanup failed"); },
+    addEventListener() {},
+  } });
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  engine.stopRecognition("user_stop");
+
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.mediaStream, null);
+  assert.equal(engine.videoElement, null);
+  assert.equal(camera.video.srcObject, null);
+  assert.equal(adapterStops, 1);
+});
+
 test("detector deadlines reject invalid and unbounded configuration", () => {
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: 0 }), RangeError);
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: 10_001 }), RangeError);

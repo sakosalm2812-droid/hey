@@ -1239,15 +1239,19 @@ export class GestureEngine {
     this.visibilityTarget = null;
     this.visibilityHandler = null;
 
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach(t => t.stop());
-      this.mediaStream = null;
-    }
-    
-    if (this.videoElement) {
-      this.videoElement.pause?.();
-      this.videoElement.srcObject = null;
-      this.videoElement = null;
+    const mediaStream = this.mediaStream;
+    this.mediaStream = null;
+    try {
+      for (const track of mediaStream?.getTracks?.() || []) {
+        try { track.stop?.(); } catch { /* One broken track must not prevent releasing the others. */ }
+      }
+    } catch { /* Continue releasing the remaining recognition resources. */ }
+
+    const videoElement = this.videoElement;
+    this.videoElement = null;
+    if (videoElement) {
+      try { videoElement.pause?.(); } catch { /* Clearing the camera source still takes priority. */ }
+      try { videoElement.srcObject = null; } catch { /* The session references are cleared below regardless. */ }
     }
 
     if (this.cameraPermissionGranted) {
