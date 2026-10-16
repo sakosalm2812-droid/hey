@@ -1,7 +1,41 @@
 import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { supabaseClient } from "../lib/supabase.js";
-import { canReadTeacherArtifact } from "./teacherArtifactAccess.js";
+import { canReadTeacherArtifact, isTeacherAnswerKeyArtifact, isTeacherLessonArtifact, isStudentWorksheetArtifact } from "./teacherArtifactAccess.js";
+
+const TEACHER_SCOPE_METADATA_FIELDS = [
+  "workflow", "artifactContract", "accountScope", "workspaceId", "classId", "audience", "studentDataPolicy", "journeyId",
+];
+
+function restoreTeacherVersionMetadata(artifact, version) {
+  const privateLesson = isTeacherLessonArtifact(artifact);
+  const answerKey = isTeacherAnswerKeyArtifact(artifact);
+  const worksheet = isStudentWorksheetArtifact(artifact);
+  if (!privateLesson && !answerKey && !worksheet) return version.metadata || artifact.metadata;
+
+  if (worksheet && (version.content?.type !== "teacher_worksheet" || isTeacherAnswerKeyArtifact({ content: version.content }))) {
+    throw new Error("A worksheet version containing answer-key data cannot be restored");
+  }
+  if (answerKey && !isTeacherAnswerKeyArtifact({ content: version.content })) {
+    throw new Error("An answer-key version must retain its private answer fields");
+  }
+  if (privateLesson && (!isTeacherLessonArtifact({ content: version.content })
+    || isTeacherAnswerKeyArtifact({ content: version.content }))) {
+    throw new Error("A lesson version must retain its private lesson content contract");
+  }
+
+  for (const field of TEACHER_SCOPE_METADATA_FIELDS) {
+    if (Object.hasOwn(version.metadata || {}, field) && Object.hasOwn(artifact.metadata || {}, field)
+      && version.metadata[field] !== artifact.metadata[field]) {
+      throw new Error(`A Teacher artifact version cannot change its ${field} scope`);
+    }
+  }
+  const metadata = { ...artifact.metadata, ...(version.metadata || {}) };
+  for (const field of TEACHER_SCOPE_METADATA_FIELDS) {
+    if (Object.hasOwn(artifact.metadata || {}, field)) metadata[field] = artifact.metadata[field];
+  }
+  return metadata;
+}
 
 const ARTIFACT_TYPES = [
   "image",
@@ -539,9 +573,10 @@ class ArtifactEngine {
       throw new Error("Artifact or version not found");
     }
 
+    const metadata = restoreTeacherVersionMetadata(artifact, version);
     const restored = await this.updateArtifact(artifactId, {
       content: version.content,
-      metadata: version.metadata,
+      metadata,
       status: ARTIFACT_STATUS.MODIFIED,
       branchName: version.branchName,
     });

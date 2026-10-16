@@ -241,6 +241,7 @@ test("canonical artifact reads deny cached answer keys to students", async () =>
   assert.equal((await HEY.artifacts.get(worksheet.id)).id, worksheet.id, "student worksheet remains class-readable");
   assert.equal(await HEY.artifacts.getVersion(artifact.id, "version-1"), null);
   assert.deepEqual(await HEY.artifacts.getHistory(artifact.id), []);
+  await assert.rejects(HEY.artifacts.restore(artifact.id, "version-1"), /Artifact or version not found/);
   supabaseClient.auth.getUser = async () => ({ data: { user: {
     id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
   } }, error: null });
@@ -292,6 +293,104 @@ test("canonical artifact reads deny cached answer keys to students", async () =>
   } }, error: null });
   artifactEngine.artifacts.delete(artifact.id);
   artifactEngine.artifacts.delete(worksheet.id);
+});
+
+test("canonical database reads fail closed for legacy private artifacts without a creator", async () => {
+  const originalFrom = supabaseClient.from;
+  const originalGetUser = supabaseClient.auth.getUser;
+  const id = "teacher-key-legacy-no-creator";
+  const row = {
+    id, project_id: "school-space", type: "document", title: "Legacy private key", description: "",
+    content: { questions: [{ prompt: "Question", teacherAnswer: "Answer" }] },
+    metadata: { accountScope: "account:teacher-1", classId: "class-1", audience: "teacher_only" },
+    created_by: null, status: "draft", version: 1, parent_version_id: null, branch_name: "main", tags: [],
+  };
+  artifactEngine.artifacts.delete(id);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+  } }, error: null });
+  supabaseClient.from = (table) => {
+    assert.equal(table, "hey_artifacts");
+    return { select() { return this; }, eq() { return this; }, single: async () => ({ data: row, error: null }) };
+  };
+  try {
+    assert.equal(await HEY.artifacts.get(id), null);
+    assert.equal(artifactEngine.artifacts.has(id), false, "unowned legacy private rows are not admitted to the cache");
+  } finally {
+    supabaseClient.from = originalFrom;
+    supabaseClient.auth.getUser = originalGetUser;
+    artifactEngine.artifacts.delete(id);
+  }
+});
+
+test("restoring legacy worksheet history preserves scope and rejects answer-key injection", async () => {
+  const worksheet = {
+    id: "teacher-worksheet-legacy-restore", projectId: "school-space", type: "document", title: "Student activity",
+    content: { type: "teacher_worksheet", title: "Student activity", questions: [{ prompt: "Original", points: 1 }] },
+    metadata: { workflow: "teacher_worksheet", artifactContract: "hey.teacher.worksheet.v1", accountScope: "account:teacher-1",
+      workspaceId: "school-space", classId: "class-1", audience: "student", studentDataPolicy: "not_collected" },
+    createdBy: "teacher-1", status: "draft", version: 2, parentVersionId: null, branchName: "main", tags: [],
+  };
+  artifactEngine.artifacts.set(worksheet.id, worksheet);
+  const originalFrom = supabaseClient.from;
+  const originalGetUser = supabaseClient.auth.getUser;
+  let selectedVersion;
+  let persistedArtifact;
+  const versionRow = (id, content, metadata = {}) => ({
+    id, artifact_id: worksheet.id, version_number: 1, branch_name: "main", parent_version_id: null,
+    content, metadata, status: "draft", created_at: "2026-10-15T09:00:00.000Z", created_by: "teacher-1",
+  });
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+  } }, error: null });
+  supabaseClient.from = (table) => {
+    if (table === "hey_artifacts") return { upsert: async (payload) => { persistedArtifact = payload; return { data: payload, error: null }; } };
+    if (table !== "hey_artifact_versions") throw new Error(`Unexpected table read: ${table}`);
+    return {
+      select() { return this; },
+      eq() { return this; },
+      order() { return this; },
+      limit: async () => ({ data: [selectedVersion], error: null }),
+      single: async () => ({ data: selectedVersion, error: null }),
+      upsert: async () => ({ data: null, error: null }),
+    };
+  };
+  try {
+    selectedVersion = versionRow("legacy-worksheet-v1", {
+      type: "teacher_worksheet", title: "Student activity", questions: [{ prompt: "Recovered prompt", points: 1 }],
+    });
+    const restored = await HEY.artifacts.restore(worksheet.id, selectedVersion.id);
+    assert.equal(restored.createdBy, "teacher-1");
+    assert.equal(restored.metadata.accountScope, "account:teacher-1");
+    assert.equal(restored.metadata.workspaceId, "school-space");
+    assert.equal(restored.metadata.classId, "class-1");
+    assert.equal(restored.metadata.audience, "student");
+    assert.equal(persistedArtifact.metadata.classId, "class-1");
+    assert.doesNotMatch(JSON.stringify(restored.content), /teacherAnswer/);
+    assert.equal((await HEY.artifacts.getHistory(worksheet.id)).length, 1, "owner can read recovered worksheet history");
+
+    selectedVersion = versionRow("unsafe-worksheet-v2", {
+      type: "teacher_worksheet", title: "Student activity",
+      questions: [{ prompt: "Recovered prompt", points: 1, teacherAnswer: "leaked" }],
+    });
+    const before = restored.content;
+    await assert.rejects(HEY.artifacts.restore(worksheet.id, selectedVersion.id), /answer-key data cannot be restored/);
+    assert.equal(artifactEngine.artifacts.get(worksheet.id).content, before);
+
+    selectedVersion = versionRow("wrong-scope-worksheet-v3", {
+      type: "teacher_worksheet", title: "Student activity", questions: [{ prompt: "Cross-class", points: 1 }],
+    }, { classId: "class-2" });
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1", "class-2"] },
+    } }, error: null });
+    await assert.rejects(HEY.artifacts.restore(worksheet.id, selectedVersion.id), /cannot change its classId scope/);
+    assert.equal(artifactEngine.artifacts.get(worksheet.id).content, before);
+  } finally {
+    supabaseClient.from = originalFrom;
+    supabaseClient.auth.getUser = originalGetUser;
+    artifactEngine.artifacts.delete(worksheet.id);
+    artifactEngine.versionGraphs.delete(worksheet.id);
+  }
 });
 
 test("answer-key and worksheet export APIs reject student identities", async () => {
