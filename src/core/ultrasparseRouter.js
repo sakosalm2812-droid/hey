@@ -15,6 +15,7 @@ const MAX_EXPERTS = 3;
 const MAX_CATALOG_EXPERTS = 10_000;
 const MAX_CATALOG_TERMS = 250_000;
 const MIN_UNAMBIGUOUS_TERM_MATCHES = 2;
+const MIN_UNAMBIGUOUS_SCORE_MARGIN = 2;
 export const ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS = 4_000_000;
 const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
   coding: "coding",
@@ -68,6 +69,7 @@ function getHintSuppressionReason(input, selection) {
   const [primary, runnerUp] = selection.experts;
   if (!primary || primary.score < MIN_UNAMBIGUOUS_TERM_MATCHES) return "weak_lexical_signal";
   if (runnerUp && primary.score <= runnerUp.score) return "ambiguous_lexical_signal";
+  if (runnerUp && primary.score - runnerUp.score < MIN_UNAMBIGUOUS_SCORE_MARGIN) return "insufficient_lexical_margin";
   return null;
 }
 

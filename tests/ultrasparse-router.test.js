@@ -59,6 +59,8 @@ test("absent, malformed, oversized, and policy-override inputs preserve ordinary
     { name: "adversarial policy override text", input: adversarial, reason: "adversarial_policy_override_text" },
     { name: "single weak lexical match", input: "debug", reason: "weak_lexical_signal" },
     { name: "tied domain matches", input: "code debug source citation", reason: "ambiguous_lexical_signal" },
+    { name: "near-tied domain matches", input: "code debug source", reason: "insufficient_lexical_margin" },
+    { name: "top-one hides a near-tied domain", input: "code debug source", limit: 1, reason: "insufficient_lexical_margin" },
     { name: "caller output limit hides tied domain", input: "code debug source citation", limit: 1, reason: "ambiguous_lexical_signal" },
   ];
 
