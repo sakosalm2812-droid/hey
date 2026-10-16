@@ -252,6 +252,7 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   assert.equal(report.scalingBenchmarks.synthetic, true);
   assert.equal(report.scalingBenchmarks.catalogPreparationIncludedInSelectionLatency, false);
   assert.equal(report.scalingBenchmarks.indexedCandidatePreparationIncludedInSelectionLatency, false);
+  assert.equal(report.scalingBenchmarks.coldAdaptiveFirstSelectionIncluded, true);
   assert.deepEqual(report.scalingBenchmarks.results.map(({ expertCount }) => expertCount), [5, 20, 100]);
   const stableScalingFingerprint = (results) => results.map(({ expertCount, catalogSha256, querySha256, cases }) => ({
     expertCount,
@@ -315,6 +316,14 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
     assert.equal(scaling.samplesPerCasePerTrial, 10);
     assert.ok(Number.isFinite(scaling.catalogConstructionMicroseconds));
     assert.ok(Number.isFinite(scaling.indexedCandidatePreparationMicroseconds));
+    assert.equal(scaling.coldAdaptiveFirstSelection.selectorConstructionIncluded, false);
+    assert.equal(scaling.coldAdaptiveFirstSelection.lazyIndexPreparationIncluded, scaling.expertCount >= 20);
+    assert.equal(scaling.coldAdaptiveFirstSelection.samplesPerCasePerTrial, 1);
+    assert.equal(scaling.coldAdaptiveFirstSelection.trials, 1);
+    assert.equal(scaling.coldAdaptiveFirstSelection.maximumObservedMicrosecondsByTrial.length, 1);
+    assert.equal(scaling.coldAdaptiveFirstSelection.cases.length, 6);
+    assert.equal(scaling.coldAdaptiveFirstSelection.correctness.outputEquivalent, true);
+    assert.equal(scaling.coldAdaptiveFirstSelection.correctness.checkedCalls, 6);
     assert.ok(scaling.estimatedBreakEvenSelectionsAtP50 === null || Number.isInteger(scaling.estimatedBreakEvenSelectionsAtP50));
     assert.equal(scaling.correctness.outputEquivalent, true);
     assert.equal(scaling.correctness.comparedAfterTimer, true);
@@ -338,6 +347,13 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
       assert.ok(Number.isFinite(workloadCase.indexedCandidates.p95Microseconds));
       assert.equal(workloadCase.adaptivePathP95PerTrialMicroseconds.length, 1);
       assert.ok(workloadCase.queryUtf8Bytes >= 0);
+    }
+    for (const coldCase of scaling.coldAdaptiveFirstSelection.cases) {
+      assert.equal(coldCase.correctness.outputEquivalent, true);
+      assert.equal(coldCase.correctness.comparedAfterTimer, true);
+      assert.equal(coldCase.correctness.checkedCalls, 1);
+      assert.equal(coldCase.latencyMicrosecondsByTrial.length, 1);
+      assert.ok(Number.isFinite(coldCase.latencyMicrosecondsByTrial[0]));
     }
     const noMatchCase = scaling.cases.find(({ name }) => name === "noMatch");
     const hostileCase = scaling.cases.find(({ name }) => name === "hostileBoundary");

@@ -115,6 +115,33 @@ function benchmarkScaling() {
     const samplesPerCasePerTrial = smokeMode ? 10 : expertCount <= 100 ? 500 : expertCount <= 500 ? 250 : 100;
     const warmupPerCasePerTrial = smokeMode ? 5 : 50;
     const trialCount = smokeMode ? 1 : 3;
+    const coldFirstSelectionSamples = Object.fromEntries(cases.map(({ name }) => [
+      name,
+      Array.from({ length: trialCount }, () => null),
+    ]));
+    let coldFirstSelectionCheckedCalls = 0;
+    for (let trial = 0; trial < trialCount; trial += 1) {
+      for (const { name: caseName, query } of cases) {
+        const coldSelector = createUltraSparseSelector(catalog);
+        const started = process.hrtime.bigint();
+        const result = coldSelector.select(query);
+        coldFirstSelectionSamples[caseName][trial] = Number(process.hrtime.bigint() - started);
+        if (!outputsEqual(result, expected.get(caseName))) {
+          throw new Error(`Cold adaptive selector output mismatch: case=${caseName}, experts=${expertCount}`);
+        }
+        coldFirstSelectionCheckedCalls += 1;
+      }
+    }
+    const coldFirstSelection = cases.map(({ name }) => ({
+      name,
+      latencyMicrosecondsByTrial: coldFirstSelectionSamples[name].map((nanoseconds) => nanoseconds / 1e3),
+      correctness: {
+        baseline: "linear",
+        outputEquivalent: true,
+        comparedAfterTimer: true,
+        checkedCalls: trialCount,
+      },
+    }));
     const samples = { linear: [], indexedCandidates: [] };
     const samplesByTrial = {
       linear: Array.from({ length: trialCount }, () => []),
@@ -200,6 +227,22 @@ function benchmarkScaling() {
       selectorStrategy: selector.strategy,
       catalogConstructionMicroseconds,
       indexedCandidatePreparationMicroseconds,
+      coldAdaptiveFirstSelection: {
+        selectorConstructionIncluded: false,
+        lazyIndexPreparationIncluded: selector.strategy === "indexed-candidates",
+        samplesPerCasePerTrial: 1,
+        trials: trialCount,
+        maximumObservedMicrosecondsByTrial: Array.from({ length: trialCount }, (_, trial) => Math.max(
+          ...coldFirstSelection.map(({ latencyMicrosecondsByTrial }) => latencyMicrosecondsByTrial[trial]),
+        )),
+        cases: coldFirstSelection,
+        correctness: {
+          baseline: "linear",
+          outputEquivalent: true,
+          comparedAfterTimer: true,
+          checkedCalls: coldFirstSelectionCheckedCalls,
+        },
+      },
       samplesPerCasePerTrial,
       warmupPerCasePerTrial,
       totalSamplesPerSelector: samplesPerCasePerTrial * cases.length * trialCount,
@@ -343,6 +386,7 @@ const report = {
     synthetic: true,
     catalogPreparationIncludedInSelectionLatency: false,
     indexedCandidatePreparationIncludedInSelectionLatency: false,
+    coldAdaptiveFirstSelectionIncluded: true,
     comparison: "linear full scan vs indexed candidate accumulation",
     results: scalingResults,
   },
