@@ -94,7 +94,7 @@ async function withForgePersistence(operation, failureMessage = null) {
   }
 }
 
-async function withForgeBatchPersistence(operation, { failBeforeCommit = false, loseFirstResponse = false, mismatchResponse = false } = {}) {
+async function withForgeBatchPersistence(operation, { failBeforeCommit = false, loseFirstResponse = false, mismatchResponse = false, mismatchReceipt = null } = {}) {
   const originalRpc = supabaseClient.rpc;
   const rowsById = new Map();
   const calls = [];
@@ -123,6 +123,7 @@ async function withForgeBatchPersistence(operation, { failBeforeCommit = false, 
       if (loseFirstResponse && rpcCalls === 1) return { data: null, error: { message: "injected lost response after commit" } };
       const response = batch.map((row) => rowsById.get(row.id));
       if (mismatchResponse && rpcCalls === 1) response[0] = { ...response[0], metadata: { ...response[0].metadata, classId: "other-class" } };
+      if (mismatchReceipt && rpcCalls === 1) response[0] = { ...response[0], ...mismatchReceipt };
       return { data: response, error: null };
     });
     transactionTail = transaction.then(() => undefined, () => undefined);
@@ -813,6 +814,28 @@ test("a mismatched batch readback is rejected before any artifact enters the For
       assert.equal(artifactEngine.artifacts.has(id), false);
     }
   }, { mismatchResponse: true });
+});
+
+test("batch persistence receipts must confirm draft status and version lineage before caching", async () => {
+  const cases = [
+    { journeyId: "55d17586-dc08-43f8-9dd4-8072243cb629", receipt: { status: "final" } },
+    { journeyId: "a1b374c0-fda2-44f3-9cb0-07ff1a55edbd", receipt: { version: 2 } },
+    { journeyId: "731cfa4a-aae5-4fb7-af8c-396cf015e6d8", receipt: { parent_version_id: "previous-version" } },
+    { journeyId: "9de9684e-96e8-4cc3-924a-86a20c936ce5", receipt: { branch_name: "unreviewed" } },
+  ];
+
+  for (const { journeyId, receipt } of cases) {
+    await withForgeBatchPersistence(async () => {
+      await assert.rejects(HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(), journeyId,
+      }), (error) => {
+        assert.match(error.message, /atomic teacher artifact batch/);
+        assert.equal(error.artifactIds.length, 3);
+        assert.equal(error.artifactIds.some((id) => artifactEngine.artifacts.has(id)), false);
+        return true;
+      });
+    }, { mismatchReceipt: receipt });
+  }
 });
 
 test("wrong-role and cross-class journey attempts never call the batch persistence function", async () => {

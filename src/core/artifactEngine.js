@@ -202,6 +202,10 @@ class ArtifactEngine {
         && row?.type === artifact.type
         && row?.title === artifact.title
         && row?.description === artifact.description
+        && row?.status === artifact.status
+        && row?.version === artifact.version
+        && row?.parent_version_id === artifact.parentVersionId
+        && row?.branch_name === artifact.branchName
         && row?.metadata?.accountScope === artifact.metadata?.accountScope
         && row?.metadata?.classId === artifact.metadata?.classId
         && canonicalArtifactJson(row?.content) === canonicalArtifactJson(artifact.content)
