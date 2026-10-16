@@ -7,6 +7,7 @@ import { normalizeToolSchema, snapshotToolData, validateToolValue } from "./tool
 
 const tools = new Map();
 const activeToolSessions = new Map();
+const inFlightToolSessions = new Set();
 const toolSessionActivity = new Map();
 const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
@@ -468,13 +469,12 @@ export function startToolLibraryEntry(name, input, context = {}) {
 
   const key = sessionKey(identity.accountId, name);
   const current = activeToolSessions.get(key);
-  if (current && ["starting", "running", "stopping"].includes(current.status)) {
+  const inFlightCurrent = [...inFlightToolSessions].some((session) => session.accountId === identity.accountId && session.name === name);
+  if ((current && ["starting", "running", "stopping"].includes(current.status)) || inFlightCurrent) {
     appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "conflict", at: new Date().toISOString() });
     return { success: false, status: "conflict", error: "This account already has an active run for this tool." };
   }
-  const activeSessionCount = [...activeToolSessions.values()].filter((session) =>
-    session.accountId === identity.accountId && ["starting", "running", "stopping"].includes(session.status),
-  ).length;
+  const activeSessionCount = [...inFlightToolSessions].filter((session) => session.accountId === identity.accountId).length;
   if (activeSessionCount >= MAX_ACTIVE_TOOL_SESSIONS_PER_ACCOUNT) {
     appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "capacity", at: new Date().toISOString() });
     return { success: false, status: "capacity", error: "This account has reached its active tool run limit." };
@@ -483,6 +483,7 @@ export function startToolLibraryEntry(name, input, context = {}) {
   const id = crypto.randomUUID();
   const controller = new AbortController();
   const session = { id, name, accountId: identity.accountId, status: "starting", startedAt: new Date().toISOString(), controller, result: null };
+  inFlightToolSessions.add(session);
   activeToolSessions.set(key, session);
   appendToolActivity(identity.accountId, { id, name, status: "starting", at: session.startedAt });
 
@@ -498,24 +499,33 @@ export function startToolLibraryEntry(name, input, context = {}) {
     },
   });
   session.promise.then((result) => {
-      // Ignore stale completions after unregister/re-register or replacement.
-      if (activeToolSessions.get(key) !== session) return;
-      session.result = result;
-      const cancellationReported = result?.status === "cancelled" || /cancel|abort/i.test(result?.error || "");
-      session.status = controller.signal.aborted
-        ? result?.success ? "completed_after_stop" : cancellationReported ? "cancelled" : "failed_after_stop"
-        : result?.success ? "completed" : "failed";
-      session.finishedAt = new Date().toISOString();
-      appendToolActivity(identity.accountId, { id, name, status: session.status, at: session.finishedAt });
+      try {
+        // Ignore stale completions after unregister/re-register or replacement,
+        // but keep the capacity reservation until this handler actually settles.
+        if (activeToolSessions.get(key) !== session) return;
+        session.result = result;
+        const cancellationReported = result?.status === "cancelled" || /cancel|abort/i.test(result?.error || "");
+        session.status = controller.signal.aborted
+          ? result?.success ? "completed_after_stop" : cancellationReported ? "cancelled" : "failed_after_stop"
+          : result?.success ? "completed" : "failed";
+        session.finishedAt = new Date().toISOString();
+        appendToolActivity(identity.accountId, { id, name, status: session.status, at: session.finishedAt });
+      } finally {
+        inFlightToolSessions.delete(session);
+      }
     }, (error) => {
-      if (activeToolSessions.get(key) !== session) return;
-      const message = error instanceof Error ? error.message : String(error);
-      session.status = controller.signal.aborted
-        ? /cancel|abort/i.test(message) ? "cancelled" : "failed_after_stop"
-        : "failed";
-      session.result = { success: false, error: message };
-      session.finishedAt = new Date().toISOString();
-      appendToolActivity(identity.accountId, { id, name, status: session.status, at: session.finishedAt });
+      try {
+        if (activeToolSessions.get(key) !== session) return;
+        const message = error instanceof Error ? error.message : String(error);
+        session.status = controller.signal.aborted
+          ? /cancel|abort/i.test(message) ? "cancelled" : "failed_after_stop"
+          : "failed";
+        session.result = { success: false, error: message };
+        session.finishedAt = new Date().toISOString();
+        appendToolActivity(identity.accountId, { id, name, status: session.status, at: session.finishedAt });
+      } finally {
+        inFlightToolSessions.delete(session);
+      }
     });
 
   return { success: true, status: "starting", sessionId: id, name };

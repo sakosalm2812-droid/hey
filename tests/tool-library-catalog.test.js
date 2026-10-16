@@ -563,6 +563,64 @@ test("public lifecycle start enforces an account-scoped active session limit and
   }
 });
 
+test("unregister and account-scope cleanup retain capacity until noncooperative handlers settle", async () => {
+  const capability = "test.tool_library.lifecycle_reservation_capability";
+  const names = Array.from({ length: 17 }, (_, index) => `test.tool_library.lifecycle_reservation_${index}`);
+  registerCapability({ id: capability, name: "Lifecycle reservation capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-reservation-account-a");
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-reservation-account-a");
+  const ownerA = { user: { id: "lifecycle-reservation-account-a", plan: "elite", entitlements: ["elite"] } };
+  const ownerB = { user: { id: "lifecycle-reservation-account-b", plan: "elite", entitlements: ["elite"] } };
+  let releaseHandlers;
+  const handlersReleased = new Promise((resolve) => { releaseHandlers = resolve; });
+  const enteredResolvers = [];
+  const settledResolvers = [];
+  const entered = names.map((_, index) => new Promise((resolve) => { enteredResolvers[index] = resolve; }));
+  const settled = names.map((_, index) => new Promise((resolve) => { settledResolvers[index] = resolve; }));
+  try {
+    for (const [index, name] of names.entries()) {
+      registerTool(name, async () => {
+        enteredResolvers[index]();
+        await handlersReleased;
+        settledResolvers[index]();
+        return { success: true };
+      }, {
+        capabilities: [capability],
+        permission: "filesystem.write",
+        lifecycle: { start: true },
+      });
+    }
+
+    const startsA = await Promise.all(names.slice(0, 16).map(async (name) => HEY.tools.start(name, {}, ownerA)));
+    assert.equal(startsA.filter(({ success }) => success).length, 16);
+    await Promise.all(entered.slice(0, 16));
+
+    for (const name of names.slice(0, 16)) assert.equal(unregisterTool(name), true);
+    assert.equal(HEY.tools.start(names[16], {}, ownerA).status, "capacity", "unregistering a live noncooperative run does not release its reservation");
+
+    setAccountScope("lifecycle-reservation-account-b");
+    seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], ownerB.user.id);
+    const startB = HEY.tools.start(names[16], {}, ownerB);
+    assert.equal(startB.success, true, "account A's reservations do not consume account B's quota");
+    await entered[16];
+    setAccountScope("lifecycle-reservation-account-a");
+    assert.equal(HEY.tools.start(names[16], {}, ownerB).status, "denied", "a stale account identity cannot use account A's scope");
+    seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], ownerA.user.id);
+    assert.equal(HEY.tools.start(names[16], {}, ownerA).status, "capacity", "switching back cannot reclaim unsettled account A reservations");
+
+    releaseHandlers();
+    await Promise.all(settled);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const recovered = HEY.tools.start(names[16], {}, ownerA);
+    assert.equal(recovered.success, true, "settled handlers release their account reservations");
+  } finally {
+    releaseHandlers?.();
+    for (const name of names) unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
 test("a non-cooperative handler is never reported as stopped when it completes after a stop request", async () => {
   const name = "test.tool_library.lifecycle_noncooperative";
   const capability = "test.tool_library.lifecycle_noncooperative_capability";
