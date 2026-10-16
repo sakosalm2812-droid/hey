@@ -80,6 +80,8 @@ test("queue rejects malformed identifiers, envelopes, accessors, oversized paylo
   await assert.rejects(store.claimNext(accountId, deviceId, "claim-1", 30_000, credentialHash), /malformed/);
   await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 30_000, credentialHash), /malformed/);
   await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 300_001), /5 minutes/);
+  await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 999, credentialHash), /1 second and 5 minutes/);
+  await assert.rejects(store.renewLease(accountId, deviceId, commandId, leaseToken, "renew-1", 1, credentialHash), /1 second and 5 minutes/);
   await assert.rejects(store.acknowledge(accountId, deviceId, commandId, leaseToken, credentialHash), /malformed/);
   await assert.rejects(store.recordFailure(accountId, deviceId, commandId, leaseToken, credentialHash), /malformed/);
   assert.equal(await store.acknowledge(accountId, "not-a-uuid", commandId, leaseToken, credentialHash), false);
@@ -219,6 +221,16 @@ test("mandate lease migration keeps renewal idempotency bounded and revocation-a
   assert.match(sql, /p_lease_ms not between 1 and 300000/i);
   assert.match(sql, /grant execute on function public\.renew_hey_device_command_lease\(uuid, uuid, uuid, uuid, text, integer\) to service_role/i);
   assert.doesNotMatch(sql, /grant execute on function public\.renew_hey_device_command_lease\([^;]+\) to [^;]*authenticated/i);
+});
+
+test("latest credential-fenced renewal RPC keeps the one-second floor at the database boundary", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261016000900_minimum_device_command_renewal_lease.sql", import.meta.url), "utf8");
+  assert.match(sql, /create or replace function public\.renew_hey_device_command_lease\([\s\S]*?p_lease_ms not between 1000 and 300000/i);
+  assert.match(sql, /d\.status in \('online', 'offline'\) for update/i);
+  assert.match(sql, /c\.secret_hash = p_credential_hash and c\.revoked_at is null for update/i);
+  assert.match(sql, /return public\.renew_hey_device_command_lease\(\s*p_account_id, p_device_id, p_command_id, p_lease_token, p_idempotency_key, p_lease_ms\s*\)/i);
+  assert.match(sql, /revoke all on function public\.renew_hey_device_command_lease\(uuid, uuid, uuid, uuid, text, integer, text\) from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.renew_hey_device_command_lease\(uuid, uuid, uuid, uuid, text, integer, text\) to service_role/i);
 });
 
 test("retry migration uses bounded backoff, terminal attempts, live scoped leases and service-role-only RPCs", async () => {

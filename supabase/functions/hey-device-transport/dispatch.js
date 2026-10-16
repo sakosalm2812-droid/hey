@@ -97,7 +97,7 @@ export function normalizeTransportRequest(body) {
       if (!validUuid(source.commandId) || !validUuid(source.leaseToken)
         || typeof source.idempotencyKey !== "string" || !source.idempotencyKey.trim() || source.idempotencyKey.length > 128
         || [...source.idempotencyKey].some((char) => char.codePointAt(0) < 32 || char.codePointAt(0) === 127)
-        || !Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS
+        || !Number.isSafeInteger(leaseMs) || leaseMs < MIN_CLAIM_LEASE_MS || leaseMs > MAX_LEASE_MS
         || keys.some((key) => !["deviceId", "operation", "commandId", "leaseToken", "idempotencyKey", "leaseMs"].includes(key))) return null;
       return { deviceId: source.deviceId, operation: "renew", commandId: source.commandId, leaseToken: source.leaseToken, idempotencyKey: source.idempotencyKey.trim(), leaseMs };
     }
