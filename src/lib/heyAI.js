@@ -97,6 +97,10 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
     typeof answer !== "string" || !answer.trim() || typeof requestText !== "string" || !requestText.trim() || typeof requestId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) ||
     typeof value.responseSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(value.responseSha256) ||
+    !isPlainDataRecord(value.cost) || !Number.isFinite(value.cost.providerReportedUsd) || value.cost.providerReportedUsd < 0 ||
+    !Number.isFinite(value.cost.reservedUsd) || value.cost.reservedUsd < value.cost.providerReportedUsd ||
+    !Number.isFinite(value.cost.requestCapUsd) || value.cost.requestCapUsd <= 0 || value.cost.requestCapUsd > 0.25 ||
+    value.cost.reservedUsd > value.cost.requestCapUsd ||
     !isPlainDataRecord(value.provenance) || value.provenance.status !== "verified" ||
     value.provenance.requestId !== requestId || typeof value.provenance.requestSha256 !== "string" ||
     !/^[0-9a-f]{64}$/i.test(value.provenance.requestSha256) || typeof value.provenance.answerSha256 !== "string" ||
@@ -120,6 +124,11 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
     requestSha256: value.provenance.requestSha256.toLowerCase(),
     responseSha256: value.responseSha256.toLowerCase(),
     confidence: value.confidence,
+    cost: Object.freeze({
+      providerReportedUsd: value.cost.providerReportedUsd,
+      reservedUsd: value.cost.reservedUsd,
+      requestCapUsd: value.cost.requestCapUsd,
+    }),
     primary: Object.freeze({ role: "primary", providerId: primary.providerId, modelId: primary.modelId }),
     checker: Object.freeze({ role: "checker", providerId: checker.providerId, modelId: checker.modelId }),
   });

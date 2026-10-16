@@ -58,6 +58,7 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
     independentlyChecked: true,
     confidence: 0.91,
     responseSha256: answerSha256,
+    cost: { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05 },
     provenance: {
       status: "verified",
       requestId,
@@ -73,6 +74,7 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
   assert.equal(parsed.requestSha256, requestSha256);
   assert.equal(parsed.primary.providerId, "openai");
   assert.equal(parsed.checker.providerId, "gemini");
+  assert.deepEqual(parsed.cost, { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05 });
   assert.equal(Object.isFrozen(parsed), true);
   assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, confirmed: false } } }, { answer, requestId, requestText }), null);
   assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, providerId: "openai" } } }, { answer, requestId, requestText }), null);
@@ -84,6 +86,14 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
   assert.equal(await parseFusionVerificationMetadata(hostile, { answer, requestId, requestText }), null);
   const hostileProxy = new Proxy({}, { get() { throw new Error("hostile getter"); } });
   assert.equal(await parseFusionVerificationMetadata(hostileProxy, { answer, requestId, requestText }), null);
+  for (const cost of [
+    { providerReportedUsd: -0.01, reservedUsd: 0.04, requestCapUsd: 0.05 },
+    { providerReportedUsd: 0.06, reservedUsd: 0.04, requestCapUsd: 0.05 },
+    { providerReportedUsd: 0.02, reservedUsd: 0.06, requestCapUsd: 0.05 },
+    { providerReportedUsd: 0.02, reservedUsd: 0.04, requestCapUsd: 0.26 },
+  ]) {
+    assert.equal(await parseFusionVerificationMetadata({ ...verified, cost }, { answer, requestId, requestText }), null);
+  }
 });
 
 test("chat UI exposes Fusion as a per-request checkbox and fences requests on unmount", async () => {
@@ -94,6 +104,7 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
     readFile(new URL("../src/components/chat/ChatMessage.jsx", import.meta.url), "utf8"),
   ]);
   assert.match(input, /checked=\{fusionEnabled\}/);
+  assert.match(input, /server applies a per-request cost cap/i);
   assert.match(input, /setFusionEnabled\?\.\(event\.target\.checked\)/);
   assert.match(input, /fusionEnabled = false/);
   assert.match(page, /useEffect\(\(\) => \(\) => activeRequestControllerRef\.current\?\.abort\(\), \[\]\)/);
@@ -107,5 +118,6 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
   assert.match(client, /HEY AI could not be reached/);
   assert.match(client, /parseFusionVerificationMetadata\(data\.fusion,/);
   assert.match(message, /Independent provider check passed/);
+  assert.match(message, /Provider reported usage:/);
   assert.match(message, /role="status"/);
 });

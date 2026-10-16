@@ -30,7 +30,8 @@ export default function ChatMessage({
         <div className="hey-chat-message-copy">{isUser ? children : <MarkdownResponse>{children}</MarkdownResponse>}</div>
         {!isUser && verification?.status === "verified" && verification.primary?.providerId && verification.checker?.providerId && (
           <div className="hey-chat-verification" role="status">
-            Independent provider check passed · {providerName(verification.primary.providerId)} → {providerName(verification.checker.providerId)}
+            <div>Independent provider check passed · {providerName(verification.primary.providerId)} → {providerName(verification.checker.providerId)}</div>
+            {verification.cost && <div>Provider reported usage: ${verification.cost.providerReportedUsd.toFixed(4)} · reserved cap: ${verification.cost.reservedUsd.toFixed(4)} of ${verification.cost.requestCapUsd.toFixed(2)}</div>}
           </div>
         )}
         <div className="hey-chat-message-actions">

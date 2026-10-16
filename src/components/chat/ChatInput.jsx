@@ -120,7 +120,7 @@ export default function ChatInput({
       {providerCatalog.status === "ready" && !selectedProfileAvailable && (
         <p className="hey-chat-provider-models" role="alert">Your selected model is no longer available to this account. Choose another option or Automatic before sending.</p>
       )}
-      {fusionEnabled && <p className="hey-chat-provider-models" role="status">Fusion is an independent opt-in and uses its own provider selection. The model choice above applies to standard chat requests.</p>}
+      {fusionEnabled && <p className="hey-chat-provider-models" role="status">Fusion is an independent opt-in and uses its own provider selection. The model choice above applies to standard chat requests. The server applies a per-request cost cap and withholds the answer unless the independent check succeeds.</p>}
       <DictationControl key={user?.id || "signed-out"} onInsert={insertDictation} disabled={disabled} />
       <div className="hey-chat-input-shell">
         <textarea

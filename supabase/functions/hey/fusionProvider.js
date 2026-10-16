@@ -489,7 +489,7 @@ export async function runFusionChatRequest({
   }
   const provenance = await buildFusionProvenance(result, fusionRequestId, requestMessage);
   if (!provenance) return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer" };
-  return { ...result, provenance };
+  return { ...result, provenance, requestCapUsd: pricingConfig.budgetUsd };
 }
 
 export default { parseFusionPricingConfig, runFusionChatRequest };

@@ -828,6 +828,11 @@ Deno.serve(async (request) => {
         status: "verified",
         independentlyChecked: true,
         confidence: fusion.confidence,
+        cost: {
+          providerReportedUsd: fusion.costUsd,
+          reservedUsd: fusion.reservedCostUsd,
+          requestCapUsd: fusion.requestCapUsd,
+        },
         provenance: fusion.provenance,
       },
     };

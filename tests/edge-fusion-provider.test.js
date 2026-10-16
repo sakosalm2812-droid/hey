@@ -607,6 +607,9 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /requestText: message/);
   assert.match(route, /fusion\.provenance\?\.status !== "verified"[\s\S]*?No answer was delivered/i);
   assert.match(route, /provenance: fusion\.provenance/);
+  assert.match(route, /providerReportedUsd: fusion\.costUsd/);
+  assert.match(route, /reservedUsd: fusion\.reservedCostUsd/);
+  assert.match(route, /requestCapUsd: fusion\.requestCapUsd/);
 });
 
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {
@@ -619,6 +622,25 @@ test("server budget prevents the independent provider call when its reservation 
   const result = await runFusionChatRequest({ requested: true, accountId: "auth-user-123", entitlements, attempts, pricingConfig: constrainedPricing, messages, fetchImpl });
   assert.equal(result.status, "budget_exhausted");
   assert.equal(calls.length, 0);
+});
+
+test("verified fusion receipts carry the exact server request cap and provider-reported usage", async () => {
+  const { fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+  const result = await runFusionChatRequest({
+    requested: true,
+    requestId: "123e4567-e89b-42d3-a456-426614174000",
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl,
+  });
+  assert.equal(result.status, "complete");
+  assert.equal(result.requestCapUsd, pricing.budgetUsd);
+  assert.ok(result.costUsd >= 0);
+  assert.ok(result.reservedCostUsd >= result.costUsd);
+  assert.ok(result.reservedCostUsd <= result.requestCapUsd);
 });
 
 test("parallel account requests use immutable request-local provider snapshots", async () => {
