@@ -14,6 +14,7 @@ const MAX_QUERY_LENGTH = 4096;
 const MAX_EXPERTS = 3;
 const MAX_CATALOG_EXPERTS = 10_000;
 const MAX_CATALOG_TERMS = 250_000;
+const MIN_UNAMBIGUOUS_TERM_MATCHES = 2;
 export const ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS = 4_000_000;
 const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
   coding: "coding",
@@ -55,6 +56,19 @@ function selectionInput(input, limit) {
     requestedLimit: Number.isInteger(limit) ? Math.max(1, Math.min(MAX_EXPERTS, limit)) : 2,
     truncated: input.length > MAX_QUERY_LENGTH,
   };
+}
+
+function getHintSuppressionReason(input, selection) {
+  if (selection.status === "invalid_input") return "invalid_input";
+  if (selection.status !== "selected") return "no_match";
+  if (selection.truncated) return "query_truncated";
+  if (ADVERSARIAL_ROUTING_TEXT.test(input)) return "adversarial_policy_override_text";
+
+  // Deterministic abstention only; this is not a calibrated confidence score.
+  const [primary, runnerUp] = selection.experts;
+  if (!primary || primary.score < MIN_UNAMBIGUOUS_TERM_MATCHES) return "weak_lexical_signal";
+  if (runnerUp && primary.score <= runnerUp.score) return "ambiguous_lexical_signal";
+  return null;
 }
 
 function formatSelection(ranked, requestedLimit, truncated) {
@@ -286,15 +300,7 @@ export function selectUltraSparseExpertsMasked(input, { limit = 2 } = {}) {
 export function createUltraSparsePlan(input, { intent = "conversation", limit = 2 } = {}) {
   const selection = selectUltraSparseExperts(input, { limit });
   const primaryExpert = selection.experts[0]?.id || null;
-  const suppressedReason = selection.status === "invalid_input"
-    ? "invalid_input"
-    : selection.status !== "selected"
-      ? "no_match"
-      : selection.truncated
-        ? "query_truncated"
-        : ADVERSARIAL_ROUTING_TEXT.test(input)
-          ? "adversarial_policy_override_text"
-          : null;
+  const suppressedReason = getHintSuppressionReason(input, selection);
   const eligibleExpert = suppressedReason ? null : primaryExpert;
   const capabilityHint = eligibleExpert ? PROVIDER_CAPABILITY_BY_EXPERT[eligibleExpert] || null : null;
   const hintedProviderPlan = capabilityHint

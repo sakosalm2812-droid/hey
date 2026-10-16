@@ -57,6 +57,8 @@ test("absent, malformed, oversized, and policy-override inputs preserve ordinary
     { name: "malformed non-text", input: null, reason: "invalid_input" },
     { name: "bounded-work truncation", input: oversized, reason: "query_truncated" },
     { name: "adversarial policy override text", input: adversarial, reason: "adversarial_policy_override_text" },
+    { name: "single weak lexical match", input: "debug", reason: "weak_lexical_signal" },
+    { name: "tied domain matches", input: "code debug source citation", reason: "ambiguous_lexical_signal" },
   ];
 
   for (const { name, input, reason } of cases) {
