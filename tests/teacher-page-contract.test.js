@@ -53,7 +53,7 @@ test("Teacher entrypoint explains denied access and exposes truthful readiness a
   assert.match(page, /Contact your school administrator/);
   assert.match(page, /HEY cannot grant access from this page/);
   assert.match(page, /Retry readiness check/);
-  assert.match(page, /Saving the three-artifact batch in one Forge transaction/);
+  assert.match(page, /Saving three artifacts and checking Forge receipts/);
   assert.match(page, /Save all three to Forge/);
   assert.match(page, /teacherJourneyPersistenceMatches\(journey, journeyContext\)/);
   assert.match(page, /status === "saved" && persistenceConfirmed/);
