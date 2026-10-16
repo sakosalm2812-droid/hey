@@ -1,6 +1,32 @@
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 5 integrated
 
-Coordinator branch `codex/resume-emergency-2026-10-14` is at `5fc8e78` (full SHA recorded by Git). Starting point for this batch was `84bb2abd822ac85ea188386fc7b8b21f6e5b7f67`; the branch is seven commits ahead of origin before this handoff update. Preserve untracked `docs/requirements/v3-agent-pack/` (the Windows path length prevents normal Git tracking); do not stage or delete it.
+Wave 5 code checkpoint: `5fc8e784051f50fcb7e0badc39692f1957900c57`. The currently pushed coordinator branch `codex/resume-emergency-2026-10-14` is `4ddecdbae126d1666610d01fded9166ababc1016` before this wave 6 handoff update. Preserve untracked `docs/requirements/v3-agent-pack/` (the Windows path length prevents normal Git tracking); do not stage or delete it.
+
+### Current execution — wave 6 resumed in parallel
+
+The wave 5 integration is complete and pushed. The eleven existing specialist Codex chats were resumed together (not recreated) on 2026-10-16, requesting GPT-6 Luna / High through the actual task model controls. Each was sent the current coordinator SHA `4ddecdbae126d1666610d01fded9166ababc1016`, a requirement to preserve its previous implementation and inspect the divergent branch before editing, the exact brief/source-pack locations, the local login configuration limitation, and the feature-specific continuation scope. App thread status confirms all eleven are Active. Their work is unmerged and must be reviewed/cherry-picked only after commit evidence. Branch refs show these latest remote checkpoints:
+
+| Worker | Existing task reference | Branch / latest commit | Current continuation |
+|---:|---|---|---|
+| 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/next-01-frontend-director` / `a70b9721f09d4cac0e1843f7297b405ccc6fe847` | Active; sole shared UI owner; complete one real Teacher/Spaces UI journey. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/next-02-onboarding-spaces` / `a179639f6cc6a30dacd22787d887a8b68cbef3ea` | Active; continue private Space lifecycle/recovery backend and persistence. |
+| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/next-03-tool-library` / `77a691febbfc06135eabac880be64a25d59482f2` | Active; connect failed-run activity and policy-safe recovery. |
+| 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/next-04-edge-everywhere` / `ad79d5d0ca4fc65b7d0fbe7e667f83e20ddab018` | Active; continue device command lease/credential integration; check migration ordering. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/next-05-gesture-control` / `b8798758e9c1c076ee570d60dbdf57f1fc8486b0` | Active; connect independent Gesture Studio to authorized profiles/runtime and recovery. |
+| 06 Flow | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/next-06-flow-dictation` / `5811d07f242f0e5468997d3bfe41519c55216209`; adapted cancellation branch `codex/next-06-flow-cancel-adapted` / `b04077f340c2daa9e4c26422bd7bf7f384878db7` | Active; wire safe dictation and selected-text rewrite lifecycle into usable UI. Preserve both branch histories. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-control` / `30cd8a59f2a8488637bf342463ca1894218cfc5c` | Active; continue Trust Kernel-gated launch and real postcondition verification where adapter exists. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/next-08-teacher-experience` / `321a6c670df1c1030d883e556bd8f62421084d20` | Active; wire protected Teacher artifact journey; live DB remains blocked/unverified without configuration. |
+| 09 HEY One | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-hey-one-models` / `334fa8dc548813e43d808f9593f3a988b9c9b580`; adapted cancellation branch `codex/next-09-hey-one-models-adapted-336bfe` / `0d77418eb7f8d72956ee3e820a76c709f409f3e5`; entitlement branch `codex/next-09-provider-entitlement-profiles-146ece4` / `cf96f6239608f26ea67d56706fb51a2ea757b5c1` | Active; reconcile these separate branches without duplicate provider work; no live inference claims. |
+| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | integrated prior checkpoint `codex/wave5-10-selector-budget` / `7e56cf6acc048c8480142923b3df1143d25853e5`; no `next-10` remote branch found | Active; worker to confirm its actual continuation branch/worktree before coding. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-models` / `654c5b1306a5d5479940755de2390dd3c5f3d08f` | Active; continue prompt-bound, budgeted verification and user-facing path. |
+
+The three open GitHub pull requests are drafts #1–#3 for older parallel work and target `codex/production-readiness-2026-10-13`, not this coordinator branch. They are retained for later reconciliation; none was merged or closed. GitHub branch inventory was refreshed after pushing the wave 5 checkpoint. The 11 continuation branches have diverged from the coordinator and include unmatched commits; do not blindly merge them. The full inventory and branch SHAs above are the recovered start state.
+
+### Required source receipts for current workers
+
+All workers were directed to read their existing `docs/requirements/specialists/HEY_SPECIALIST_XX_BRIEF.md`, the V3 source entry and product contract, approved refinements and shared platform contracts, plus their exact original prompt and matching capability / acceptance cases in the preserved V3 agent pack. The original V3 entry explicitly distinguishes approved source intent from code and runtime evidence and notes that inaccessible older conversations cannot be asserted as recovered. The coordinator's untracked pack remains readable locally but is not part of this commit due to Windows path-length constraints; workers must report file hashes for the specific source files they actually read. Do not represent message dispatch as proof of packet consumption until their receipts arrive.
+
+**Next exact actions:** poll the 11 existing tasks for their first branch/checkpoint receipts; independently inspect each changed-file diff and source receipt; integrate only nonduplicate changes onto this coordinator; run the affected adversarial suite, full suite, lint, build and app journey evidence after each batch; update this handoff and the 47-step evidence map with the resulting SHAs. Keep live login/provider/DB/device tests marked **UNVERIFIED** until real configuration and a user-authorized service/device are available.
 
 ### Wave 5 integration just completed
 
