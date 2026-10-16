@@ -187,6 +187,26 @@ test("adaptive selector preserves top-ranked output for a 2,000-expert shared-te
   }
 });
 
+test("packed postings preserve parity at the maximum accepted expert index", () => {
+  const catalog = Array.from({ length: 10_000 }, (_, expertIndex) => ({
+    id: `expert-${String(expertIndex).padStart(5, "0")}`,
+    terms: [
+      "shared",
+      `unique${expertIndex}`,
+      ...(expertIndex === 9_999 ? Array.from({ length: 29 }, (_, termIndex) => `lastterm${termIndex}`) : []),
+    ],
+  }));
+  const selector = createUltraSparseSelector(catalog);
+  assert.equal(selector.expertCount, 10_000);
+  assert.equal(selector.prepareIndexed(), true);
+  for (const query of ["unique9999", "lastterm28", "shared", "unrelated", `${"shared ".repeat(700)}unique9999`]) {
+    assert.deepEqual(selector.select(query), selector.selectLinear(query));
+  }
+  assert.deepEqual(selector.select("unique9999").experts.map(({ id }) => id), ["expert-09999"]);
+  assert.deepEqual(selector.select("lastterm28").matchedTerms, [{ expert: "expert-09999", term: "lastterm28" }]);
+  assert.equal(selector.prepareIndexed(), false);
+});
+
 test("catalog selector fails closed on hostile, duplicate, sparse, and oversized definitions", () => {
   assert.throws(() => createUltraSparseSelector(null), /Invalid expert catalog/);
   assert.throws(() => createUltraSparseSelector([new Array(1)]), /Invalid expert definition/);
@@ -344,6 +364,11 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
     assert.equal(scaling.samplesPerCasePerTrial, 10);
     assert.ok(Number.isFinite(scaling.catalogConstructionMicroseconds));
     assert.ok(Number.isFinite(scaling.indexedCandidatePreparationMicroseconds));
+    assert.equal(scaling.postingEncoding, "(expertIndex << 5) | termIndex");
+    assert.equal(scaling.maximumExpertIndex, scaling.expertCount - 1);
+    assert.equal(scaling.maximumTermIndex, scaling.termsPerExpert - 1);
+    assert.equal(scaling.maximumPackedPostingValue, ((scaling.expertCount - 1) << 5) | (scaling.termsPerExpert - 1));
+    assert.equal(scaling.packedPostingFitsUint32, true);
     assert.equal(scaling.coldAdaptiveFirstSelection.selectorConstructionIncluded, false);
     assert.equal(scaling.coldAdaptiveFirstSelection.lazyIndexPreparationIncluded, scaling.expertCount >= 20);
     assert.equal(scaling.coldAdaptiveFirstSelection.samplesPerCasePerTrial, 1);

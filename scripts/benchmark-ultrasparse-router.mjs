@@ -108,6 +108,8 @@ function benchmarkScaling() {
     const preparationStarted = process.hrtime.bigint();
     const selector = createUltraSparseSelector(catalog);
     const catalogConstructionMicroseconds = Number(process.hrtime.bigint() - preparationStarted) / 1e3;
+    const maximumTermIndex = Math.max(...catalog.map(({ terms }) => terms.length - 1));
+    const maximumPackedPostingValue = ((expertCount - 1) << 5) | maximumTermIndex;
     const indexPreparationStarted = process.hrtime.bigint();
     selector.prepareIndexed();
     const indexedCandidatePreparationMicroseconds = Number(process.hrtime.bigint() - indexPreparationStarted) / 1e3;
@@ -224,6 +226,11 @@ function benchmarkScaling() {
       fingerprintCanonicalization: "UTF-8 bytes of JSON.stringify(value)",
       catalogSha256: createHash("sha256").update(JSON.stringify(catalog), "utf8").digest("hex"),
       querySha256: createHash("sha256").update(JSON.stringify(cases.map(({ query }) => query)), "utf8").digest("hex"),
+      postingEncoding: "(expertIndex << 5) | termIndex",
+      maximumExpertIndex: expertCount - 1,
+      maximumTermIndex,
+      maximumPackedPostingValue,
+      packedPostingFitsUint32: maximumPackedPostingValue <= 0xffff_ffff,
       selectorStrategy: selector.strategy,
       catalogConstructionMicroseconds,
       indexedCandidatePreparationMicroseconds,
