@@ -289,7 +289,7 @@ test("aborting while a provider body is streaming cancels its reader and withhol
 test("provider HTTP failure bodies are cancelled without parsing or exposing vendor diagnostics", async () => {
   let cancelCount = 0;
   let calls = 0;
-  const result = await runFusionChatRequest({
+  const resultPromise = runFusionChatRequest({
     requested: true,
     accountId: "auth-user-123",
     entitlements,
@@ -304,10 +304,16 @@ test("provider HTTP failure bodies are cancelled without parsing or exposing ven
         },
         cancel() {
           cancelCount += 1;
+          return new Promise(() => {});
         },
       }), { status: 429 });
     },
   });
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => { timeoutId = setTimeout(() => resolve(null), 100); });
+  const result = await Promise.race([resultPromise, timeoutPromise]);
+  clearTimeout(timeoutId);
+  assert.notEqual(result, null, "a stalled provider-body cancellation must not stall fallback");
   assert.equal(calls, 2);
   assert.equal(cancelCount, 2);
   assert.notEqual(result.status, "complete");

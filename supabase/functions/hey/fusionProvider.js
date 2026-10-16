@@ -91,10 +91,19 @@ function calculateCost(usage, pricing) {
   return (usage.inputTokens * pricing.inputUsdPerMillion + usage.outputTokens * pricing.outputUsdPerMillion) / 1_000_000;
 }
 
+function cancelStreamQuietly(stream) {
+  try {
+    const cancellation = stream?.cancel();
+    if (cancellation && typeof cancellation.catch === "function") void cancellation.catch(() => {});
+  } catch {
+    // Cleanup must not delay the bounded failure path.
+  }
+}
+
 async function readBoundedResponseText(response, signal) {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_PROVIDER_RESPONSE_BYTES) {
-    await response.body?.cancel().catch(() => {});
+    cancelStreamQuietly(response.body);
     throw new Error("Provider response too large");
   }
   if (!response.body) return "";
@@ -102,9 +111,9 @@ async function readBoundedResponseText(response, signal) {
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
-  const cancelOnAbort = () => { void reader.cancel().catch(() => {}); };
+  const cancelOnAbort = () => cancelStreamQuietly(reader);
   if (signal?.aborted) {
-    await reader.cancel().catch(() => {});
+    cancelStreamQuietly(reader);
     throw new Error("Provider request cancelled");
   }
   signal?.addEventListener("abort", cancelOnAbort, { once: true });
@@ -115,14 +124,14 @@ async function readBoundedResponseText(response, signal) {
       if (done) break;
       size += value.byteLength;
       if (size > MAX_PROVIDER_RESPONSE_BYTES) {
-        await reader.cancel().catch(() => {});
+        cancelStreamQuietly(reader);
         throw new Error("Provider response too large");
       }
       chunks.push(value);
     }
   } finally {
     signal?.removeEventListener("abort", cancelOnAbort);
-    if (signal?.aborted) await reader.cancel().catch(() => {});
+    if (signal?.aborted) cancelStreamQuietly(reader);
   }
   const bytes = new Uint8Array(size);
   let offset = 0;
@@ -238,7 +247,7 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
     });
     if (controller.signal.aborted) throw new Error("Provider request cancelled");
     if (!response.ok) {
-      await response.body?.cancel().catch(() => {});
+      cancelStreamQuietly(response.body);
       throw new Error("Provider request failed");
     }
     responseText = await readBoundedResponseText(response, controller.signal);
