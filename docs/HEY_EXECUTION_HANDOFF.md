@@ -1,34 +1,33 @@
 ## Active continuation — 2026-10-16, current checkpoint
 
-Coordinator branch: `codex/resume-emergency-2026-10-14`; starting HEAD `01547281b653e9ddda85b14f5e6aeae89213192a`. Current source integration is `f58100ca974dc63303b3093fb3a24d55368d8927`; docs/evidence commits through `0154728` are on the branch. Preserve untracked `docs/requirements/v3-agent-pack/` and every existing specialist worktree.
+Coordinator branch: `codex/resume-emergency-2026-10-14`; current integration HEAD `5a180ba6795ab350bfd0c10767ad1782d96fedf5`; latest pushed coordinator checkpoint `aa415ac19ff8d8b17c1cf8090f5c58ba1287e6ae`. The three implementation commits integrated after that checkpoint are `6bb67a1525cac917f32bc39b818ad49731821c50` (Step 40 local backup/restore drill), `d01595c4acd010eeab84ace63752c4f0a51dc30e` (Step 46 bounded `dependentRequired` comparison), and `5a180ba6795ab350bfd0c10767ad1782d96fedf5` (Step 41 offline conflict resolver). Preserve untracked `docs/requirements/v3-agent-pack/` and every existing specialist worktree.
 
 ### Current implementation workers
 
 | Worker | Task reference | Branch / checkpoint | Scope / status |
 |---|---|---|---|
-| `/root/step46_contracts` | Local collaboration task `/root/step46_contracts` | Continuation branch/worktree pending receipt; source checkpoint `a7a479eac735a3c9aae7a80e23f82dafd0d30913` | Extend bounded JSON Schema comparison only with safe local reference or another explicitly supported feature; network/ref recursion must fail closed. Code and adversarial tests in progress. |
-| `/root/step47_gate` | Local collaboration task `/root/step47_gate` | `codex/wave7-step47-backup-drill`, `60ae3330f37ed9b2e95414ab36724c920d37f3b6`; worktree `work/wave7-step47-backup-drill` | Done: synthetic temp-only backup/restore CLI, SHA-256 integrity verification, traversal/corruption/missing/extra-file rejection, run instructions. Focused tests 6/6; `npm run drill:backup-restore` passed 3/3 files; scoped lint and diff-check pass. No production backup/restore verified. Awaiting coordinator review/integration. |
-| `/root/offline_conflict` | Local collaboration task `/root/offline_conflict` | New isolated branch/worktree pending receipt from `01547281b653e9ddda85b14f5e6aeae89213192a` | Implement deterministic offline conflict handling with account/version fences, recovery behavior, and adversarial tests. Code/tests in progress. |
+| `/root/step46_contracts` | Local collaboration task `/root/step46_contracts` | `codex/wave7-step46-dependent-required`, source `607add75fd804275ae53e307a64b9ff9f82125b2`, integrated `d01595c`; worktree `work/wave7-step46-dependent-required` | Done: bounded `dependentRequired` comparison for Draft 2019-09/2020-12, aggregate-only result, malformed/old-dialect fail-closed behavior; focused tests 14/14, changed-file lint and diff-check pass. `$ref` remains unsupported. |
+| `/root/step47_gate` | Local collaboration task `/root/step47_gate` | `codex/wave7-step47-backup-drill`, source `60ae3330f37ed9b2e95414ab36724c920d37f3b6`, integrated `6bb67a1`; worktree `work/wave7-step47-backup-drill` | Done: synthetic temp-only backup/restore CLI, SHA-256 integrity verification, traversal/corruption/missing/extra-file rejection. Independent verification: 6/6 focused tests, `npm run drill:backup-restore` restored/verified 3/3 synthetic files, scoped lint and diff-check pass. No production backup/restore verified. |
+| `/root/offline_conflict` | Local collaboration task `/root/offline_conflict` | `codex/offline-sync-conflict-step41`, source `8c35a19c04a6c9185df4afc7a688f1d3de8a4bde`, integrated `5a180ba`; worktree under `work/` | Done: account-fenced deterministic three-way merge for bounded flat scalar records; stale/replayed versions, account changes, accessors, prototype keys, and conflicting fields fail safely. Independent focused tests 5/5 and changed-file lint pass. Merge result is not persisted/transmitted; nested records unsupported. |
 
 ### Current verified evidence and live app
 
 - Live Vite app is served on `http://127.0.0.1:5175` (`npm run dev -- --host 127.0.0.1 --port 5175` from the repository). In-app browser currently renders `/login` and `/download`.
 - `/login` exposes email/password fields but disables sign-in and states that `VITE_SUPABASE_URL` and the public anon key are missing. No credentials were entered. Authenticated journeys, Supabase/Forge persistence, real provider inference, camera/microphone, native devices, and production deployment remain **UNVERIFIED**.
 - `/download` visibly labels Web as “Source verified,” desktop as “Native build required,” and iOS/Android as “Native project required.” This verifies route rendering and truthful status content, not an install or release.
-- Previously verified coordinator evidence remains: full Node suite **743/743**, production build **2,774 modules**, focused Step 45 **15/15**, Research UI **6/6**, combined Research suites **21/21**, changed-file ESLint and `git diff --check` pass. Sitemap generation skips without `SITE_URL`; Vite reports the known mixed static/dynamic `contextManager.js` import warning.
-- Full `npm run lint` initially spent several minutes traversing preserved nested checkouts and generated MediaPipe JS. That run was stopped. `eslint.config.js` now globally ignores `work/**` (nested preserved worktrees) and `public/mediapipe/vision/wasm/**` (copied vendor output); a fresh full lint completed successfully (exit 0). Authored HEY source/tests/scripts remain linted.
+- Combined coordinator evidence: full Node suite **756/756**; production build succeeds with **2,774 modules**; full authored-code `npm run lint` exits 0; `git diff --check` passes. The newly integrated focused suites pass: Step 40 drill **6/6** plus CLI 3/3 synthetic files; Step 41 resolver **5/5**; Step 46 comparison **14/14**. Sitemap generation skips without `SITE_URL`; Vite reports the known mixed static/dynamic `contextManager.js` import warning.
+- Full `npm run lint` initially spent several minutes traversing preserved nested checkouts and generated MediaPipe JS. That run was stopped. `eslint.config.js` now globally ignores `work/**` (nested preserved worktrees) and `public/mediapipe/vision/wasm/**` (copied vendor output); the subsequent complete authored-code lint exited 0. Authored HEY source/tests/scripts remain linted.
 
 ### Current uncommitted / unmerged state
 
-- Coordinator checkout has an uncommitted `eslint.config.js` scope correction and this handoff update. Preserve `docs/requirements/v3-agent-pack/` as untracked source evidence. Step 47 continuation is committed but not yet merged; the other two workers remain in progress.
+- Coordinator checkout has only the pending `docs/HEY_STEP_STATUS.md` and handoff edits for the latest integration checkpoint. Preserve `docs/requirements/v3-agent-pack/` as untracked source evidence. All three worker implementations are integrated; their original worktrees and branches remain preserved.
 - Active worker continuation branch names and SHAs must be filled from their receipts before integration; do not cherry-pick earlier source branches over current coordinator state.
 
 ### Exact next actions
 
-1. Run `git diff --check`, commit the ESLint scope correction and this handoff update, then push the coordinator checkpoint.
-2. Collect remaining worker branch/commit receipts; inspect the Step 47 diff against coordinator HEAD and run its focused tests plus changed-file lint before integration.
-3. Integrate only independent, reviewed commits; run the full Node suite and production build, update `HEY_STEP_STATUS.md` and this handoff with actual results and SHAs, then push.
-4. Keep the app open at `http://127.0.0.1:5175`; once valid Supabase URL/key and an authorized test account are configured, demonstrate authenticated frontend-to-backend journeys. Until then, keep those functions marked **UNVERIFIED**.
+1. Run `git diff --check`, commit the updated Step 40/41/46/47 status and this handoff, then push the coordinator checkpoint.
+2. Continue from the next incomplete product requirement, with parallel specialist worktrees from the latest coordinator SHA and exact worker SHAs recorded before integration.
+3. Keep the app open at `http://127.0.0.1:5175`; once valid Supabase URL/key and an authorized test account are configured, demonstrate authenticated frontend-to-backend journeys. Until then, keep those functions marked **UNVERIFIED**.
 
 ---
 
