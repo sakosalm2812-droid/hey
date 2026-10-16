@@ -47,6 +47,30 @@ test("a command preview expires and its cancellation fence is one-use", async ()
   }
 });
 
+test("command preview expiry remains bounded if the wall clock moves backward", async () => {
+  const originalDateNow = Date.now;
+  const performanceNowDescriptor = Object.getOwnPropertyDescriptor(globalThis.performance, "now");
+  let wallNow = 1_800_000_000_000;
+  let monotonic = 500;
+  Date.now = () => wallNow;
+  Object.defineProperty(globalThis.performance, "now", {
+    configurable: true,
+    value: () => monotonic,
+  });
+  setAccountScope("voice-monotonic-expiry-account");
+  try {
+    const preview = await understandVoiceCommand("open notes");
+    wallNow -= 5 * 60_000;
+    monotonic += 60_000;
+    assert.deepEqual(HEY.voice.validateCommandPreview(preview), { success: false, status: "preview_expired" });
+  } finally {
+    Date.now = originalDateNow;
+    if (performanceNowDescriptor) Object.defineProperty(globalThis.performance, "now", performanceNowDescriptor);
+    else delete globalThis.performance.now;
+    setAccountScope(null);
+  }
+});
+
 test("preview cancellation is fenced to the account that received it and rejects hostile IDs", async () => {
   setAccountScope("voice-preview-owner");
   try {

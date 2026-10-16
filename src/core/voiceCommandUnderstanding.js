@@ -59,17 +59,32 @@ function cancelledPreview(scope, confidence = 0) {
   });
 }
 
+function monotonicNow() {
+  try {
+    const now = globalThis.performance?.now?.();
+    if (Number.isFinite(now) && now >= 0) return now;
+  } catch {
+    // Fall back to the wall clock only when a monotonic clock is unavailable.
+  }
+  return Date.now();
+}
+
+function previewExpired(pending) {
+  return pending.expiresAt <= Date.now() || pending.expiresAtMonotonic <= monotonicNow();
+}
+
 function registerCommandPreview(result) {
   if (result.type !== "Command" || result.requiresConfirmation !== true) return result;
   const now = Date.now();
   for (const [previewId, pending] of pendingCommandPreviews) {
-    if (pending.expiresAt <= now) pendingCommandPreviews.delete(previewId);
+    if (previewExpired(pending)) pendingCommandPreviews.delete(previewId);
   }
   while (pendingCommandPreviews.size >= MAX_PENDING_COMMAND_PREVIEWS) {
     pendingCommandPreviews.delete(pendingCommandPreviews.keys().next().value);
   }
   const previewId = crypto.randomUUID();
   const expiresAt = now + COMMAND_PREVIEW_LIFETIME_MS;
+  const expiresAtMonotonic = monotonicNow() + COMMAND_PREVIEW_LIFETIME_MS;
   const proposal = deepFreeze({
     ...result,
     previewId,
@@ -78,6 +93,7 @@ function registerCommandPreview(result) {
   pendingCommandPreviews.set(previewId, {
     accountScope: result.accountScope,
     expiresAt,
+    expiresAtMonotonic,
     contentBinding: canonicalPreviewJson(proposal),
   });
   return proposal;
@@ -100,7 +116,7 @@ export function cancelVoiceCommandPreview(previewId) {
   if (!pending) return deepFreeze({ success: false, status: "preview_unavailable" });
   pendingCommandPreviews.delete(previewId);
   if (pending.accountScope !== getAccountScope()) return deepFreeze({ success: false, status: "stale_account_scope" });
-  if (pending.expiresAt <= Date.now()) return deepFreeze({ success: false, status: "preview_expired" });
+  if (previewExpired(pending)) return deepFreeze({ success: false, status: "preview_expired" });
   return deepFreeze({ success: true, status: "cancelled", previewId });
 }
 
@@ -123,7 +139,7 @@ export function validateVoiceCommandPreview(preview) {
     pendingCommandPreviews.delete(previewId);
     return deepFreeze({ success: false, status: "stale_account_scope" });
   }
-  if (pending.expiresAt <= Date.now()) {
+  if (previewExpired(pending)) {
     pendingCommandPreviews.delete(previewId);
     return deepFreeze({ success: false, status: "preview_expired" });
   }
