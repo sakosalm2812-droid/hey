@@ -73,7 +73,27 @@ All existing chats were messaged concurrently with GPT-6 Luna requested where se
 | 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave-next-10-selector-guard` `27c61ca` | Integrated `1fa879f`; selector tests 13, exact parity benchmark; warm p95 varied, no cold p95/inference claim. |
 | 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave-next-11-fusion-recovery` `185f603` | Integrated `18081dd`; provider/Fusion tests 70, lint passed; no live inference. |
 
-No new Codex chats were created. Preserve coordinator untracked V3 extraction. Next: choose and implement another missing vertical journey from the 47-step map, then refresh this handoff and status file before context handoff. Real Supabase, Edge deployment, account journey, live provider, microphone/camera, native runtime, and production remain blocked/unverified by missing credentials, tools, accounts, or devices.
+No new Codex chats were created. Preserve coordinator untracked V3 extraction. Real Supabase, Edge deployment, account journey, live provider, microphone/camera, native runtime, and production remain blocked/unverified by missing credentials, tools, accounts, or devices.
+
+### Active wave 4 — launched concurrently from `10e8c3b`
+
+All 11 existing worker chats were restarted at once with GPT-6 Luna requested where available. Each was instructed to use an isolated worktree based on pushed coordinator commit `10e8c3b351b7a67317995da4dfae8af78c3864da`; no worker should switch the coordinator checkout. Expected branches, task references and assigned slices:
+
+| # | Task reference | Assigned branch | Current state |
+|---:|---|---|---|
+| 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave4-01-space-details-ui` | Active; accessible revision-aware Space details editor. |
+| 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave4-02-space-recovery` | Active; check contract fit for archive/restore lifecycle. |
+| 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave4-03-tool-lifecycle` | Active; new distinct lifecycle gap beyond retry/history. |
+| 04 | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave4-04-edge-privacy` | Active; new Edge privacy/safety invariant. |
+| 05 | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave4-05-gesture-visibility` | Active; stop camera when page hides; fresh consent to resume. |
+| 06 | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave4-06-dictation-visibility` | Active; stop hidden-tab recognition and suppress late callbacks. |
+| 07 | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave4-07-voice-preview` | Active; new inert VoiceOS preview contract. |
+| 08 | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave4-08-teacher-access` | Active; inspect export/search/version paths for distinct access gap. |
+| 09 | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave4-09-provider-error` | Active; exact-model routing failure/recovery. |
+| 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave4-10-selector-memory` | Active; selector resource/memory bound. |
+| 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave4-11-fusion-recovery` | Active; new Fusion abort/fallback invariant. |
+
+At launch, all were in progress and no wave-4 commits were yet available. Next: inspect each committed diff and worker verification, integrate only safe commits, rerun full tests/build/changed-file lint, update both handoff files with exact SHAs, and push a checkpoint.
 
 ---
 
