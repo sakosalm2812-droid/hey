@@ -181,6 +181,14 @@ test("release recommendation requires a fresh independent signature over the com
     const result = await request(data, { inventoryAttestorIds: ["release-auditor"] });
     assert.equal(result.recommendation, "NOT_READY");
   });
+  await t.test("all trusted inventory and gate-verifier key roles must be disjoint", async () => {
+    const result = await request(data, { inventoryAttestorIds: ["inventory-authority", "release-auditor"] });
+    assert.equal(result.recommendation, "NOT_READY");
+    assert.deepEqual(result.inventoryAttestation, {
+      status: "blocked",
+      reason: "inventory_attestor_and_gate_verifier_key_roles_overlap",
+    });
+  });
   await t.test("malformed and wrong-account attestations fail closed", async () => {
     const malformed = await request(data, { inventoryAttestation: null });
     assert.equal(malformed.recommendation, "NOT_READY");

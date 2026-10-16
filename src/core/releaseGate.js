@@ -179,6 +179,7 @@ export async function evaluateReleaseGate({
   const optionsSnapshot = detachedOptions(verificationOptions);
   const independentKeyIds = assertUniqueStrings(detachedJson(trustedIndependentVerifierKeyIds, "Trusted independent verifier key IDs"), "Trusted independent verifier key IDs");
   const inventoryKeyIds = assertUniqueStrings(detachedJson(trustedInventoryAttestorKeyIds, "Trusted independent inventory attestor key IDs"), "Trusted independent inventory attestor key IDs");
+  const trustKeyRolesDisjoint = [...inventoryKeyIds].every((keyId) => !independentKeyIds.has(keyId));
   const gateIds = validateGates(gatesSnapshot);
   const normalizedClaims = validateClaims(claimsSnapshot, gatesSnapshot);
   if (!Number.isFinite(now)) throw new TypeError("Release evaluation time must be finite.");
@@ -193,7 +194,8 @@ export async function evaluateReleaseGate({
       now,
     });
     const expectedBody = inventoryBody(gatesSnapshot, normalizedClaims, inventoryAttestationChallenge);
-    inventoryAttestationValid = verification.valid === true
+    inventoryAttestationValid = trustKeyRolesDisjoint
+      && verification.valid === true
       && inventoryKeyIds.has(verification.signerKeyId)
       && !independentKeyIds.has(verification.signerKeyId)
       && stableJson(body) === stableJson(expectedBody);
@@ -275,6 +277,13 @@ export async function evaluateReleaseGate({
     gates: gateResults,
     publicClaims: claimResults,
     rejectedEvidenceCount,
-    inventoryAttestation: inventoryAttestationValid ? { status: "verified", evidenceId: inventoryAttestationEvidenceId } : { status: "blocked", reason: "current_independent_inventory_attestation_missing_or_invalid" },
+    inventoryAttestation: inventoryAttestationValid
+      ? { status: "verified", evidenceId: inventoryAttestationEvidenceId }
+      : {
+        status: "blocked",
+        reason: trustKeyRolesDisjoint
+          ? "current_independent_inventory_attestation_missing_or_invalid"
+          : "inventory_attestor_and_gate_verifier_key_roles_overlap",
+      },
   };
 }
