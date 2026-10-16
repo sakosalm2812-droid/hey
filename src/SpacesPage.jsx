@@ -1,16 +1,135 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCw, Search, Trash2, Wrench, X } from "lucide-react";
+import { AlertCircle, Archive, Check, Layers3, LoaderCircle, LockKeyhole, Plus, RotateCcw, RotateCw, Search, Trash2, Wrench, X } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
 import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import { spaceDetailsFromRecord, spaceDetailsMatchAccount } from "./spacePageDetails.js";
 import { parseSpacePreferenceDraft, spacePreferencesMatchAccount } from "./spacePagePreferences.js";
+import { confirmSpaceLifecycle, prepareSpaceLifecycle, spaceLifecycleFromRecord } from "./spacePageLifecycle.js";
 import "./SpacesPage.css";
 
 function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Date unavailable" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+function SpaceLifecycleControl({ space, accountId, accountRef, accountIsCurrent, refreshSpaces }) {
+  const [preview, setPreview] = useState(null);
+  const [conflict, setConflict] = useState(null);
+  const [action, setAction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const activeScope = `account:${accountId}`;
+  const lifecycle = spaceLifecycleFromRecord(space, accountId);
+  const controlId = `space-lifecycle-${encodeURIComponent(space.id)}`;
+
+  useEffect(() => {
+    setPreview(null);
+    setConflict(null);
+    setAction("");
+    setBusy(false);
+    setError("");
+    setNotice("");
+  }, [accountId, space.id]);
+
+  async function prepare(actionToPrepare = lifecycle?.status === "archived" ? "restore" : "archive") {
+    if (!lifecycle || !accountIsCurrent || busy) return;
+    setBusy(true);
+    setPreview(null);
+    setConflict(null);
+    setError("");
+    setNotice("");
+    setAction(actionToPrepare);
+    await Promise.resolve();
+    if (accountRef.current !== accountId || getAccountScope() !== activeScope) {
+      setBusy(false);
+      setError("Your account changed. Reload this Space before continuing.");
+      return;
+    }
+    try {
+      const result = prepareSpaceLifecycle({ api: HEY.spaces, accountId, accountScope: getAccountScope(), spaceId: space.id, action: actionToPrepare });
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      if (result.conflict) {
+        setConflict(result.conflict);
+        refreshSpaces();
+      }
+      if (result.error) setError(result.error);
+      if (result.preview) setPreview({ ...result.preview, accountId });
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setError("A current Space status review could not be prepared. Reload and try again.");
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setBusy(false);
+    }
+  }
+
+  async function confirm() {
+    if (!preview || preview.accountId !== accountId || !accountIsCurrent || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    await Promise.resolve();
+    if (accountRef.current !== accountId || getAccountScope() !== activeScope) {
+      setBusy(false);
+      setPreview(null);
+      setError("Your account changed. This confirmation is no longer valid.");
+      return;
+    }
+    try {
+      const result = confirmSpaceLifecycle({ api: HEY.spaces, accountId, accountScope: getAccountScope(), spaceId: space.id, previewId: preview.previewId, action: preview.action });
+      if (accountRef.current !== accountId || getAccountScope() !== activeScope) return;
+      setPreview(null);
+      if (result.conflict) {
+        setConflict(result.conflict);
+        refreshSpaces();
+      }
+      if (!result.success) setError(result.error || "The Space status could not be changed. Review the latest status and try again.");
+      else {
+        refreshSpaces();
+        setNotice(`${result.status === "archived" ? "Archived" : "Restored"} “${space.name}”. Private data and permissions were preserved.`);
+      }
+    } catch {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) {
+        setPreview(null);
+        setError("The Space status could not be changed. Review the latest status and try again.");
+      }
+    } finally {
+      if (accountRef.current === accountId && getAccountScope() === activeScope) setBusy(false);
+    }
+  }
+
+  if (!lifecycle) return <p className="spaces-page__lifecycle-error" role="alert">Space status is unavailable. Reload your Spaces before changing it.</p>;
+  return <div className="spaces-page__lifecycle">
+    <span className={`spaces-page__lifecycle-status spaces-page__lifecycle-status--${lifecycle.status}`} role="status">
+      {lifecycle.status === "archived" ? "Archived" : "Active"} · revision {lifecycle.revision}
+    </span>
+    <button type="button" className="spaces-page__secondary" onClick={() => prepare()} disabled={!accountIsCurrent || busy}>
+      {busy ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : lifecycle.status === "archived" ? <RotateCcw size={15} aria-hidden="true" /> : <Archive size={15} aria-hidden="true" />}
+      {lifecycle.status === "archived" ? "Restore Space" : "Archive Space"}
+    </button>
+    {(preview || conflict || error || notice) && <section id={controlId} className="spaces-page__lifecycle-panel" aria-label={`Space archive and restore for ${space.name}`} role="region" aria-live="polite">
+      {preview && <>
+        <h4 id={`${controlId}-review-title`}>{preview.action === "archive_private_space" ? "Review archiving this Space" : "Review restoring this Space"}</h4>
+        <p>{preview.effects?.[0]}</p>
+        <p>Private content, saved details, layout, and tool selections are preserved. Access permissions will not change.</p>
+        <div className="spaces-page__actions">
+          <button type="button" className="spaces-page__secondary" onClick={() => setPreview(null)} disabled={busy}>Cancel</button>
+          <button type="button" className="spaces-page__primary" onClick={confirm} disabled={busy || preview.accountId !== accountId || !accountIsCurrent}>
+            <Check size={15} aria-hidden="true" /> Confirm {preview.targetStatus === "archived" ? "archive" : "restore"}
+          </button>
+        </div>
+      </>}
+      {conflict && <div className="spaces-page__lifecycle-conflict" role="alert">
+        <p>This Space is now <strong>{conflict.status}</strong> at lifecycle revision {conflict.revision}. Review the latest status before continuing.</p>
+        {conflict.status === (action === "archive" ? "archived" : "active")
+          ? <button type="button" className="spaces-page__secondary" onClick={() => { setConflict(null); setError(""); setNotice(`The latest status is already ${conflict.status}.`); }} disabled={busy}>Use latest status</button>
+          : <button type="button" className="spaces-page__secondary" onClick={() => prepare(action)} disabled={busy || !accountIsCurrent}><RotateCw size={14} aria-hidden="true" /> Review latest and prepare again</button>}
+      </div>}
+      {error && !conflict && <p className="spaces-page__membership-error" role="alert">{error}</p>}
+      {notice && <p className="spaces-page__notice" role="status"><Check size={15} aria-hidden="true" /> {notice}</p>}
+    </section>}
+  </div>;
 }
 
 function membershipAccountIsCurrent(accountRef, accountId, scope) {
@@ -933,6 +1052,7 @@ export default function SpacesPage() {
           <div className="spaces-page__card-icon" aria-hidden="true"><Layers3 size={18} /></div>
           <div className="spaces-page__card-copy"><h3>{space.name}</h3><p>{space.description || "Private Space"}</p></div>
           <span className="spaces-page__private-label"><LockKeyhole size={13} aria-hidden="true" /> Private</span>
+          <SpaceLifecycleControl space={space} accountId={accountId} accountRef={accountRef} accountIsCurrent={accountIsCurrent} refreshSpaces={refreshSpaces} />
           <time dateTime={space.createdAt}>{formatDate(space.createdAt)}</time>
           <button type="button" className="spaces-page__delete-button" onClick={() => previewSpaceDeletion(space)} disabled={Boolean(deletingSpaceId) || !accountIsCurrent}>
             {deletingSpaceId === space.id ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Trash2 size={15} aria-hidden="true" />} Delete Space

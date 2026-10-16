@@ -96,6 +96,15 @@
 .spaces-page__card time { color: var(--text-secondary, #a7a4ae); font-size: 12px; white-space: nowrap; }
 .spaces-page__membership { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
 .spaces-page__saved-preferences { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
+.spaces-page__lifecycle { display: flex; flex: 1 0 100%; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
+.spaces-page__lifecycle-status { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 10px; border: 1px solid rgba(131, 217, 174, .25); border-radius: 999px; color: #9be2bb; font-size: 11px; white-space: nowrap; }
+.spaces-page__lifecycle-status--archived { border-color: rgba(255, 255, 255, .16); color: var(--text-secondary, #a7a4ae); }
+.spaces-page__lifecycle-panel { flex: 1 0 100%; min-width: 0; padding: 15px; border: 1px solid rgba(214, 182, 107, .24); border-radius: 14px; background: rgba(214, 182, 107, .045); }
+.spaces-page__lifecycle-panel h4 { margin: 0 0 8px; font-size: 14px; }
+.spaces-page__lifecycle-panel > p { margin: 7px 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; line-height: 1.5; }
+.spaces-page__lifecycle-conflict { padding: 12px; border: 1px solid rgba(255, 155, 139, .25); border-radius: 11px; background: rgba(255, 155, 139, .06); color: #ffb0a4; }
+.spaces-page__lifecycle-conflict p { margin: 0 0 10px; font-size: 12px; line-height: 1.5; }
+.spaces-page__lifecycle-error { flex: 1 0 100%; color: #ffb0a4; font-size: 12px; }
 .spaces-page__details-editor { flex: 1 0 100%; min-width: 0; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, .07); }
 .spaces-page__membership-toggle { min-height: 36px !important; padding: 7px 11px !important; border-color: rgba(214, 182, 107, .28) !important; color: var(--gold-primary, #d6b66b) !important; font-size: 13px !important; }
 .spaces-page__membership-panel { margin-top: 12px; padding: clamp(13px, 2vw, 20px); border: 1px solid rgba(255, 255, 255, .08); border-radius: 15px; background: rgba(0, 0, 0, .12); }
