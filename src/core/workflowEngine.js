@@ -51,6 +51,8 @@ function normalizeStep(step, index) {
     status: "pending",
     result: null,
     error: null,
+    settledAfterCancellation: false,
+    settlementError: null,
     startedAt: null,
     completedAt: null,
   };
@@ -258,6 +260,10 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
     index < workflow.steps.length && index < maxSteps;
     index += 1
   ) {
+    if (workflow.status === "cancelled") {
+      return workflow;
+    }
+
     const step = workflow.steps[index];
 
     if (STEP_TERMINAL_STATES.has(step.status)) {
@@ -266,6 +272,10 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
 
     if (typeof options.shouldCancel === "function") {
       const shouldCancel = await options.shouldCancel(workflow, step);
+
+      if (workflow.status === "cancelled") {
+        return workflow;
+      }
 
       if (shouldCancel) {
         return cancelWorkflow(workflow, "Workflow cancellation requested.");
@@ -334,14 +344,31 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
       });
 
       step.result = result;
-      step.status = "completed";
       step.completedAt = new Date();
 
-      auditWorkflow("workflow.step.completed", workflow, {
-        status: "completed",
-        stepId: step.id,
-        action: step.action,
-      });
+      if (workflow.status === "cancelled") {
+        step.settledAfterCancellation = true;
+        auditWorkflow("workflow.step.settled_after_cancellation", workflow, {
+          status: "cancelled",
+          stepId: step.id,
+          action: step.action,
+          resultAvailable: true,
+        });
+      } else if (typeof options.verifyStep === "function") {
+        step.status = "verifying";
+        auditWorkflow("workflow.step.verifying", workflow, {
+          status: "running",
+          stepId: step.id,
+          action: step.action,
+        });
+      } else {
+        step.status = "completed";
+        auditWorkflow("workflow.step.completed", workflow, {
+          status: "completed",
+          stepId: step.id,
+          action: step.action,
+        });
+      }
 
       if (typeof options.verifyStep === "function") {
         const verification = await options.verifyStep(step, {
@@ -352,9 +379,20 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
 
         step.verification = verification;
 
-        if (verification === false) {
+        if (workflow.status === "cancelled") {
+          step.settledAfterCancellation = true;
+          auditWorkflow("workflow.step.verification_after_cancellation", workflow, {
+            status: "cancelled",
+            stepId: step.id,
+            action: step.action,
+            verified: verification === true,
+          });
+          return workflow;
+        }
+
+        if (verification !== true) {
           step.status = "failed";
-          step.error = "Step verification failed.";
+          step.error = "Step verification did not return a positive result.";
 
           auditWorkflow("workflow.step.verification_failed", workflow, {
             status: "failed",
@@ -366,9 +404,29 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
             workflow.status = "blocked";
             return workflow;
           }
+        } else {
+          step.status = "completed";
+          auditWorkflow("workflow.step.completed", workflow, {
+            status: "completed",
+            stepId: step.id,
+            action: step.action,
+            verified: true,
+          });
         }
       }
     } catch (error) {
+      if (workflow.status === "cancelled") {
+        step.settledAfterCancellation = true;
+        step.settlementError = error instanceof Error ? error.message : String(error);
+        auditWorkflow("workflow.step.settlement_failed_after_cancellation", workflow, {
+          status: "cancelled",
+          stepId: step.id,
+          action: step.action,
+          error: step.settlementError,
+        });
+        return workflow;
+      }
+
       step.status = "failed";
       step.error =
         error instanceof Error ? error.message : String(error);
@@ -391,6 +449,10 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
 
         return workflow;
       }
+    }
+
+    if (workflow.status === "cancelled") {
+      return workflow;
     }
   }
 
