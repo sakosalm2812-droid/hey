@@ -1,4 +1,42 @@
-## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 4 integrated
+## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 5 integrated
+
+Coordinator branch `codex/resume-emergency-2026-10-14` is at `5fc8e78` (full SHA recorded by Git). Starting point for this batch was `84bb2abd822ac85ea188386fc7b8b21f6e5b7f67`; the branch is seven commits ahead of origin before this handoff update. Preserve untracked `docs/requirements/v3-agent-pack/` (the Windows path length prevents normal Git tracking); do not stage or delete it.
+
+### Wave 5 integration just completed
+
+- Worker 01 `codex/wave5-01-space-archive-ui`, task `01a14073-33bf-7403-940b-871cd0de9ebc`, worker commit `d4e5302df3c6c45d43ccd9557bf9230d9e10a392`, coordinator `ca8c9b7`: accessible Space archive/restore controls, explicit preview and confirmation, stale revision re-review, account-switch fencing, lifecycle status announcements. Focused archive UI test included. Authenticated UI/live storage is unverified because this local app has no Supabase URL/public anon key.
+- Worker 02 `codex/wave5-02-space-sync`, task `01a14073-9827-7f42-bf35-4eb2faee522d`, worker `a877af89d62f7e7f7534b3e43ba015af9f3b51ff`, coordinator `48d4b3c`: account-safe Space cache recovery after storage failure; stale cache clears, recoverable sync error is surfaced, and delayed prior-account events are ignored.
+- Worker 03 `codex/wave5-03-tool-capacity`, task `01a14073-ae0b-7fa2-a145-2d4b3283f087`, worker `4d17e61ad834a9cda1dfc46e9ef53615a82286eb`, coordinator `68ac43b`: lifecycle capacity remains reserved while non-cooperative handlers settle after stop/unregister/account switch.
+- Worker 04 `codex/wave5-04-device-transport`, task `01a14073-c424-70e2-9773-630d488b24ae`, worker `0629dec23385ad63a3ab51dc4b0d8a85e87feecf`, coordinator `8e81876`: device queue RPCs lock and recheck the exact current credential and device state before mutation. Coordinator `5fc8e78` moves its SQL migration to `20261016000200_...` to avoid colliding with Teacher migration `20261016000100_...`; static test path updated. Live PostgreSQL/Supabase execution and deployment are unverified.
+- Worker 05 `codex/wave5-05-gesture-runtime`, task `01a14073-de07-7a90-b8bb-08faadea17bc`, worker `862aeeb423f7921531678ecbb057ac8b7f931383`, coordinator `c506f41`: Gesture cleanup continues releasing camera/video/detector resources when one stop operation throws.
+- Worker 06 `codex/wave5-06-dictation-metrics`, task `01a14073-f7e7-7601-8957-8d8cdfafa1d0`, worker `6e82de39a47447afef434edbff54930ccbcb8220`, coordinator `1b7c7ab`: privacy-safe bounded dictation recovery timing distinguishes visibility interruption from user stop; no transcript/audio is recorded.
+- Worker 07 `codex/wave5-07-voice-preview`, task `01a14074-1024-7e32-a5c1-c134d8e204a7`, worker `0ab327ef138675f3462ae9661504157c2b495da8`, coordinator `156b69a`: VoiceOS inert preview expiration uses monotonic time against wall-clock rollback.
+- Worker 08 `codex/wave5-08-teacher-rls`, task `01a14074-2bb4-7b73-af09-a38e11a10c3d`, worker `92c22f6b66595eca1795740d9c36cd7d65208944`, coordinator `f8bb643`: restrictive Teacher artifact/version RLS fences creator/account/class scope and Teacher-only writes, with a trigger protecting scope markers. Only static SQL/source tests ran; no database migration was applied.
+- Worker 09 `codex/wave5-09-provider-timeout`, task `01a14074-4bdf-7f33-bf83-bb7e1dff5097`, worker `d817242f8db547309a285864b62fce74eebed7a3`, coordinator `e52e938`: bounded regular provider response-body reads by request deadline/abort; abort prevents fallback.
+- Worker 10 `codex/wave5-10-selector-budget`, task `01a14074-6e4f-79e2-805f-30ce26dab60e`, worker `7e56cf6acc048c8480142923b3df1143d25853e5`, coordinator `84bb2ab`: caps cumulative catalog vocabulary characters to bound pathological selector memory/input.
+- Worker 11 `codex/wave5-11-fusion-stream`, task `01a14074-9f63-7672-9965-154a8394ffca`, worker `c91cb29a7b042621033ffc9abd5391b6fbb14ae7`, coordinator `0ae3cf8`: covers oversized Fusion stream rejection when cancellation itself does not settle.
+
+All eleven existing wave 5 tasks are completed/idle; no active worker is available in this coordinator process. Worker branches and task references remain available above. No unmerged worker commits remain for wave 5. The coordinator has no staged/tracked uncommitted code; the extracted V3 pack remains untracked and preserved.
+
+### Verification at this checkpoint
+
+- Focused combined integration tests: **130/130 passed**, including Space archive UI, lifecycle/sync, Tool Library capacity, Teacher RLS static source, selector budget, device queue/transport and migration path.
+- Full `npm test`: **678/678 passed**.
+- ESLint for changed JS/JSX from wave 5 base `0265c82`: passed.
+- `npm run build`: passed, 2,769 modules. Existing mixed static/dynamic import warning remains in `src/core/contextManager.js`; sitemap generation skipped because `SITE_URL` is absent.
+- `git diff --check`: passed before checkpoint commits; recheck after docs update.
+- Browser at `http://127.0.0.1:5175/login` renders the real local login page, but displays missing Supabase URL/public anon key and disables sign-in. This verifies local public UI only. Authenticated Spaces, frontend-to-live-backend connection, actual database persistence/RLS, provider inference, real mic/camera, native devices, Edge deployment, and production behavior are **UNVERIFIED**. No production-ready claim.
+- All 47 program steps remain In progress or Incomplete; none is production-certified complete.
+
+### Exact next actions
+
+1. Push the reviewed wave 5 commits and this handoff/step-status update.
+2. Resume the existing requirement agents referenced in the sidebar, or start the next disjoint implementation wave concurrently if they are complete; request GPT-6 Luna where selectable and keep each change isolated.
+3. Inspect each diff before integration; protect existing stronger implementations and preserve the V3 agent pack.
+4. Continue with a concrete vertical slice that can be exercised in the app. Resolve missing local Supabase configuration for authenticated end-to-end proof only if user-provided configuration is available; keep blocked capabilities marked UNVERIFIED.
+5. Run focused and full checks after each integration wave, record exact SHAs/evidence here and in `HEY_STEP_STATUS.md`, and commit checkpoints regularly.
+
+## Historical checkpoint — 2026-10-16, Asia/Baghdad, wave 4 integrated
 
 Coordinator branch `codex/resume-emergency-2026-10-14` has integrated wave 5 checkpoint `0ae3cf895123f5993acc778618e86f5d5503d0f1`. Wave 5 worktrees were started from code base `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`; five worker changes are now reviewed and integrated. The wave 4 baseline is `0265c82`; all wave 4 worker changes are integrated. Preserve the coordinator's untracked `docs/requirements/v3-agent-pack/` extraction; do not stage or delete it.
 
