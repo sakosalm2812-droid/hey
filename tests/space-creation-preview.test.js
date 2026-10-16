@@ -1263,6 +1263,74 @@ test("Space recovery leaves corrupt data untouched when restoration writes fail"
   } finally { setAccountScope(previousScope); }
 }));
 
+test("Space recovery preserves the last valid snapshot when the primary record is missing", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-missing-primary");
+    const owner = new SpaceCreationEngine();
+    const created = owner.confirmNaturalLanguagePreview({
+      previewId: owner.previewNaturalLanguageRequest({ prompt: "Create a space called Missing primary" }).previewId,
+      confirm: true,
+    });
+    assert.equal(created.success, true);
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    const originalSnapshot = storage.getItem(recoveryKey);
+    storage.removeItem(primaryKey);
+
+    const unreadable = new SpaceCreationEngine();
+    assert.throws(() => unreadable.getSpaces(), /storage could not be read/);
+    assert.equal(storage.getItem(primaryKey), null);
+    assert.equal(storage.getItem(recoveryKey), originalSnapshot, "loading must not replace a valid non-empty recovery snapshot with empty data");
+
+    const preview = unreadable.previewRecovery({ accountScope: "account:space-recovery-missing-primary" });
+    assert.equal(preview.requiresConfirmation, true);
+    assert.equal(preview.spaceCount, 1);
+    assert.equal(preview.spaces[0].name, "Missing primary");
+    assert.match(unreadable.confirmRecovery({ previewId: preview.previewId, confirm: false }).error, /Explicit confirmation/);
+    assert.equal(storage.getItem(primaryKey), null);
+    assert.equal(storage.getItem(recoveryKey), originalSnapshot);
+
+    storage.failWrites = true;
+    assert.equal(unreadable.confirmRecovery({ previewId: preview.previewId, confirm: true }).code, "write_failed");
+    assert.equal(storage.getItem(primaryKey), null);
+    assert.equal(storage.getItem(recoveryKey), originalSnapshot);
+
+    storage.failWrites = false;
+    const retry = unreadable.previewRecovery({ accountScope: "account:space-recovery-missing-primary" });
+    assert.equal(unreadable.confirmRecovery({ previewId: retry.previewId, confirm: true }).success, true);
+    assert.equal(unreadable.getSpaces()[0].id, created.space.id);
+    assert.equal(unreadable.getSpaces()[0].name, "Missing primary");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space recovery fails closed and preserves a malformed snapshot when the primary record is missing", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-missing-primary-hostile");
+    const owner = new SpaceCreationEngine();
+    const created = owner.confirmNaturalLanguagePreview({
+      previewId: owner.previewNaturalLanguageRequest({ prompt: "Create a space called Keep snapshot" }).previewId,
+      confirm: true,
+    });
+    assert.equal(created.success, true);
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    const hostileSnapshot = JSON.stringify({ recoveryContractVersion: 1, accountScope: "account:another-user", sequence: 3, payload: "{}" });
+    storage.setItem(recoveryKey, hostileSnapshot);
+    storage.removeItem(primaryKey);
+
+    const unreadable = new SpaceCreationEngine();
+    assert.throws(() => unreadable.getSpaces(), /storage could not be read/);
+    assert.equal(storage.getItem(primaryKey), null);
+    assert.equal(storage.getItem(recoveryKey), hostileSnapshot);
+    assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-missing-primary-hostile" }).error, /valid Space recovery snapshot is unavailable/);
+    assert.equal(storage.getItem(recoveryKey), hostileSnapshot);
+  } finally { setAccountScope(previousScope); }
+}));
+
 test("Space recovery invalidates an unverifiable stale snapshot after a committed update", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);

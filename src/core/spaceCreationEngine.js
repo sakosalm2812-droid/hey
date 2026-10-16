@@ -312,6 +312,18 @@ function parseRecoverySnapshot(stored, scope) {
   return { contractVersion: 0, sequence: 0, updatedAt: null, payload, spaces };
 }
 
+function readPrimarySpaces(scope) {
+  const primary = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
+  if (primary !== null) return parseStoredSpaces(primary, scope);
+
+  const recovery = readStorageItem(getAccountStorageKey(RECOVERY_STORAGE_KEY, scope));
+  if (recovery !== null) {
+    const snapshot = parseRecoverySnapshot(recovery, scope);
+    if (snapshot.spaces.size > 0) throw new Error("Space storage is missing; review recovery before continuing");
+  }
+  return new Map();
+}
+
 function writeRecoverySnapshot(scope, payload) {
   if (getAccountScope() !== scope) return false;
   const key = getAccountStorageKey(RECOVERY_STORAGE_KEY, scope);
@@ -461,7 +473,7 @@ export class SpaceCreationEngine {
     this.accountScope = scope;
     this.loadError = false;
     try {
-      const spaces = parseStoredSpaces(readStorageItem(getAccountStorageKey(STORAGE_KEY, scope)), scope);
+      const spaces = readPrimarySpaces(scope);
       if (getAccountScope() !== scope || this.accountScope !== scope) return;
       this.spaces = spaces;
       const serialized = serializeSpaces(spaces, scope);
@@ -477,7 +489,7 @@ export class SpaceCreationEngine {
     if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before reading" };
     const previous = serializeSpaces(this.spaces, scope);
     try {
-      const spaces = parseStoredSpaces(readStorageItem(getAccountStorageKey(STORAGE_KEY, scope)), scope);
+      const spaces = readPrimarySpaces(scope);
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before reading" };
       this.spaces = spaces;
       this.loadError = false;
@@ -522,11 +534,15 @@ export class SpaceCreationEngine {
     let primarySnapshot;
     try {
       primarySnapshot = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
-      const readableSpaces = parseStoredSpaces(primarySnapshot, scope);
-      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry recovery" };
-      this.spaces = readableSpaces;
-      this.loadError = false;
-      return { error: "Space storage is readable; recovery is not needed" };
+      if (primarySnapshot !== null) {
+        const readableSpaces = parseStoredSpaces(primarySnapshot, scope);
+        if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry recovery" };
+        this.spaces = readableSpaces;
+        this.loadError = false;
+        return { error: "Space storage is readable; recovery is not needed" };
+      }
+      this.spaces.clear();
+      this.loadError = true;
     } catch {
       this.loadError = true;
     }
@@ -589,14 +605,18 @@ export class SpaceCreationEngine {
     try {
       const primaryKey = getAccountStorageKey(STORAGE_KEY, scope);
       const currentPrimary = readStorageItem(primaryKey);
-      try {
-        const readableSpaces = parseStoredSpaces(currentPrimary, scope);
-        if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; recovery preview is no longer valid" };
-        this.spaces = readableSpaces;
-        this.loadError = false;
-        return { error: "Space storage is readable; recovery is no longer needed" };
-      } catch {
-        if (currentPrimary !== pending.primarySnapshot) return { error: "Space storage changed after recovery review; review recovery again", code: "stale_snapshot" };
+      if (currentPrimary !== null) {
+        try {
+          const readableSpaces = parseStoredSpaces(currentPrimary, scope);
+          if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; recovery preview is no longer valid" };
+          this.spaces = readableSpaces;
+          this.loadError = false;
+          return { error: "Space storage is readable; recovery is no longer needed" };
+        } catch {
+          if (currentPrimary !== pending.primarySnapshot) return { error: "Space storage changed after recovery review; review recovery again", code: "stale_snapshot" };
+        }
+      } else if (currentPrimary !== pending.primarySnapshot) {
+        return { error: "Space storage changed after recovery review; review recovery again", code: "stale_snapshot" };
       }
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; recovery preview is no longer valid" };
       const recoveryKey = getAccountStorageKey(RECOVERY_STORAGE_KEY, scope);
