@@ -26,6 +26,22 @@ test("Gesture Studio requires explicit camera consent and keeps a visible test p
   assert.match(studioSource, /captureCustomGestureSample/);
 });
 
+test("Gesture Studio discloses local camera processing and separate MediaPipe metrics before consent", () => {
+  const frameDisclosure = studioSource.indexOf("Camera frames and hand poses are processed on this device and are not sent to Google.");
+  const metricsDisclosure = studioSource.indexOf("MediaPipe Tasks SDK sends performance and utilization metrics to Google.");
+  const consentControl = studioSource.indexOf("I consent to camera use for this gesture session.");
+  assert.ok(frameDisclosure >= 0);
+  assert.ok(metricsDisclosure > frameDisclosure);
+  assert.ok(consentControl > metricsDisclosure);
+  assert.match(studioSource, /Raw video is not saved/);
+});
+
+test("Gesture Studio offers camera permission recovery for denied and revoked access", () => {
+  assert.match(studioSource, /\["permission_denied", "revoked"\]\.includes\(capability\?\.status\)/);
+  assert.match(studioSource, /Recheck camera access/);
+  assert.match(studioSource, /getRecognitionCapability\(\)\.then\(setCapability\)/);
+});
+
 test("Gesture actions have a route handler and completion is recorded after navigation", () => {
   assert.match(bridgeSource, /request\?\.action\?\.action !== "summon"/);
   assert.match(bridgeSource, /navigate\("\/dashboard"\)/);
