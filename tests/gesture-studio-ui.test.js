@@ -60,6 +60,14 @@ test("Gesture Studio explains camera track loss separately from permission revoc
   assert.match(studioSource, /reason === "permission_revoked"\) \{ setConsent\(false\); setError\("Camera access was revoked\./);
 });
 
+test("Gesture Studio camera selection is profile-scoped and enumeration does not request capture", () => {
+  assert.match(studioSource, /Camera for this profile/);
+  assert.match(studioSource, /gestureEngine\.enumerateCameras\(\)/);
+  assert.match(studioSource, /Finding cameras does not open the camera or request permission/);
+  assert.match(studioSource, /editProfile\("cameraId", event\.target\.value \|\| null\)/);
+  assert.match(studioSource, /I consent to camera use for this gesture session/);
+});
+
 test("ending an active camera session requires fresh consent before restart", () => {
   assert.match(studioSource, /payload\?\.reason === "camera_track_ended"\) \{ setConsent\(false\); setError\(/);
   assert.match(studioSource, /payload\?\.reason === "permission_revoked"\) \{ setConsent\(false\); setError\(/);

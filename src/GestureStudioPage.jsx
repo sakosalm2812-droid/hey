@@ -21,11 +21,14 @@ function capabilityMessage(capability) {
 export default function GestureStudioPage() {
   const { user } = useAuth();
   const videoRef = useRef(null);
+  const cameraDiscoveryGeneration = useRef(0);
   const [profiles, setProfiles] = useState([]);
   const [profileId, setProfileId] = useState("");
   const [bindings, setBindings] = useState([]);
   const [customGestures, setCustomGestures] = useState([]);
   const [capability, setCapability] = useState(null);
+  const [cameraDevices, setCameraDevices] = useState([]);
+  const [cameraDiscoveryStatus, setCameraDiscoveryStatus] = useState("idle");
   const [sessionState, setSessionState] = useState(gestureEngine.getRecognitionState());
   const [mode, setMode] = useState("test");
   const [consent, setConsent] = useState(false);
@@ -38,6 +41,13 @@ export default function GestureStudioPage() {
   const [profileName, setProfileName] = useState("");
   const [customName, setCustomName] = useState("");
   const [customGestureId, setCustomGestureId] = useState("");
+
+  useEffect(() => {
+    cameraDiscoveryGeneration.current += 1;
+    setCameraDevices([]);
+    setCameraDiscoveryStatus("idle");
+    return () => { cameraDiscoveryGeneration.current += 1; };
+  }, [user?.id]);
 
   const refresh = useCallback(() => {
     if (!user?.id) return;
@@ -119,6 +129,28 @@ export default function GestureStudioPage() {
   function editProfile(field, value) {
     try { gestureEngine.updateProfile(profileId, { [field]: value }); refresh(); }
     catch (failure) { setError(failure?.message || "Profile setting could not be saved."); }
+  }
+
+  async function findCameras() {
+    const generation = ++cameraDiscoveryGeneration.current;
+    setCameraDiscoveryStatus("loading");
+    setError("");
+    try {
+      const result = await gestureEngine.enumerateCameras();
+      if (generation !== cameraDiscoveryGeneration.current) return;
+      setCameraDevices(result.devices || []);
+      setCameraDiscoveryStatus(result.status);
+      if (!result.success && result.status !== "account_changed") {
+        setError(result.status === "unsupported"
+          ? "Camera selection is unavailable in this browser. The system default may still work."
+          : "Cameras could not be listed. You can still use the system default camera.");
+      }
+    } catch {
+      if (generation !== cameraDiscoveryGeneration.current) return;
+      setCameraDevices([]);
+      setCameraDiscoveryStatus("unavailable");
+      setError("Cameras could not be listed. You can still use the system default camera.");
+    }
   }
 
   async function startSession() {
@@ -211,6 +243,13 @@ export default function GestureStudioPage() {
             <label className="hey-gesture-studio__field">Active profile<select value={profileId} onChange={(event) => setProfileId(event.target.value)} disabled={active || paused}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
             {profiles.filter((item) => item.id === profileId).map((profile) => <div className="hey-gesture-studio__controls" key={profile.id}>
               <label>Dominant hand<select value={profile.handedness} disabled={active || paused} onChange={(event) => editProfile("handedness", event.target.value)}><option value="right">Right hand</option><option value="left">Left hand</option><option value="both">Either hand</option></select></label>
+              <label>Camera for this profile<select value={profile.cameraId || ""} disabled={active || paused} onChange={(event) => editProfile("cameraId", event.target.value || null)}><option value="">System default</option>{profile.cameraId && !cameraDevices.some((device) => device.deviceId === profile.cameraId) && <option value={profile.cameraId}>Saved camera (not currently listed)</option>}{cameraDevices.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label}</option>)}</select></label>
+              <button type="button" className="secondary" disabled={active || paused || cameraDiscoveryStatus === "loading"} onClick={() => { void findCameras(); }}>{cameraDiscoveryStatus === "loading" ? "Finding cameras…" : "Find cameras"}</button>
+              <p className="hey-gesture-studio__status" role="status" aria-live="polite">{cameraDiscoveryStatus === "available"
+                ? `${cameraDevices.length} camera${cameraDevices.length === 1 ? "" : "s"} listed. Finding cameras does not open the camera or request permission; names may be hidden until browser access is granted.`
+                : cameraDiscoveryStatus === "empty"
+                  ? "No camera devices were listed. The system-default option remains available. Finding cameras does not request permission."
+                  : "Finding cameras does not open the camera or request permission. Camera names may be hidden until browser access is granted."}</p>
               <label>Sensitivity <span>{profile.sensitivity.toFixed(1)}</span><input type="range" min="0.1" max="1" step="0.1" value={profile.sensitivity} disabled={active || paused} onChange={(event) => editProfile("sensitivity", Number(event.target.value))}/></label>
               <label>Confidence threshold <span>{profile.confidence.toFixed(2)}</span><input type="range" min="0.7" max="0.99" step="0.01" value={profile.confidence} disabled={active || paused} onChange={(event) => editProfile("confidence", Number(event.target.value))}/></label>
               <label>Hold time <span>{profile.holdMs} ms</span><input type="range" min="200" max="1500" step="100" value={profile.holdMs} disabled={active || paused} onChange={(event) => editProfile("holdMs", Number(event.target.value))}/></label>

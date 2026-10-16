@@ -6,7 +6,7 @@ globalThis.localStorage = {
   setItem(key, value) { storage.set(key, value); },
   removeItem(key) { storage.delete(key); },
 };
-const { setAccountScope, getAccountStorageKey } = await import("../src/core/accountScope.js");
+const { setAccountScope, getAccountScope, getAccountStorageKey } = await import("../src/core/accountScope.js");
 setAccountScope("gesture-contract-test");
 const { GestureEngine, GESTURE_STATES, gestureEngine } = await import("../src/core/gestureEngine.js");
 const { subscribe, clearEventListeners } = await import("../src/core/eventBus.js");
@@ -99,6 +99,99 @@ test("calibration sensitivity and allowlisted mappings persist per account and r
   assert.equal(engine.getProfile(profile.id).sensitivity, 0.45);
   assert.equal(engine.getProfile(profileB.id), null);
   setAccountScope("gesture-contract-test");
+});
+
+test("camera enumeration lists only cameras without prompting and handles hidden labels", async () => {
+  const { engine } = makeEngine();
+  let cameraPromptCount = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        async enumerateDevices() {
+          return [
+            { kind: "audioinput", deviceId: "mic-1", label: "Microphone" },
+            { kind: "videoinput", deviceId: "front-1", label: "" },
+            { kind: "videoinput", deviceId: "external-2", label: "USB camera" },
+            { kind: "videoinput", deviceId: "external-2", label: "Duplicate" },
+            { kind: "videoinput", deviceId: "", label: "Invalid" },
+          ];
+        },
+        async getUserMedia() { cameraPromptCount += 1; throw new Error("enumeration must not request capture"); },
+      },
+    },
+  });
+
+  const result = await engine.enumerateCameras();
+
+  assert.equal(result.success, true);
+  assert.equal(result.status, "available");
+  assert.deepEqual(result.devices, [
+    { deviceId: "front-1", label: "Camera 1" },
+    { deviceId: "external-2", label: "USB camera" },
+  ]);
+  assert.equal(cameraPromptCount, 0);
+});
+
+test("camera enumeration drops a late device list after account scope changes", async () => {
+  const originalScope = getAccountScope();
+  const memory = makeStorage();
+  setAccountScope("gesture-camera-enumeration-a");
+  const engine = new GestureEngine({ storageProvider: () => memory });
+  let resolveDevices;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { enumerateDevices: () => new Promise((resolve) => { resolveDevices = resolve; }) } },
+  });
+
+  try {
+    const pending = engine.enumerateCameras();
+    setAccountScope("gesture-camera-enumeration-b");
+    resolveDevices([{ kind: "videoinput", deviceId: "private-device-id", label: "Camera" }]);
+
+    assert.deepEqual(await pending, { success: false, status: "account_changed", devices: [] });
+  } finally {
+    setAccountScope(originalScope);
+    engine.refreshAccountScope();
+  }
+});
+
+test("selected account camera persists and is passed to capture only after consent", async () => {
+  const { engine, profile, storage } = makeEngine();
+  const camera = installCamera();
+  let requestedCamera = null;
+  let captureRequests = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        async getUserMedia(constraints) {
+          captureRequests += 1;
+          requestedCamera = constraints.video.deviceId;
+          return camera.stream;
+        },
+      },
+    },
+  });
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() {} });
+
+  engine.updateProfile(profile.id, { cameraId: "account-camera-1" });
+  assert.equal(engine.getProfile(profile.id).cameraId, "account-camera-1");
+  const reloaded = new GestureEngine({ storageProvider: () => storage });
+  assert.equal(reloaded.getProfile(profile.id).cameraId, "account-camera-1");
+  assert.equal(captureRequests, 0);
+  assert.deepEqual((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal(captureRequests, 0);
+
+  const started = await engine.startRecognition(profile.id, { consent: true, mode: "test" });
+  assert.equal(started.success, true);
+  assert.deepEqual(requestedCamera, { exact: "account-camera-1" });
+  assert.equal(captureRequests, 1);
+  assert.throws(() => engine.updateProfile(profile.id, { cameraId: "other-camera" }), /Stop gesture recognition/u);
+  engine.stopRecognition("test_cleanup");
+
+  engine.updateProfile(profile.id, { cameraId: null });
+  assert.equal(engine.getProfile(profile.id).cameraId, null);
 });
 
 test("malformed or unreadable gesture storage blocks profile mutation without replacing saved bytes", () => {

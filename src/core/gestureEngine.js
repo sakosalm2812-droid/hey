@@ -485,6 +485,48 @@ export class GestureEngine {
       : null;
   }
 
+  async enumerateCameras() {
+    this.refreshAccountScope();
+    const accountScope = getAccountScope();
+    let mediaDevices;
+    let enumerateDevices;
+    try {
+      mediaDevices = globalThis.navigator?.mediaDevices;
+      enumerateDevices = mediaDevices?.enumerateDevices;
+    } catch {
+      return { success: false, status: "unavailable", devices: [] };
+    }
+    if (typeof enumerateDevices !== "function") return { success: false, status: "unsupported", devices: [] };
+
+    let detectedDevices;
+    try {
+      detectedDevices = await Reflect.apply(enumerateDevices, mediaDevices, []);
+    } catch {
+      return { success: false, status: "unavailable", devices: [] };
+    }
+    if (getAccountScope() !== accountScope) return { success: false, status: "account_changed", devices: [] };
+    if (!Array.isArray(detectedDevices)) return { success: false, status: "unavailable", devices: [] };
+
+    const seen = new Set();
+    const cameras = [];
+    try {
+      for (const device of detectedDevices.slice(0, 64)) {
+        if (!device || device.kind !== "videoinput" || typeof device.deviceId !== "string"
+          || !device.deviceId.trim() || device.deviceId.length > 256 || seen.has(device.deviceId)) continue;
+        seen.add(device.deviceId);
+        const index = cameras.length + 1;
+        cameras.push({
+          deviceId: device.deviceId,
+          label: typeof device.label === "string" && device.label.trim() ? device.label.slice(0, 120) : `Camera ${index}`,
+        });
+      }
+    } catch {
+      return { success: false, status: "unavailable", devices: [] };
+    }
+    if (getAccountScope() !== accountScope) return { success: false, status: "account_changed", devices: [] };
+    return { success: true, status: cameras.length ? "available" : "empty", devices: cameras };
+  }
+
   getRecognitionMode() {
     return this.recognitionMode;
   }
@@ -588,7 +630,7 @@ export class GestureEngine {
     const profile = this.profiles.get(id);
     if (!profile) return null;
     const safeUpdates = copyGestureJson(updates, "Gesture profile update");
-    const allowed = new Set(["name", "sensitivity", "confidence", "holdMs", "cooldownMs", "handedness", "dominantHand"]);
+    const allowed = new Set(["name", "sensitivity", "confidence", "holdMs", "cooldownMs", "handedness", "dominantHand", "cameraId"]);
     if (Object.keys(safeUpdates).some((key) => !allowed.has(key))) throw new TypeError("Gesture profile update contains a protected or unsupported field.");
     if (Object.hasOwn(safeUpdates, "cooldownMs")) validateGestureCooldownMs(safeUpdates.cooldownMs);
     if (Object.hasOwn(safeUpdates, "sensitivity")) validateSensitivity(safeUpdates.sensitivity);
@@ -596,6 +638,10 @@ export class GestureEngine {
     if (Object.hasOwn(safeUpdates, "holdMs") && (!Number.isSafeInteger(safeUpdates.holdMs) || safeUpdates.holdMs < 200 || safeUpdates.holdMs > 1500)) throw new RangeError("Gesture hold time must be between 200 and 1500 milliseconds.");
     for (const key of ["handedness", "dominantHand"]) {
       if (Object.hasOwn(safeUpdates, key) && !["left", "right", "both"].includes(safeUpdates[key])) throw new TypeError("Gesture handedness is invalid.");
+    }
+    if (Object.hasOwn(safeUpdates, "cameraId") && safeUpdates.cameraId !== null
+      && (typeof safeUpdates.cameraId !== "string" || !safeUpdates.cameraId.trim() || safeUpdates.cameraId.length > 256)) {
+      throw new TypeError("Gesture camera selection is invalid.");
     }
     if (Object.hasOwn(safeUpdates, "name") && (typeof safeUpdates.name !== "string" || !safeUpdates.name.trim() || safeUpdates.name.length > 80)) throw new TypeError("Gesture profile name is invalid.");
     const updated = { ...profile, ...safeUpdates, updatedAt: new Date().toISOString() };
