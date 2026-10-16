@@ -914,6 +914,48 @@ test("complete lesson journey routes distinct teacher and student artifacts thro
   assert.equal(new Set(forgeWrites.map((write) => write.metadata.journeyId)).size, 1);
 });
 
+test("20-question quiz keeps every answer private through persisted recovery and worksheet export", async () => {
+  const journeyId = "508dba72-56b3-4d16-b8da-0ec60669fb57";
+  const context = teacherContext();
+  const questions = Array.from({ length: 20 }, (_, index) => ({
+    objective: "Place unit fractions on a number line",
+    prompt: `Question ${index + 1}: locate fraction ${index + 1}/20.`,
+    expectedLearning: `Learner explains location ${index + 1}.`,
+    teacherAnswer: `Private answer ${index + 1}.`,
+    points: 1,
+  }));
+  await withForgeBatchPersistence(async (_calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(_field, ids) { return Promise.resolve({ data: ids.map((id) => rowsById.get(id)).filter(Boolean), error: null }); },
+    });
+    try {
+      const created = await HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput({ questions }), context, journeyId,
+      });
+      assert.equal(created.saved.teacherArtifact.content.questions.length, 20);
+      assert.equal(created.saved.studentArtifact.content.questions.length, 20);
+      assert.match(JSON.stringify(created.saved.teacherArtifact.content), /Private answer 20/);
+      assert.doesNotMatch(JSON.stringify(created.saved.studentArtifact.content), /teacherAnswer|expectedLearning|Private answer/);
+
+      const reopened = await HEY.teacher.getLessonWorksheetJourney({ journeyId, context });
+      assert.equal(reopened.saved.teacherArtifact.content.questions.length, 20);
+      assert.equal(reopened.saved.studentArtifact.content.questions.length, 20);
+      assert.match(JSON.stringify(reopened.saved.teacherArtifact.content), /Private answer 1/);
+      assert.match(JSON.stringify(reopened.saved.teacherArtifact.content), /Private answer 20/);
+      const exported = await HEY.teacher.exportWorksheetMarkdown(reopened.saved.studentArtifact, {
+        accountScope: context.accountScope,
+        workspaceId: context.workspaceId,
+      });
+      assert.equal((exported.content.match(/^### \d+\./gm) || []).length, 20);
+      assert.doesNotMatch(exported.content, /teacherAnswer|expectedLearning|Private answer/);
+    } finally {
+      supabaseClient.from = originalFrom;
+    }
+  });
+});
+
 test("atomic journey write failures return a retry handle and retry without duplicating artifacts", async () => {
   const journeyId = "a2d27b18-0935-4a93-957a-46ca018ce3d7";
   const request = { lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(), journeyId };

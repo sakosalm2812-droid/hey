@@ -25,6 +25,17 @@ test("Teacher quiz drafts become a typed multi-question answer-key request witho
   assert.equal(Object.isFrozen(questions[0]), true);
 });
 
+test("Teacher quiz draft builder accepts both 1-question and 20-question boundaries", () => {
+  const single = buildTeacherAssessmentQuestions([draft("single")], "Place unit fractions on a number line");
+  assert.equal(single.length, 1);
+  const maximum = buildTeacherAssessmentQuestions(
+    Array.from({ length: 20 }, (_, index) => draft(`q${index + 1}`, { points: "1" })),
+    "Place unit fractions on a number line",
+  );
+  assert.equal(maximum.length, 20);
+  assert.equal(maximum[19].teacherAnswer, "Private answer q20");
+});
+
 test("quiz draft builder rejects missing questions, oversized sets, invalid scoring, and learner data", () => {
   assert.throws(() => buildTeacherAssessmentQuestions([], "Objective"), /between 1 and 20/);
   assert.throws(() => buildTeacherAssessmentQuestions(Array.from({ length: 21 }, (_, index) => draft(`q${index}`)), "Objective"), /between 1 and 20/);
