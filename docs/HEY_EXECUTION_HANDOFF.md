@@ -44,6 +44,8 @@ Latest app snapshots confirm all 11 resumed chats are active. No wave 6 commit i
 
 All reports above are in-flight worker updates. No wave 6 worker commit has yet been independently reviewed or integrated.
 
+Separate duplicate-branch review: GitHub branch `codex/step46-47-evidence-gates` tip `185a1f7afdb7e77c7a1e68854c3adc5ce0da8919` contains an earlier release-gate evaluator. Its attempted cherry-pick exposed the coordinator's stronger existing implementation (`a60cfe7`, `e939794`, `17bb523`), which adds signed inventory attestation and detached snapshots across async verification. The cherry-pick was aborted; no stronger code was replaced or modified. Coordinator `node --test tests/release-gate.test.js` passed **17/17**. This is code-level release-gate evidence only, not a whole-product release or production certification.
+
 Current external blockers: this repo has only `.env.example`; no `.env` config, `supabase` CLI or `docker` executable is available in the coordinator environment. The running local page `http://127.0.0.1:5175/login` has sign-in disabled until `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are provided through a safe local config. No live DB, provider, auth, or device outcome is currently possible to claim.
 
 ### Wave 5 integration just completed
