@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
 import { OnboardingEngine, TutorialEngine } from "../src/core/onboardingEngine.js";
+import { getSetting } from "../src/core/settingsRegistry.js";
 import { WorkspaceEngine } from "../src/core/workspaceEngine.js";
 
 class MemoryStorage {
@@ -146,6 +147,53 @@ test("starter Space preferences notify current consumers only after scoped readb
     assert.deepEqual(failed, { error: "Could not safely save starter Spaces", status: "readback_failed" });
     assert.deepEqual(onboarding.getProgress().starterSpaceSelections, ["work", "learning"]);
     assert.equal(updates.length, 1, "failed persistence never emits an update");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("onboarding lifecycle and preference mutations roll back when durable readback fails", () => withStorage((storage) => {
+  const previousScope = "onboarding-failure-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("onboarding-failure-owner");
+    const onboarding = new OnboardingEngine();
+    const activeKey = getAccountStorageKey("hey_onboarding_progress");
+    const updates = [];
+    onboarding.subscribe((event) => updates.push(event));
+
+    storage.blockedWrites.add(activeKey);
+    const failedStart = onboarding.start();
+    assert.deepEqual(failedStart, { error: "Could not safely start onboarding", status: "readback_failed" });
+    assert.equal(onboarding.getProgress().startedAt, null);
+    assert.deepEqual(updates, []);
+
+    storage.blockedWrites.delete(activeKey);
+    assert.ok(onboarding.start().startedAt);
+    onboarding.completeStage("locale_accessibility");
+    onboarding.completeStage("workspace_intro");
+    updates.length = 0;
+    const before = onboarding.getProgress();
+    const previousLanguage = getSetting("language.primary");
+    const previousLargeTargets = getSetting("accessibility.large_targets");
+    storage.blockedWrites.add(activeKey);
+
+    const failedMutations = [
+      onboarding.completeStage("practice_task"),
+      onboarding.skipStage("workspace_intro"),
+      onboarding.setLocale("fr"),
+      onboarding.setAccessibility({ largeTargets: true }),
+      onboarding.selectPracticeTask("create_note"),
+      onboarding.completePracticeTask("memory_stored"),
+      onboarding.dismissSuggestion("space-research"),
+      onboarding.reset(),
+    ];
+    for (const result of failedMutations) {
+      assert.equal(result.status, "readback_failed");
+      assert.match(result.error, /safely/);
+      assert.deepEqual(onboarding.getProgress(), before);
+    }
+    assert.equal(getSetting("language.primary"), previousLanguage, "failed onboarding save must not change global language");
+    assert.equal(getSetting("accessibility.large_targets"), previousLargeTargets, "failed onboarding save must not change global accessibility");
+    assert.deepEqual(updates, [], "failed saves never announce lifecycle or practice completion");
   } finally { setAccountScope(previousScope); }
 }));
 

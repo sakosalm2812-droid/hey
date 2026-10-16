@@ -338,6 +338,14 @@ export class OnboardingEngine {
     }
   }
 
+  persistMutation(previousProgress, failureMessage) {
+    const scope = this.accountScope;
+    const result = this.save();
+    if (result.success) return null;
+    if (scope === this.accountScope && scope === getAccountScope()) this.progress = previousProgress;
+    return { error: failureMessage, status: result.status };
+  }
+
   getProgress() {
     return { ...this.progress, completedStages: [...this.progress.completedStages], skippedStages: [...this.progress.skippedStages], accessibility: { ...this.progress.accessibility }, starterSpaceSelections: [...this.progress.starterSpaceSelections], motivationSelections: [...this.progress.motivationSelections], purposeSelections: [...this.progress.purposeSelections], dismissedSuggestions: new Set(this.progress.dismissedSuggestions) };
   }
@@ -356,10 +364,11 @@ export class OnboardingEngine {
 
   start() {
     if (this.progress.startedAt) return this.progress;
-    
+    const previousProgress = this.getProgress();
     this.progress.startedAt = new Date().toISOString();
     this.progress.currentStage = ONBOARDING_STAGES.WELCOME;
-    this.save();
+    const failure = this.persistMutation(previousProgress, "Could not safely start onboarding");
+    if (failure) return failure;
     this.notify("started", this.progress);
     
     publish("onboarding.started", this.progress);
@@ -373,7 +382,7 @@ export class OnboardingEngine {
     const targetIndex = this.getStageIndex(stageId);
     
     if (targetIndex <= currentIndex) return this.progress;
-    
+    const previousProgress = this.getProgress();
     this.progress.completedStages.push(stageId);
     
     const nextStep = ONBOARDING_STEPS[currentIndex + 1];
@@ -390,7 +399,8 @@ export class OnboardingEngine {
         this.progress.accessibility = { ...this.progress.accessibility, ...Object.fromEntries(Object.entries(data.accessibility).filter(([key, value]) => /^[a-zA-Z][\w-]{0,47}$/.test(key) && typeof value === "boolean")) };
       }
     }
-    this.save();
+    const failure = this.persistMutation(previousProgress, "Could not safely save onboarding progress");
+    if (failure) return failure;
     this.notify("stage_completed", { stage: stageId, progress: this.progress });
     
     publish("onboarding.stage_completed", { stage: stageId, progress: this.progress });
@@ -407,7 +417,7 @@ export class OnboardingEngine {
     
     const step = ONBOARDING_STEPS[currentIndex];
     if (!step.skippable) return { error: "This step cannot be skipped" };
-    
+    const previousProgress = this.getProgress();
     this.progress.skippedStages.push(stageId);
     
     const nextStep = ONBOARDING_STEPS[currentIndex + 1];
@@ -418,7 +428,8 @@ export class OnboardingEngine {
       this.progress.completedAt = new Date().toISOString();
     }
     
-    this.save();
+    const failure = this.persistMutation(previousProgress, "Could not safely save onboarding progress");
+    if (failure) return failure;
     this.notify("stage_skipped", { stage: stageId, progress: this.progress });
     
     publish("onboarding.stage_skipped", { stage: stageId, progress: this.progress });
@@ -427,21 +438,25 @@ export class OnboardingEngine {
 
   setLocale(locale) {
     if (typeof locale !== "string" || !/^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(locale)) return { error: "Invalid locale" };
+    const previousProgress = this.getProgress();
     this.progress.locale = locale;
+    const failure = this.persistMutation(previousProgress, "Could not safely save the onboarding language");
+    if (failure) return failure;
     setSetting("language.primary", locale);
-    this.save();
     return this.progress;
   }
 
   setAccessibility(options) {
     if (!options || typeof options !== "object" || Array.isArray(options)) return this.getProgress();
     const safeOptions = Object.fromEntries(Object.entries(options).filter(([key, value]) => /^[a-zA-Z][\w-]{0,47}$/.test(key) && typeof value === "boolean"));
+    const previousProgress = this.getProgress();
     this.progress.accessibility = { ...this.progress.accessibility, ...safeOptions };
+    const failure = this.persistMutation(previousProgress, "Could not safely save onboarding accessibility preferences");
+    if (failure) return failure;
     if (safeOptions.highContrast) setSetting("accessibility.high_contrast", true);
     if (safeOptions.largeTargets) setSetting("accessibility.large_targets", true);
     if (safeOptions.reducedMotion) setSetting("accessibility.reduced_motion", true);
     if (safeOptions.dyslexiaFriendly) setSetting("accessibility.dyslexia_friendly", true);
-    this.save();
     return this.progress;
   }
 
@@ -573,23 +588,27 @@ export class OnboardingEngine {
   selectPracticeTask(taskId) {
     const task = PRACTICE_TASKS.find(t => t.id === taskId);
     if (!task) return { error: "Invalid practice task" };
-    
+    const previousProgress = this.getProgress();
     this.progress.practiceTaskId = taskId;
-    this.save();
+    const failure = this.persistMutation(previousProgress, "Could not safely save the practice task");
+    if (failure) return failure;
     return { task, progress: this.progress };
   }
 
   completePracticeTask(result) {
+    const previousProgress = this.getProgress();
     this.progress.practiceTaskCompleted = true;
     this.progress.practiceTaskResult = result;
-    this.save();
+    const failure = this.persistMutation(previousProgress, "Could not safely save practice progress");
+    if (failure) return failure;
     this.notify("practice_completed", { progress: this.progress });
     return this.progress;
   }
 
   dismissSuggestion(suggestionId) {
+    const previousProgress = this.getProgress();
     this.progress.dismissedSuggestions.add(suggestionId);
-    this.save();
+    return this.persistMutation(previousProgress, "Could not safely save the dismissed suggestion");
   }
 
   isSuggestionDismissed(suggestionId) {
@@ -597,8 +616,10 @@ export class OnboardingEngine {
   }
 
   reset() {
+    const previousProgress = this.getProgress();
     this.progress = createInitialProgress();
-    this.save();
+    const failure = this.persistMutation(previousProgress, "Could not safely reset onboarding");
+    if (failure) return failure;
     this.notify("reset", this.progress);
     return this.progress;
   }
