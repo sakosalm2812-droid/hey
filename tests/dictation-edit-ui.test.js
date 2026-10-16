@@ -3,7 +3,9 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import {
   CHAT_EDIT_TARGET_ID,
+  captureEditOperationFence,
   digestSelection,
+  editOperationFenceIsCurrent,
   readSelectionSnapshot,
   replaceSelection,
   selectionStillMatches,
@@ -46,6 +48,23 @@ test("replacement changes only the bound range and rejects stale drafts", () => 
   const snapshot = readSelectionSnapshot(input());
   assert.equal(replaceSelection(snapshot.currentText, snapshot, "chosen"), "Hello chosen world");
   assert.equal(replaceSelection("new draft", snapshot, "chosen"), null);
+});
+
+test("async edit operations are fenced against cancellation and account changes", () => {
+  const fence = captureEditOperationFence(4, "account:edit-a");
+  assert.deepEqual(fence, { generation: 4, accountScope: "account:edit-a" });
+  assert.equal(editOperationFenceIsCurrent(fence, 4, "account:edit-a"), true);
+  assert.equal(editOperationFenceIsCurrent(fence, 5, "account:edit-a"), false);
+  assert.equal(editOperationFenceIsCurrent(fence, 4, "account:edit-b"), false);
+  assert.equal(captureEditOperationFence(-1, "account:edit-a"), null);
+  assert.equal(editOperationFenceIsCurrent(null, 4, "account:edit-a"), false);
+
+  let getterCalls = 0;
+  const accessorFence = { generation: 4 };
+  Object.defineProperty(accessorFence, "accountScope", { enumerable: true, get() { getterCalls += 1; return "account:edit-a"; } });
+  assert.equal(editOperationFenceIsCurrent(accessorFence, 4, "account:edit-a"), false);
+  assert.equal(getterCalls, 0);
+  assert.equal(editOperationFenceIsCurrent(new Proxy({}, { ownKeys() { throw new Error("hostile fence"); } }), 4, "account:edit-a"), false);
 });
 
 test("real Chat page exposes selected-text voice editing with a discoverable idle prompt", async () => {
@@ -104,6 +123,17 @@ test("visible cancellation aborts in-flight edit work before and during provider
   const runtimeTests = await source("./dictation-edit-proposals.test.js");
   assert.match(runtimeTests, /a user AbortSignal aborts provider work and late output cannot create a preview/);
   assert.match(runtimeTests, /pre-aborted rewrite requests never disclose source text to the provider/);
+});
+
+test("late confirmation and replacement digests cannot revive cancelled UI work", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  for (const [name, nextName] of [["confirmProposal", "replaceConfirmed"], ["replaceConfirmed", "undoAppliedEdit"]]) {
+    const start = control.indexOf(`async function ${name}()`);
+    const end = control.indexOf(`function ${nextName}()`, start);
+    const operation = control.slice(start, end);
+    assert.match(operation, /captureEditOperationFence\(generationRef\.current, getAccountScope\(\)\)/, `${name} captures its lifecycle`);
+    assert.match(operation, /await digestSelection[\s\S]*editOperationFenceIsCurrent\(operationFence, generationRef\.current, getAccountScope\(\)\)/, `${name} checks its lifecycle after awaiting`);
+  }
 });
 
 test("provider preview keeps exact model routing while Fusion remains a separate chat opt-in", async () => {

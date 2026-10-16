@@ -1,6 +1,29 @@
 export const CHAT_EDIT_APPLICATION_ID = "hey.chat";
 export const CHAT_EDIT_TARGET_ID = "hey-chat-message-composer";
 
+export function captureEditOperationFence(generation, accountScope) {
+  if (!Number.isSafeInteger(generation) || generation < 0 || typeof accountScope !== "string") return null;
+  return Object.freeze({ generation, accountScope });
+}
+
+export function editOperationFenceIsCurrent(fence, generation, accountScope) {
+  try {
+    if (!fence || typeof fence !== "object" || Array.isArray(fence)) return false;
+    const prototype = Object.getPrototypeOf(fence);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(fence);
+    if (keys.length !== 2 || keys.some((key) => !["generation", "accountScope"].includes(key))) return false;
+    const generationValue = Object.getOwnPropertyDescriptor(fence, "generation");
+    const scopeValue = Object.getOwnPropertyDescriptor(fence, "accountScope");
+    return Boolean(generationValue?.enumerable && Object.hasOwn(generationValue, "value")
+      && scopeValue?.enumerable && Object.hasOwn(scopeValue, "value")
+      && generationValue.value === generation
+      && scopeValue.value === accountScope);
+  } catch {
+    return false;
+  }
+}
+
 export async function digestSelection(targetId, selectedText, start, end) {
   if (typeof targetId !== "string" || !targetId || typeof selectedText !== "string" || !selectedText) return null;
   if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return null;

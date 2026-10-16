@@ -5,7 +5,9 @@ import { dictationPreferenceStore } from "../../lib/dictationPreferences.js";
 import { rewriteHEYText } from "../../lib/heyAI.js";
 import {
   CHAT_EDIT_APPLICATION_ID,
+  captureEditOperationFence,
   digestSelection,
+  editOperationFenceIsCurrent,
   readSelectionSnapshot,
   replaceSelection,
   selectionStillMatches,
@@ -210,8 +212,11 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       resetFlow("The selection changed. Select the text again and retry.");
       return;
     }
+    const operationFence = captureEditOperationFence(generationRef.current, getAccountScope());
     const digest = await digestSelection(selection.targetId, selection.sourceText, selection.start, selection.end);
-    if (!digest || getAccountScope() !== accountRef.current || digest !== selection.selectionDigest || !selectionStillMatches(inputRef.current, selection)) {
+    if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
+      || operationFence.accountScope !== accountRef.current) return;
+    if (!digest || digest !== selection.selectionDigest || !selectionStillMatches(inputRef.current, selection)) {
       resetFlow("The selection changed. Select the text again and retry.");
       return;
     }
@@ -237,8 +242,11 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       resetFlow("The draft or selection changed. Nothing was replaced.");
       return;
     }
+    const operationFence = captureEditOperationFence(generationRef.current, getAccountScope());
     const digest = await digestSelection(snapshot.targetId, snapshot.sourceText, snapshot.start, snapshot.end);
-    if (!digest || getAccountScope() !== accountRef.current || digest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot)) {
+    if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
+      || operationFence.accountScope !== accountRef.current) return;
+    if (!digest || digest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot)) {
       resetFlow("The selection changed. Nothing was replaced.");
       return;
     }
@@ -250,6 +258,8 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setUndoEntry({ previousValue: inputRef.current.value, nextValue, start: snapshot.start, originalEnd: snapshot.end });
     setValue(nextValue);
     requestAnimationFrame(() => {
+      if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
+        || operationFence.accountScope !== accountRef.current) return;
       if (inputRef.current?.value !== nextValue) {
         setStatus("The draft did not accept the edit. Check it before sending.");
         return;
