@@ -93,6 +93,12 @@
 .spaces-page__transfer-review ul { display: grid; gap: 6px; max-height: 220px; overflow: auto; margin: 10px 0; padding: 0; list-style: none; }
 .spaces-page__transfer-review li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: rgba(0, 0, 0, .14); color: var(--text-secondary, #a7a4ae); font-size: 12px; }
 .spaces-page__transfer-review li strong { color: var(--text-primary, #f5f2ec); overflow-wrap: anywhere; }
+.spaces-page__cloud-backup { display: grid; flex: 1 0 100%; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .08); }
+.spaces-page__cloud-backup h4 { margin: 0 0 4px; color: var(--text-primary, #f5f2ec); font-size: 13px; }
+.spaces-page__cloud-backup p { margin: 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; line-height: 1.5; }
+.spaces-page__cloud-backup .spaces-page__transfer-actions { width: 100%; }
+.spaces-page__cloud-unavailable { color: var(--text-secondary, #a7a4ae) !important; }
+.spaces-page__cloud-status { font-variant-numeric: tabular-nums; }
 .spaces-page__count { color: var(--text-secondary, #a7a4ae); font-size: 12px; white-space: nowrap; }
 .spaces-page__empty,
 .spaces-page__message { display: flex; align-items: center; gap: 14px; min-height: 110px; padding: 22px; color: var(--text-secondary, #a7a4ae); }

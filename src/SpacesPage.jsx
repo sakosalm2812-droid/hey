@@ -3,6 +3,7 @@ import { AlertCircle, Archive, Check, Download, FileUp, Layers3, LoaderCircle, L
 import { HEY } from "./core/index.js";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
+import { isSupabaseConfigured } from "./lib/supabase.js";
 import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import { spaceDetailsFromRecord, spaceDetailsMatchAccount } from "./spacePageDetails.js";
 import { parseSpacePreferenceDraft, spacePreferencesMatchAccount } from "./spacePagePreferences.js";
@@ -669,6 +670,10 @@ export default function SpacesPage() {
   const [transferError, setTransferError] = useState("");
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [cloudBackup, setCloudBackup] = useState(null);
+  const [cloudBackupError, setCloudBackupError] = useState("");
+  const [cloudBackupBusy, setCloudBackupBusy] = useState(false);
+  const [importSource, setImportSource] = useState("file");
 
   const refreshSpaces = useCallback(() => {
     if (accountRef.current !== accountId) return false;
@@ -835,6 +840,98 @@ export default function SpacesPage() {
     }
   }
 
+  async function inspectCloudSpaceBackup() {
+    if (!accountId || !accountIsCurrent || !isSupabaseConfigured || cloudBackupBusy || importing || loadError) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setCloudBackupBusy(true);
+    setCloudBackupError("");
+    try {
+      const result = await HEY.spaces.readCloudBackup({ accountId: requestedAccountId });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      if (result?.success !== true || result.accountScope !== requestedScope) {
+        setCloudBackup(null);
+        setCloudBackupError(result?.error || "The account backup could not be checked.");
+        return;
+      }
+      setCloudBackup({ ...result, accountId: requestedAccountId });
+    } catch (error) {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) {
+        setCloudBackupError(error?.message || "The account backup could not be checked.");
+      }
+    } finally {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) setCloudBackupBusy(false);
+    }
+  }
+
+  async function saveCloudSpaceBackup() {
+    if (!accountId || !accountIsCurrent || !isSupabaseConfigured || cloudBackup?.accountId !== accountId || cloudBackupBusy || importing || exporting || loadError) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setCloudBackupBusy(true);
+    setCloudBackupError("");
+    try {
+      const exported = HEY.spaces.export({ accountScope: requestedScope });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      if (exported?.success !== true || exported.accountScope !== requestedScope || typeof exported.exportJson !== "string") {
+        setCloudBackupError(exported?.error || "Your private Spaces could not be prepared for backup.");
+        return;
+      }
+      const result = await HEY.spaces.saveCloudBackup({ accountId: requestedAccountId, expectedRevision: cloudBackup.revision, exportJson: exported.exportJson });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      if (result?.success !== true || result.accountScope !== requestedScope) {
+        if (result?.code === "stale_snapshot") setCloudBackup(null);
+        setCloudBackupError(result?.error || "The account backup could not be saved. Check it again before retrying.");
+        return;
+      }
+      setCloudBackup({ accountId: requestedAccountId, accountScope: requestedScope, revision: result.revision, updatedAt: result.updatedAt, document: exported.document || null, spaceCount: result.spaceCount });
+      setNotice(`Saved ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"} to your account backup.`);
+    } catch (error) {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) {
+        setCloudBackupError(error?.message || "The account backup could not be saved.");
+      }
+    } finally {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) setCloudBackupBusy(false);
+    }
+  }
+
+  async function previewCloudSpaceBackupImport() {
+    if (!accountId || !accountIsCurrent || !isSupabaseConfigured || cloudBackupBusy || importing || exporting || loadError) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setImporting(true);
+    setTransferError("");
+    setCloudBackupError("");
+    setImportPreview(null);
+    setImportSource("account");
+    try {
+      const backup = await HEY.spaces.readCloudBackup({ accountId: requestedAccountId });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      if (backup?.success !== true || backup.accountScope !== requestedScope || !backup.document) {
+        setCloudBackupError(backup?.error || "No account backup is available to review.");
+        return;
+      }
+      setCloudBackup({ ...backup, accountId: requestedAccountId });
+      const result = HEY.spaces.previewImport({ accountScope: requestedScope, exportJson: JSON.stringify(backup.document) });
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+      const safeSpaces = Array.isArray(result?.spaces) ? result.spaces.filter((space) =>
+        space && typeof space.id === "string" && typeof space.name === "string"
+        && (space.status === "active" || space.status === "archived")
+      ) : null;
+      if (result?.accountScope !== requestedScope || typeof result?.previewId !== "string" || result.requiresConfirmation !== true || !safeSpaces || safeSpaces.length !== result.spaceCount) {
+        setCloudBackupError(result?.error || "The account backup could not be previewed as private Spaces.");
+        return;
+      }
+      setImportPreview({ accountId: requestedAccountId, previewId: result.previewId, spaces: safeSpaces });
+    } catch (error) {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) {
+        setCloudBackupError(error?.message || "The account backup could not be previewed.");
+      }
+    } finally {
+      if (accountRef.current === requestedAccountId && getAccountScope() === requestedScope) setImporting(false);
+    }
+  }
+
   async function previewSpaceImport(event) {
     const input = event.currentTarget;
     const file = input.files?.[0];
@@ -846,6 +943,7 @@ export default function SpacesPage() {
     setImporting(true);
     setTransferError("");
     setImportPreview(null);
+    setImportSource("file");
     try {
       if (file.size > maxTransferBytes) {
         setTransferError("This file is larger than the supported Space transfer size.");
@@ -887,7 +985,9 @@ export default function SpacesPage() {
       setTransferError(result?.error || "The reviewed Spaces could not be imported. Choose the file again to review and retry.");
       return;
     }
-    if (refreshSpaces()) setNotice(`Imported ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"}.`);
+    if (refreshSpaces()) setNotice(importSource === "account"
+      ? `Imported ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"} from your account backup.`
+      : `Imported ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"}.`);
   }
 
   useEffect(() => {
@@ -919,6 +1019,10 @@ export default function SpacesPage() {
     setTransferError("");
     setImporting(false);
     setExporting(false);
+    setCloudBackup(null);
+    setCloudBackupError("");
+    setCloudBackupBusy(false);
+    setImportSource("file");
 
     const refreshCurrentAccount = () => {
       if (active) refreshSpaces();
@@ -1221,13 +1325,34 @@ export default function SpacesPage() {
               {importing ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <FileUp size={15} aria-hidden="true" />} Choose file to import
             </button>
           </div>
+          <section className="spaces-page__cloud-backup" aria-labelledby="space-cloud-backup-title">
+            <div><h4 id="space-cloud-backup-title">Account backup</h4><p>Manually save a private copy with your HEY account. You can review it on another device; edits do not sync automatically.</p></div>
+            {!isSupabaseConfigured && <p className="spaces-page__cloud-unavailable" role="status">Account backups are unavailable until the HEY account service is configured.</p>}
+            {isSupabaseConfigured && <div className="spaces-page__transfer-actions">
+              <button type="button" className="spaces-page__secondary" onClick={inspectCloudSpaceBackup} disabled={!accountIsCurrent || accountDataLoading || Boolean(loadError) || cloudBackupBusy || importing || exporting}>
+                {cloudBackupBusy ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <RotateCw size={15} aria-hidden="true" />} Check account backup
+              </button>
+              {cloudBackup?.accountId === accountId && <>
+                <button type="button" className="spaces-page__secondary" onClick={saveCloudSpaceBackup} disabled={!accountIsCurrent || accountDataLoading || Boolean(loadError) || cloudBackupBusy || importing || exporting}>
+                  <Check size={15} aria-hidden="true" /> Save current Spaces
+                </button>
+                {cloudBackup.revision > 0 && <button type="button" className="spaces-page__secondary" onClick={previewCloudSpaceBackupImport} disabled={!accountIsCurrent || accountDataLoading || Boolean(loadError) || cloudBackupBusy || importing || exporting}>
+                  <FileUp size={15} aria-hidden="true" /> Review account backup
+                </button>}
+              </>}
+            </div>}
+            {cloudBackup?.accountId === accountId && <p className="spaces-page__cloud-status" role="status">{cloudBackup.revision === 0
+              ? "No account backup is saved yet."
+              : `Saved ${cloudBackup.spaceCount} private ${cloudBackup.spaceCount === 1 ? "Space" : "Spaces"} · ${formatDate(cloudBackup.updatedAt)} · revision ${cloudBackup.revision}.`}</p>}
+            {cloudBackupError && <p className="spaces-page__transfer-error" role="alert"><AlertCircle size={16} aria-hidden="true" /> {cloudBackupError}</p>}
+          </section>
           {transferError && <p className="spaces-page__transfer-error" role="alert"><AlertCircle size={16} aria-hidden="true" /> {transferError}</p>}
           {!accountDataLoading && importPreview?.accountId === accountId && accountIsCurrent && !loadError && <section className="spaces-page__transfer-review" aria-labelledby="space-import-review-title">
             <h4 id="space-import-review-title">Review imported Spaces</h4>
-            <p>{importPreview.spaces.length} private {importPreview.spaces.length === 1 ? "Space" : "Spaces"} will be added as new copies. Your existing Spaces stay in this account, and access permissions will not change.</p>
+            <p>{importPreview.spaces.length} private {importPreview.spaces.length === 1 ? "Space" : "Spaces"} from {importSource === "account" ? "your account backup" : "this file"} will be added as new copies. Your existing Spaces stay in this account, and access permissions will not change.</p>
             <ul>{importPreview.spaces.map((space) => <li key={space.id}><strong>{space.name}</strong><span>{space.status === "archived" ? "Archived" : "Active"}</span></li>)}</ul>
             <div className="spaces-page__actions">
-              <button type="button" className="spaces-page__secondary" onClick={() => { setImportPreview(null); setTransferError(""); }} disabled={importing}>Cancel</button>
+              <button type="button" className="spaces-page__secondary" onClick={() => { setImportPreview(null); setTransferError(""); setImportSource("file"); }} disabled={importing}>Cancel</button>
               <button type="button" className="spaces-page__primary" onClick={confirmSpaceImport} disabled={importing || !accountIsCurrent}>
                 {importing ? <LoaderCircle size={15} className="spaces-page__spin" aria-hidden="true" /> : <Check size={15} aria-hidden="true" />} Import reviewed Spaces
               </button>

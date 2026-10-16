@@ -106,6 +106,7 @@ import { onboardingEngine, tutorialEngine, startOnboarding, getOnboardingProgres
 import { defaultTutorials } from "./tutorialCatalog.js";
 import { workspaceEngine, createWidget, getWidget, getAllWidgets, getWidgetsByFamily, getActiveWidgets, updateWidget, setWidgetState, moveWidget, resizeWidget, bringWidgetToFront, sendWidgetToBack, pinWidget, groupWidgets, ungroupWidgets, dockWidget, undockWidget, closeWidget, deleteWidget, handleSemanticDrop, saveLayout, loadLayout, getLayouts, deleteLayout, handleMonitorChange, subscribeToWorkspace, WIDGET_STATES, WIDGET_FAMILIES, DRAG_TYPES, SNAP_MODES } from "./workspaceEngine.js";
 import { spaceCreationEngine, previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, exportPrivateSpaces, previewPrivateSpaceImport, confirmPrivateSpaceImport, previewPrivateSpaceRecovery, confirmPrivateSpaceRecovery, updatePrivateSpaceDetails, previewPrivateSpaceArchive, confirmPrivateSpaceArchive, previewPrivateSpaceRestore, confirmPrivateSpaceRestore, getOnboardingSpaceSuggestions, previewPrivateSpaceDeletion, confirmPrivateSpaceDeletion, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_RECOVERY_CONTRACT_VERSION, SPACE_TRANSFER_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS } from "./spaceCreationEngine.js";
+import { readPrivateSpaceCloudBackup, savePrivateSpaceCloudBackup } from "./spaceCloudBackup.js";
 import { createProjectDNA, getProjectDNA, updateProjectDNA, deleteProjectDNA, listProjectDNAs, checkProjectConsistency, exportProjectDNA, importProjectDNA, setProjectLock, getProjectLocks, removeProjectLock, DNA_FIELDS, DRIFT_TYPES, RULE_PRECEDENCE, LOCK_TYPES as DNA_LOCK_TYPES } from "./projectDNA.js";
 import {
   createPinpointContract,
@@ -885,6 +886,8 @@ import {
       export: exportPrivateSpaces,
       previewImport: previewPrivateSpaceImport,
       confirmImport: confirmPrivateSpaceImport,
+      readCloudBackup: readPrivateSpaceCloudBackup,
+      saveCloudBackup: savePrivateSpaceCloudBackup,
       previewRecovery: previewPrivateSpaceRecovery,
       confirmRecovery: confirmPrivateSpaceRecovery,
       updateDetails: updatePrivateSpaceDetails,
@@ -1087,6 +1090,7 @@ export const onboarding = HEY.onboarding;
 export const spaces = HEY.spaces;
 export { setOnboardingMotivations, getOnboardingMotivations, rankOnboardingStarterSuggestions, rankOnboardingStarterSuggestionsForPurposes, getPurposeTutorialRecommendations, ONBOARDING_MOTIVATIONS };
 export { previewNaturalLanguageSpaceCreation, confirmNaturalLanguageSpaceCreation, getPrivateSpaces, exportPrivateSpaces, previewPrivateSpaceImport, confirmPrivateSpaceImport, previewPrivateSpaceRecovery, confirmPrivateSpaceRecovery, updatePrivateSpaceDetails, previewPrivateSpaceArchive, confirmPrivateSpaceArchive, previewPrivateSpaceRestore, confirmPrivateSpaceRestore, getOnboardingSpaceSuggestions, previewPrivateSpaceDeletion, confirmPrivateSpaceDeletion, getSpaceLayoutPreferences, updateSpaceLayoutPreferences, setSpaceToolMembership, subscribeToPrivateSpaces, SPACE_CREATION_CONTRACT_VERSION, SPACE_STORAGE_CONTRACT_VERSION, SPACE_RECOVERY_CONTRACT_VERSION, SPACE_TRANSFER_CONTRACT_VERSION, SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION, SPACE_CREATION_LIMITS };
+export { readPrivateSpaceCloudBackup, savePrivateSpaceCloudBackup };
 export { planIntegrationMigration, INTEGRATION_MIGRATION_DISPOSITIONS };
 export { understandVoiceCommand, cancelVoiceCommandPreview, validateVoiceCommandPreview, reviewVoiceCommandPreview, createDictationEditSession };
 
