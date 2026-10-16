@@ -19,11 +19,13 @@ const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
 const ASSESSMENT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "objectivesPresent", "questionsPresent", "sourceLessonBound"]);
 const WORKSHEET_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "promptsPresent", "sourceAssessmentBound", "teacherKeySeparated"]);
+const ACTIVITY_HANDOUT_VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "classScope", "studentDataAbsent", "directionsPresent", "sourceLessonBound"]);
 const SAVE_CONTEXT_FIELDS = new Set(["accountScope", "workspaceId", "classId", "journeyCreatedAt", "currentAccountScope", "currentWorkspaceId", "currentClassId"]);
 const BUILT_TEACHER_LESSON_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_ASSESSMENT_ARTIFACTS = new WeakSet();
 const BUILT_TEACHER_WORKSHEET_ARTIFACTS = new WeakSet();
 const PREPARED_TEACHER_JOURNEYS = new WeakSet();
+const BUILT_TEACHER_ACTIVITY_HANDOUTS = new WeakSet();
 const STUDENT_DATA_FIELDS = new Set([
   "student", "students", "studentData", "studentRecords", "learnerRecords",
   "studentAnswers", "studentName", "learnerName", "studentId", "learnerId", "studentEmail",
@@ -416,6 +418,155 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
   return Object.freeze({ valid: Object.values(checks).every(Boolean), checks });
 }
 
+export async function buildTeacherActivityHandoutArtifact(lessonArtifact, activityIndex, context) {
+  if (!lessonArtifact || typeof lessonArtifact !== "object" || !BUILT_TEACHER_LESSON_ARTIFACTS.has(lessonArtifact)) {
+    throw new Error("Activity handout requires a lesson built in the active Teacher runtime");
+  }
+  let stableContext;
+  try {
+    stableContext = snapshotLessonData(context);
+    assertOnlyDataFields(stableContext, "Teacher activity handout context", SAVE_CONTEXT_FIELDS);
+  } catch {
+    throw new Error("Activity handout context must contain only safe, bounded data");
+  }
+  const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
+  const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
+  const classId = requiredText(stableContext.classId, "Class ID", 200);
+  if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId
+    || stableContext.currentClassId !== classId) {
+    throw new Error("Activity handout account, workspace, and class must match the active context");
+  }
+  const sourceVerification = await verifyTeacherLessonArtifact(lessonArtifact, { accountScope, workspaceId });
+  if (!sourceVerification.valid) throw new Error("Activity handout source lesson failed verification for the active account and workspace");
+  if (!Number.isInteger(activityIndex) || activityIndex < 0 || activityIndex >= lessonArtifact.content.activities.length) {
+    throw new RangeError("Choose an activity from the verified lesson");
+  }
+  if (!await canWriteTeacherArtifact(lessonArtifact, { accountScope, classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to author an activity handout");
+  }
+
+  const lesson = lessonArtifact.content;
+  const activity = lesson.activities[activityIndex];
+  const content = Object.freeze({
+    type: "teacher_activity_handout",
+    title: activity.title,
+    subject: lesson.subject,
+    gradeBand: lesson.gradeBand,
+    objective: lesson.learningObjectives[0],
+    directions: activity.instructions,
+    estimatedMinutes: activity.minutes,
+    materials: Object.freeze([...lesson.resources]),
+    sourceLessonTitle: lesson.title,
+  });
+  const createdAt = new Date().toISOString();
+  const contentDigest = await digestLesson(content);
+  const safetyReview = detectSafetyReview({
+    ...lesson,
+    title: activity.title,
+    activities: [activity],
+    assessment: { ...lesson.assessment, prompt: "" },
+  });
+  const artifact = freezeDeep({
+    type: "document",
+    title: content.title,
+    description: `${content.subject} · ${content.gradeBand} · ${content.estimatedMinutes} minutes`,
+    content,
+    metadata: {
+      workflow: "teacher_activity_handout",
+      accountScope,
+      workspaceId,
+      classId,
+      audience: "student",
+      studentDataPolicy: "not_collected",
+      provenance: {
+        generatedBy: "HEY Teacher Activity Handout Workflow",
+        method: "selected_from_verified_teacher_lesson",
+        sourceLessonDigest: lessonArtifact.metadata.verification.contentDigest,
+        sourceActivityIndex: activityIndex,
+        createdAt,
+        factualClaimsVerified: false,
+      },
+      safety: {
+        gradeBand: content.gradeBand,
+        reviewRequired: safetyReview.length > 0,
+        reviewReasons: safetyReview,
+        teacherReviewRequiredBeforeUse: true,
+      },
+      verification: {
+        valid: true,
+        checks: { accountWorkspaceBound: true, classScope: true, studentDataAbsent: true, directionsPresent: true, sourceLessonBound: true },
+        contentDigest,
+      },
+    },
+  });
+  BUILT_TEACHER_ACTIVITY_HANDOUTS.add(artifact);
+  return artifact;
+}
+
+export async function verifyTeacherActivityHandoutArtifact(artifact, { accountScope, workspaceId, classId } = {}) {
+  if (!artifact || typeof artifact !== "object" || !BUILT_TEACHER_ACTIVITY_HANDOUTS.has(artifact)) {
+    return Object.freeze({ valid: false, checks: Object.freeze({ trustedTeacherRuntime: false }) });
+  }
+  try {
+    artifact = snapshotLessonData(artifact);
+    assertOnlyDataFields(artifact, "Activity handout artifact", ARTIFACT_FIELDS);
+    assertOnlyDataFields(artifact.content, "Activity handout content", new Set([
+      "type", "title", "subject", "gradeBand", "objective", "directions", "estimatedMinutes", "materials", "sourceLessonTitle",
+    ]));
+    assertOnlyDataFields(artifact.metadata, "Activity handout metadata", METADATA_FIELDS);
+    assertOnlyDataFields(artifact.metadata.provenance, "Activity handout provenance", new Set([
+      "generatedBy", "method", "sourceLessonDigest", "sourceActivityIndex", "createdAt", "factualClaimsVerified",
+    ]));
+    assertOnlyDataFields(artifact.metadata.safety, "Activity handout safety", new Set([
+      "gradeBand", "reviewRequired", "reviewReasons", "teacherReviewRequiredBeforeUse",
+    ]));
+    assertOnlyDataFields(artifact.metadata.verification, "Activity handout verification", VERIFICATION_FIELDS);
+    assertOnlyDataFields(artifact.metadata.verification.checks, "Activity handout checks", ACTIVITY_HANDOUT_VERIFICATION_CHECK_FIELDS);
+    const content = artifact.content;
+    if (content.type !== "teacher_activity_handout" || !GRADE_BANDS.has(content.gradeBand)
+      || !Number.isInteger(content.estimatedMinutes) || content.estimatedMinutes < 1 || content.estimatedMinutes > 180) {
+      throw new Error("Invalid activity handout shape");
+    }
+    for (const key of ["title", "subject", "objective", "sourceLessonTitle"]) scanText(content[key], `Activity handout ${key}`);
+    scanAssessmentText(content.directions, "Activity handout directions");
+    assertDenseArray(content.materials, "Activity handout materials", 30);
+    content.materials.forEach((material, index) => scanAssessmentText(material, `Activity handout material ${index + 1}`));
+  } catch {
+    return Object.freeze({ valid: false, checks: Object.freeze({ safeSnapshot: false }) });
+  }
+  let digestMatches;
+  try {
+    digestMatches = /^sha256:[a-f0-9]{64}$/.test(artifact.metadata.verification.contentDigest)
+      && await digestLesson(artifact.content) === artifact.metadata.verification.contentDigest;
+  } catch { digestMatches = false; }
+  const checks = {
+    workflow: artifact.metadata.workflow === "teacher_activity_handout",
+    artifactType: artifact.type === "document",
+    titleMatchesContent: artifact.title === artifact.content.title,
+    accountScope: artifact.metadata.accountScope === accountScope,
+    workspace: artifact.metadata.workspaceId === workspaceId,
+    classScope: artifact.metadata.classId === classId && typeof classId === "string" && classId.length > 0,
+    studentAudience: artifact.metadata.audience === "student",
+    studentDataAbsent: artifact.metadata.studentDataPolicy === "not_collected",
+    provenance: artifact.metadata.provenance.generatedBy === "HEY Teacher Activity Handout Workflow"
+      && artifact.metadata.provenance.method === "selected_from_verified_teacher_lesson"
+      && /^sha256:[a-f0-9]{64}$/.test(artifact.metadata.provenance.sourceLessonDigest)
+      && Number.isInteger(artifact.metadata.provenance.sourceActivityIndex)
+      && Number.isFinite(Date.parse(artifact.metadata.provenance.createdAt || ""))
+      && artifact.metadata.provenance.factualClaimsVerified === false,
+    safety: artifact.metadata.safety.gradeBand === artifact.content.gradeBand
+      && artifact.metadata.safety.teacherReviewRequiredBeforeUse === true
+      && Array.isArray(artifact.metadata.safety.reviewReasons)
+      && artifact.metadata.safety.reviewRequired === (artifact.metadata.safety.reviewReasons.length > 0),
+    verificationEvidence: artifact.metadata.verification.valid === true
+      && [...ACTIVITY_HANDOUT_VERIFICATION_CHECK_FIELDS].every((field) => artifact.metadata.verification.checks[field] === true),
+    contentDigest: digestMatches,
+    directionsPresent: Boolean(artifact.content.directions),
+    trustedTeacherRuntime: true,
+  };
+  return Object.freeze({ valid: Object.values(checks).every(Boolean), checks: Object.freeze(checks) });
+}
+
 export async function buildTeacherAssessmentArtifact(lessonArtifact, input, context) {
   if (!lessonArtifact || typeof lessonArtifact !== "object" || !BUILT_TEACHER_LESSON_ARTIFACTS.has(lessonArtifact)) {
     throw new Error("Assessment requires a lesson built in the active Teacher runtime");
@@ -802,9 +953,11 @@ async function prepareTeacherArtifactSave(artifact, context, builtArtifacts, ver
   }
   const accountScope = requiredText(stableContext.accountScope, "Account scope", 240);
   const workspaceId = requiredText(stableContext.workspaceId, "Workspace ID", 200);
-  const classId = label === "assessment" ? requiredText(stableContext.classId, "Class ID", 200) : stableContext.classId;
+  const classId = label === "assessment" || label === "activity handout"
+    ? requiredText(stableContext.classId, "Class ID", 200) : stableContext.classId;
+  const classRequired = label === "assessment" || label === "activity handout";
   if (stableContext.currentAccountScope !== accountScope || stableContext.currentWorkspaceId !== workspaceId
-    || label === "assessment" && stableContext.currentClassId !== classId) {
+    || classRequired && stableContext.currentClassId !== classId) {
     throw new Error(`${label} artifact account and workspace must match the active context`);
   }
   const verification = await verifyArtifact(artifact, { accountScope, workspaceId, classId });
@@ -844,6 +997,13 @@ export async function saveTeacherLessonArtifact(artifact, context) {
   return saveTeacherArtifact(
     artifact, context, BUILT_TEACHER_LESSON_ARTIFACTS, verifyTeacherLessonArtifact,
     "lesson", "hey.teacher.lesson.v1", ["teacher", "lesson-plan"],
+  );
+}
+
+export async function saveTeacherActivityHandoutArtifact(artifact, context) {
+  return saveTeacherArtifact(
+    artifact, context, BUILT_TEACHER_ACTIVITY_HANDOUTS, verifyTeacherActivityHandoutArtifact,
+    "activity handout", "hey.teacher.activity_handout.v1", ["teacher", "student-activity"],
   );
 }
 
@@ -1089,6 +1249,9 @@ export default {
   verifyTeacherLessonArtifact,
   saveTeacherLessonArtifact,
   exportTeacherLessonMarkdown,
+  buildTeacherActivityHandoutArtifact,
+  verifyTeacherActivityHandoutArtifact,
+  saveTeacherActivityHandoutArtifact,
   buildTeacherAssessmentArtifact,
   verifyTeacherAssessmentArtifact,
   saveTeacherAssessmentArtifact,

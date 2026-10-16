@@ -166,6 +166,9 @@ import {
   verifyTeacherLessonArtifact,
   saveTeacherLessonArtifact,
   exportTeacherLessonMarkdown,
+  buildTeacherActivityHandoutArtifact,
+  verifyTeacherActivityHandoutArtifact,
+  saveTeacherActivityHandoutArtifact,
   buildTeacherAssessmentArtifact,
   verifyTeacherAssessmentArtifact,
   saveTeacherAssessmentArtifact,
@@ -890,6 +893,9 @@ import {
     },
 
     teacher: {
+      buildActivityHandoutArtifact: buildTeacherActivityHandoutArtifact,
+      verifyActivityHandoutArtifact: verifyTeacherActivityHandoutArtifact,
+      saveActivityHandoutArtifact: saveTeacherActivityHandoutArtifact,
       buildLessonArtifact: buildTeacherLessonArtifact,
       verifyLessonArtifact: verifyTeacherLessonArtifact,
       saveLessonArtifact: saveTeacherLessonArtifact,

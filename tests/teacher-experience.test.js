@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildTeacherActivityHandoutArtifact,
   buildTeacherAssessmentArtifact,
   buildTeacherLessonArtifact,
   buildTeacherWorksheetArtifact,
   exportTeacherAssessmentMarkdown,
   exportTeacherLessonMarkdown,
   exportTeacherWorksheetMarkdown,
+  saveTeacherActivityHandoutArtifact,
   saveTeacherAssessmentArtifact,
   saveTeacherLessonArtifact,
   saveTeacherWorksheetArtifact,
@@ -303,6 +305,53 @@ test("verified lessons are stored through the shared Forge artifact contract wit
   assert.equal(saved.metadata.verification.contentDigest, lesson.metadata.verification.contentDigest);
   assert.deepEqual(saved.tags, ["teacher", "lesson-plan"]);
   assert.equal(saved.metadata.safety.teacherReviewRequiredBeforeUse, true);
+});
+
+test("Teacher activity handout is class-authorized, answer-free, and saved through Forge", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  const handout = await buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext());
+  assert.equal(handout.content.type, "teacher_activity_handout");
+  assert.equal(handout.metadata.classId, "class-1");
+  assert.equal(handout.metadata.audience, "student");
+  assert.doesNotMatch(JSON.stringify(handout), /teacherAnswer|expectedLearning/);
+  assert.equal((await HEY.teacher.verifyActivityHandoutArtifact(handout, {
+    accountScope: "account:teacher-1", workspaceId: "school-space", classId: "class-1",
+  })).valid, true);
+
+  const saved = await withForgePersistence(async (writes) => {
+    const artifact = await HEY.teacher.saveActivityHandoutArtifact(handout, teacherContext());
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].table, "hey_artifacts");
+    assert.equal(writes[0].payload.metadata.artifactContract, "hey.teacher.activity_handout.v1");
+    assert.equal(writes[0].payload.metadata.classId, "class-1");
+    return artifact;
+  });
+  assert.equal(saved.content.type, "teacher_activity_handout");
+});
+
+test("Teacher activity handout denies unauthorized class access and fails when Forge is unavailable", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  const originalGetUser = supabaseClient.auth.getUser;
+  try {
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-other"] },
+    } }, error: null });
+    await assert.rejects(buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext()), /Authenticated teacher access/);
+    supabaseClient.auth.getUser = originalGetUser;
+    const handout = await buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext());
+    let failedArtifactId;
+    await assert.rejects(withForgePersistence(async (writes) => {
+      try {
+        return await saveTeacherActivityHandoutArtifact(handout, teacherContext());
+      } finally {
+        failedArtifactId = writes[0]?.payload.id;
+      }
+    }, "provider unavailable"), /Forge did not confirm durable artifact persistence/);
+    assert.ok(failedArtifactId);
+    assert.equal(artifactEngine.artifacts.has(failedArtifactId), false);
+  } finally {
+    supabaseClient.auth.getUser = originalGetUser;
+  }
 });
 
 test("shared artifact save rejects scope mismatches, tampering, and hostile context without persisting", async () => {
