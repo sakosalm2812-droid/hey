@@ -273,6 +273,10 @@ export async function getHEYProviderCatalog({ signal, timeoutMs = 8_000 } = {}) 
   }, timeoutMs, signal);
   const details = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(details.error || "Available AI models could not be loaded.");
+  const currentSession = await getHEYSession();
+  if (!isSameHEYAccount(session, currentSession)) {
+    throw new DOMException("The signed-in account changed while available models were loading.", "AbortError");
+  }
   if (!Array.isArray(details.providers) || !details.providers.every((provider) =>
     provider && typeof provider.providerId === "string" && typeof provider.providerName === "string" &&
     typeof provider.modelId === "string" && provider.state === "configured"

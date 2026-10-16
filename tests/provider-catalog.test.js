@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { getHEYProviderCatalog } from "../src/lib/heyAI.js";
+import { supabase } from "../src/lib/supabase.js";
 
 import { parseFusionPricingConfig } from "../supabase/functions/hey/fusionProvider.js";
 import {
@@ -30,6 +32,29 @@ const fusionPrices = parseFusionPricingConfig(JSON.stringify({
   ],
 }));
 const routingPrices = routingPricesFromFusionConfig(fusionPrices);
+
+test("provider catalog is withheld when the signed-in account changes during loading", async (t) => {
+  const sessions = [
+    { user: { id: "account-a" }, access_token: "token-a" },
+    { user: { id: "account-b" }, access_token: "token-b" },
+  ];
+  let sessionReads = 0;
+  let fetchCalls = 0;
+  t.mock.method(supabase.auth, "getSession", async () => ({ data: { session: sessions[sessionReads++] } }));
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    fetchCalls += 1;
+    assert.match(String(url), /\/models$/);
+    assert.equal(options.headers.Authorization, "Bearer token-a");
+    return new Response(JSON.stringify({ providers: [], profiles: [{ id: "automatic", label: "Automatic" }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+
+  await assert.rejects(getHEYProviderCatalog(), { name: "AbortError", message: /account changed/i });
+  assert.equal(sessionReads, 2);
+  assert.equal(fetchCalls, 1);
+});
 
 test("account entitlements narrow models and reject malformed or hostile grants", () => {
   assert.deepEqual(normalizeProviderEntitlements(["provider.remote", "provider:openai"]), ["provider.remote", "provider:openai"]);
@@ -132,6 +157,7 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
     readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/chat/ChatInput.jsx", import.meta.url), "utf8"),
   ]);
+  const providerCatalogClient = client.slice(client.indexOf("export async function getHEYProviderCatalog"), client.indexOf("async function fetchWithTimeout"));
   assert.match(route, /request\.method === "GET" && modelsPath/);
   assert.match(route, /authClient\.auth\.getUser\(token\)/);
   assert.match(route, /\.select\("entitlements"\)/);
@@ -150,6 +176,7 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(route, /providerAuthorizationUnavailable[\s\S]*?account_permissions_unavailable/);
   assert.match(client, /getHEYApiUrl\(\).*\/models/);
   assert.match(client, /access_token/);
+  assert.match(providerCatalogClient, /const details = await response\.json\(\)\.catch\(\(\) => \(\{\}\)\)[\s\S]*const currentSession = await getHEYSession\(\);[\s\S]*if \(!isSameHEYAccount\(session, currentSession\)\)[\s\S]*throw new DOMException\("The signed-in account changed while available models were loading\.", "AbortError"\)[\s\S]*if \(!Array\.isArray\(details\.providers\)/);
   assert.match(client, /providerSelection: \{ providerId, modelId \}/);
   assert.match(client, /providerProfile === "lower_cost"/);
   assert.match(page, /providerProfile: requestedProviderProfile/);
