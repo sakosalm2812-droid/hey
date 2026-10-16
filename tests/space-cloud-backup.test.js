@@ -132,6 +132,7 @@ test("adversarial backup fixtures are rejected before RPC and the direct RPC has
     ["oversized Space name", (document) => { document.spaces[0].name = "A".repeat(81); }],
     ["oversized UTF-16 Space name", (document) => { document.spaces[0].name = "😀".repeat(41); }],
     ["control character in name", (document) => { document.spaces[0].name = "Plan\u0007"; }],
+    ["duplicate Space ID", (document) => { document.spaces.push(structuredClone(document.spaces[0])); document.spaceCount += 1; }],
     ["oversized description", (document) => { document.spaces[0].description = "A".repeat(241); }],
     ["control character in description", (document) => { document.spaces[0].description = "Plan\u0085"; }],
     ["invalid category preference ID", (document) => { document.spaces[0].layoutPreferences.widgetIds = ["with space"]; }],
@@ -165,6 +166,7 @@ test("adversarial backup fixtures are rejected before RPC and the direct RPC has
   assert.match(rpc, /hey_private_space_backup_utf16_length\(item ->> 'name'\) > 80/i);
   assert.match(rpc, /hey_private_space_backup_utf16_length\(item ->> 'description'\) > 240/i);
   assert.match(rpc, /item ->> 'description' ~ '\[\[:cntrl:\]\]'/i);
+  assert.match(rpc, /group by item ->> 'id'\s+having count\(\*\) > 1/i);
   assert.match(rpc, /not public\.hey_private_space_backup_layout_preferences_valid\(item -> 'layoutPreferences'\)/i);
   assert.match(helper, /v_max_count := case when v_field = 'toolIds' then 64 else 32 end/i);
   assert.ok(helper.includes("v_value !~ '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$'"));

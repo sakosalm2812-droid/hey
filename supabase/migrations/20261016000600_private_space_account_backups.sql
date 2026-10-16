@@ -130,6 +130,12 @@ begin
     or jsonb_typeof(p_document -> 'exportedAt') <> 'string'
     or p_document ->> 'exportedAt' = ''
     or exists (
+      select item ->> 'id'
+      from jsonb_array_elements(p_document -> 'spaces') as spaces(item)
+      group by item ->> 'id'
+      having count(*) > 1
+    )
+    or exists (
       select 1 from jsonb_array_elements(p_document -> 'spaces') as spaces(item)
       where jsonb_typeof(item) <> 'object'
         or not (item ?& array['id', 'name', 'description', 'templateId', 'detailsRevision', 'status', 'lifecycleRevision', 'visibility', 'sharing', 'createdAt', 'layoutPreferences'])
