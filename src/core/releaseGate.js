@@ -99,10 +99,12 @@ function validateGates(gates) {
   return ids;
 }
 
-function validateClaims(publicClaims) {
-  if (!Array.isArray(publicClaims)) throw new TypeError("Public claims must be an array.");
+function validateClaims(publicClaims, gates) {
+  if (!Array.isArray(publicClaims) || publicClaims.length === 0) {
+    throw new TypeError("At least one public claim with required-evidence mappings is required.");
+  }
   const seenClaimIds = new Set();
-  return publicClaims.map((claim) => {
+  const claims = publicClaims.map((claim) => {
     assertRecord(claim, "Public claim");
     if (typeof claim.id !== "string" || !claim.id.trim() || seenClaimIds.has(claim.id)) throw new TypeError("Public claim IDs must be unique, non-empty strings.");
     if (typeof claim.text !== "string" || !claim.text.trim()) throw new TypeError(`Public claim ${claim.id} needs claim text.`);
@@ -110,6 +112,14 @@ function validateClaims(publicClaims) {
     seenClaimIds.add(claim.id);
     return { id: claim.id, text: claim.text, gateIds: [...claimGateIds] };
   });
+  const mappedGateIds = new Set(claims.flatMap((claim) => claim.gateIds));
+  const unmappedRequiredGateIds = gates
+    .filter((gate) => gate.required !== false && !mappedGateIds.has(gate.id))
+    .map((gate) => gate.id);
+  if (unmappedRequiredGateIds.length > 0) {
+    throw new TypeError(`Public claims must map every required release gate; unmapped: ${unmappedRequiredGateIds.join(", ")}.`);
+  }
+  return claims;
 }
 
 function inventoryBody(gates, claims, challenge) {
@@ -137,7 +147,7 @@ export function createReleaseInventoryAttestationBody({ gates, publicClaims = []
   const gatesSnapshot = detachedJson(gates, "Release gates");
   const claimsSnapshot = detachedJson(publicClaims, "Public claims");
   validateGates(gatesSnapshot);
-  const claims = validateClaims(claimsSnapshot);
+  const claims = validateClaims(claimsSnapshot, gatesSnapshot);
   return inventoryBody(gatesSnapshot, claims, challenge);
 }
 
@@ -170,7 +180,7 @@ export async function evaluateReleaseGate({
   const independentKeyIds = assertUniqueStrings(detachedJson(trustedIndependentVerifierKeyIds, "Trusted independent verifier key IDs"), "Trusted independent verifier key IDs");
   const inventoryKeyIds = assertUniqueStrings(detachedJson(trustedInventoryAttestorKeyIds, "Trusted independent inventory attestor key IDs"), "Trusted independent inventory attestor key IDs");
   const gateIds = validateGates(gatesSnapshot);
-  const normalizedClaims = validateClaims(claimsSnapshot);
+  const normalizedClaims = validateClaims(claimsSnapshot, gatesSnapshot);
   if (!Number.isFinite(now)) throw new TypeError("Release evaluation time must be finite.");
 
   let inventoryAttestationValid;

@@ -99,7 +99,7 @@ test("release evidence fails closed when stale, revoked, signed by an unapproved
 
 test("claims with missing gate coverage block release and unsupported optional gates remain explicit", async () => {
   const data = await fixture();
-  const unsupportedClaim = await request(data, { publicClaims: [{ id: "claim-native-ready", text: "Native release ready", gateIds: ["windows-device-build"] }] });
+  const unsupportedClaim = await request(data, { publicClaims: [{ id: "claim-web-ready", text: "Web release verified", gateIds: [gate.id, "windows-device-build"] }] });
   assert.equal(unsupportedClaim.recommendation, "NOT_READY");
   assert.equal(unsupportedClaim.publicClaims[0].status, "blocked");
 
@@ -112,6 +112,33 @@ test("malformed release inventory cannot manufacture a ready recommendation", as
   const data = await fixture();
   await assert.rejects(() => request(data, { gates: [] }), /At least one release gate/);
   await assert.rejects(() => request(data, { publicClaims: [{ id: "claim", text: "Claim", gateIds: [] }] }), /non-empty array/);
+  await assert.rejects(() => request(data, { publicClaims: [] }), /At least one public claim/);
+  await assert.rejects(() => request(data, { publicClaims: [{ id: "claim-other", text: "Other claim", gateIds: ["different-gate"] }] }), /map every required release gate/);
+  const emptyClaimsAttestation = await createEvidenceEnvelope({
+    accountId,
+    source: { kind: "release-inventory", id: "malicious-empty-claim-inventory" },
+    body: {
+      kind: "hey.release-gate.inventory-attestation.v1",
+      challenge: data.inventoryChallenge,
+      gates: [{ ...gate, required: true }],
+      publicClaims: [],
+    },
+    capturedAt: new Date(data.now).toISOString(),
+    expiresAt: new Date(data.now + 60_000).toISOString(),
+    revocationEpoch: 4,
+  }, { privateKey: data.inventoryPrivateKey, keyId: "inventory-authority", now: data.now });
+  await assert.rejects(() => evaluateReleaseGate({
+    gates: [gate],
+    evidence: [{ envelope: data.envelope }],
+    publicClaims: [],
+    verificationContext: context,
+    verificationOptions: data.options,
+    trustedIndependentVerifierKeyIds: ["release-auditor"],
+    inventoryAttestation: emptyClaimsAttestation,
+    trustedInventoryAttestorKeyIds: ["inventory-authority"],
+    inventoryAttestationChallenge: data.inventoryChallenge,
+    now: data.now,
+  }), /At least one public claim/);
   const accessorClaim = Object.defineProperty({ id: "claim", gateIds: [gate.id] }, "text", { enumerable: true, get() { throw new Error("should not run"); } });
   await assert.rejects(() => request(data, { publicClaims: [accessorClaim] }), /accessor properties/);
 });
@@ -128,7 +155,7 @@ test("release recommendation requires a fresh independent signature over the com
     assert.equal(result.recommendation, "NOT_READY");
   });
   await t.test("changed public claim mapping fails its signature binding", async () => {
-    const result = await request(data, { publicClaims: [{ id: "claim-web-ready", text: "Web release verified", gateIds: ["another-gate"] }] });
+    const result = await request(data, { publicClaims: [{ id: "claim-web-ready", text: "Web release verified", gateIds: [gate.id, "another-gate"] }] });
     assert.equal(result.recommendation, "NOT_READY");
   });
   await t.test("replayed challenge and wrong signer fail closed", async () => {
