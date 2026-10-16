@@ -4,6 +4,7 @@ import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
 import { describeSafeComputerActionPreview } from "../src/core/voiceOSPreview.js";
+import { translations } from "../src/i18n/translations.js";
 
 test("safe computer previews expose only bounded target and capability labels", async () => {
   setAccountScope("voiceos-ui-safe");
@@ -43,9 +44,8 @@ test("unsafe, malformed, and hostile previews never produce a display summary", 
 
 test("chat review UI is visibly inert and does not dispatch a confirmed action", async () => {
   const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
-  assert.match(source, /Reviewing records your acknowledgment only/);
-  assert.match(source, /Trust Kernel permit and verified device authorization are still required/);
-  assert.match(source, /I reviewed this preview/);
+  assert.match(source, /t\("chat\.voiceOS\.noAuthority"/);
+  assert.match(source, /t\("chat\.voiceOS\.reviewedAction"/);
   assert.match(source, /reviewVoiceCommandPreview\(pending\.preview\)/);
   assert.doesNotMatch(source, /confirmPendingExecution|pendingExecution/);
   assert.doesNotMatch(source, /sendUserMessage\([^\n]*confirmed\s*:\s*true/);
@@ -54,4 +54,34 @@ test("chat review UI is visibly inert and does not dispatch a confirmed action",
   assert.ok(reviewStart >= 0 && reviewEnd > reviewStart);
   const reviewHandler = source.slice(reviewStart, reviewEnd);
   assert.doesNotMatch(reviewHandler, /sendUserMessage|askHEY|executeRequest|invoke\(/);
+});
+
+test("VoiceOS preview labels and status copy are accessible and translated for every supported locale", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const required = [
+    "checking", "sectionLabel", "title", "reviewedTitle", "risk", "action", "target", "capability",
+    "highRisk", "mediumRisk", "openApp", "navigateBrowser", "openWebsite", "noAuthority",
+    "reviewedStatus", "dismiss", "reviewedAction", "cancelAction", "accountChanged",
+    "accountRequiredVoice", "accountRequired", "differentAccount", "expired",
+    "reviewNeedsAuthorization", "cancelled", "previewOnly", "voicePrepared",
+    "capabilityAppOpen", "capabilityBrowserNavigate", "capabilityBrowserOpenUrl",
+  ];
+  for (const locale of ["en", "ku", "ar"]) {
+    for (const key of required) {
+      assert.equal(typeof translations[locale].chat.voiceOS[key], "string", `${locale}.chat.voiceOS.${key} exists`);
+      assert.ok(translations[locale].chat.voiceOS[key].length > 0, `${locale}.chat.voiceOS.${key} is not empty`);
+      if (locale !== "en") {
+        assert.notEqual(translations[locale].chat.voiceOS[key], translations.en.chat.voiceOS[key], `${locale}.chat.voiceOS.${key} is translated`);
+      }
+    }
+  }
+
+  assert.match(source, /aria-label=\{t\("chat\.voiceOS\.sectionLabel"/);
+  assert.match(source, /role="status">\{t\("chat\.voiceOS\.checking"/);
+  assert.match(source, /<p role="status">\{t\("chat\.voiceOS\.reviewedStatus"/);
+  assert.match(source, /setExecutionStatus\(t\("chat\.voiceOS\.accountChanged"/);
+  assert.match(source, /setExecutionStatus\(t\("chat\.voiceOS\.cancelled"/);
+  for (const key of ["noAuthority", "risk", "target", "cancelAction", "accountChanged", "differentAccount", "expired", "reviewNeedsAuthorization"]) {
+    assert.match(source, new RegExp(`chat\\.voiceOS\\.${key}`), `${key} uses the translation API`);
+  }
 });

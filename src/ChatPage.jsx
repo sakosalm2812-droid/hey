@@ -49,6 +49,24 @@ const suggestions = [
   "Explain something difficult",
 ];
 
+function translatedPreviewAction(label, t) {
+  const key = {
+    "Open app": "chat.voiceOS.openApp",
+    "Navigate browser": "chat.voiceOS.navigateBrowser",
+    "Open website": "chat.voiceOS.openWebsite",
+  }[label];
+  return key ? t(key, label) : label;
+}
+
+function translatedPreviewCapability(capability, t) {
+  const key = {
+    "app.open": "chat.voiceOS.capabilityAppOpen",
+    "browser.navigate": "chat.voiceOS.capabilityBrowserNavigate",
+    "browser.open_url": "chat.voiceOS.capabilityBrowserOpenUrl",
+  }[capability];
+  return key ? t(key, capability) : capability;
+}
+
 function ChatWorkspace() {
   const { user } = useAuth();
   const { t } = useLocale();
@@ -132,8 +150,8 @@ function ChatWorkspace() {
     if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
     pendingComputerPreviewRef.current = null;
     setPendingComputerPreview(null);
-    setExecutionStatus("The computer preview was cleared because the signed-in account changed. Nothing was run.");
-  }), []);
+    setExecutionStatus(t("chat.voiceOS.accountChanged", "The computer preview was cleared because the signed-in account changed. Nothing was run."));
+  }), [t]);
 
   useEffect(() => {
     voiceSessionRef.current = createVoiceSession({
@@ -304,15 +322,18 @@ function ChatWorkspace() {
 
   const askFromVoice = useCallback(async (text, { signal } = {}) => {
     const nextPreview = await createSafeComputerPreview(text, signal);
-    if (signal?.aborted) return "Voice request cancelled. No computer action was run.";
-    if (nextPreview?.blocked) return "Sign in to the current account before reviewing a computer action. Nothing was run.";
+    if (signal?.aborted) return t("chat.voiceOS.cancelled", "Computer preview cancelled. Nothing was sent or opened.");
+    if (nextPreview?.blocked) return t("chat.voiceOS.accountRequiredVoice", "Sign in to the current account before reviewing a computer action. Nothing was run.");
     if (nextPreview) {
       storeComputerPreview({ ...nextPreview, source: "voice" });
-      setExecutionStatus("Preview only. Nothing has been sent to the device.");
-      return `I prepared a preview: ${nextPreview.summary.label}, ${nextPreview.summary.target}. Review it in the chat. Nothing was opened.`;
+      setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
+      const action = translatedPreviewAction(nextPreview.summary.label, t);
+      return t("chat.voiceOS.voicePrepared", "I prepared a preview: {action}, {target}. Review it in the chat. Nothing was opened.")
+        .replace("{action}", action)
+        .replace("{target}", nextPreview.summary.target);
     }
     return askHEY(text, { signal });
-  }, [createSafeComputerPreview, storeComputerPreview]);
+  }, [createSafeComputerPreview, storeComputerPreview, t]);
 
   useEffect(() => {
     askFromVoiceRef.current = askFromVoice;
@@ -332,7 +353,7 @@ function ChatWorkspace() {
       setPreviewChecking(false);
     }
     if (nextPreview?.blocked) {
-      setExecutionStatus("A current signed-in account is required to review this computer action. Nothing was sent or run.");
+      setExecutionStatus(t("chat.voiceOS.accountRequired", "A current signed-in account is required to review this computer action. Nothing was sent or run."));
       return;
     }
     if (nextPreview) {
@@ -340,7 +361,7 @@ function ChatWorkspace() {
       if (previous && !previous.reviewed) cancelVoiceCommandPreview(previous.preview.previewId);
       storeComputerPreview(nextPreview);
       setMessage("");
-      setExecutionStatus("Preview only. Nothing has been sent to the device.");
+      setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
       return;
     }
     const requestedFusion = fusionEnabled;
@@ -413,17 +434,17 @@ function ChatWorkspace() {
     if (pending.accountScope !== getAccountScope() || pending.accountScope !== `account:${user?.id || ""}`) {
       cancelVoiceCommandPreview(pending.preview.previewId);
       storeComputerPreview(null);
-      setExecutionStatus("This preview belongs to a different account. Nothing was run.");
+      setExecutionStatus(t("chat.voiceOS.differentAccount", "This preview belongs to a different account. Nothing was run."));
       return;
     }
     const reviewed = reviewVoiceCommandPreview(pending.preview);
     if (!reviewed.success) {
       storeComputerPreview(null);
-      setExecutionStatus("This preview expired or changed. Create a new preview before proceeding.");
+      setExecutionStatus(t("chat.voiceOS.expired", "This preview expired or changed. Create a new preview before proceeding."));
       return;
     }
     storeComputerPreview({ ...pending, reviewed: true, reviewStatus: reviewed.status });
-    setExecutionStatus("Review recorded. A Trust Kernel permit and verified device authorization are still required; nothing was run.");
+    setExecutionStatus(t("chat.voiceOS.reviewNeedsAuthorization", "Review recorded. A Trust Kernel permit and verified device authorization are still required; nothing was run."));
   }
 
   function cancelComputerPreview() {
@@ -432,7 +453,7 @@ function ChatWorkspace() {
     if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
     storeComputerPreview(null);
     if (pending.source === "text") setMessage(pending.message);
-    setExecutionStatus("Computer preview cancelled. Nothing was sent or opened.");
+    setExecutionStatus(t("chat.voiceOS.cancelled", "Computer preview cancelled. Nothing was sent or opened."));
   }
 
   function dismissComputerPreview() {
@@ -443,31 +464,35 @@ function ChatWorkspace() {
 
   function renderComputerPreview() {
     if (previewChecking) {
-      return <p className="hey-chat-execution-status" role="status">Checking whether this request can be shown as a safe preview. Nothing has been sent or run.</p>;
+      return <p className="hey-chat-execution-status" role="status">{t("chat.voiceOS.checking", "Checking whether this request can be shown as a safe preview. Nothing has been sent or run.")}</p>;
     }
     if (!pendingComputerPreview) return null;
     const { summary, reviewed } = pendingComputerPreview;
+    const actionLabel = translatedPreviewAction(summary.label, t);
+    const riskLabel = summary.risk === "High"
+      ? t("chat.voiceOS.highRisk", "High")
+      : t("chat.voiceOS.mediumRisk", "Medium");
     return (
-      <section className="hey-computer-preview" aria-label="Computer action preview" aria-live="polite">
+      <section className="hey-computer-preview" aria-label={t("chat.voiceOS.sectionLabel", "Computer action preview")} aria-live="polite">
         <div className="hey-computer-preview-heading">
-          <strong>{reviewed ? "Preview review recorded" : "Review computer action"}</strong>
-          <span>{summary.risk} risk</span>
+          <strong>{reviewed ? t("chat.voiceOS.reviewedTitle", "Preview review recorded") : t("chat.voiceOS.title", "Review computer action")}</strong>
+          <span>{riskLabel} {t("chat.voiceOS.risk", "risk")}</span>
         </div>
         <dl>
-          <div><dt>Action</dt><dd>{summary.label}</dd></div>
-          <div><dt>Target</dt><dd>{summary.target}</dd></div>
-          <div><dt>Capability</dt><dd>{summary.capability}</dd></div>
+          <div><dt>{t("chat.voiceOS.action", "Action")}</dt><dd>{actionLabel}</dd></div>
+          <div><dt>{t("chat.voiceOS.target", "Target")}</dt><dd>{summary.target}</dd></div>
+          <div><dt>{t("chat.voiceOS.capability", "Capability")}</dt><dd>{translatedPreviewCapability(summary.capability, t)}</dd></div>
         </dl>
-        <p>Reviewing records your acknowledgment only. It does not authorize or run an action. A Trust Kernel permit and verified device authorization are still required.</p>
+        <p>{t("chat.voiceOS.noAuthority", "Reviewing records your acknowledgment only. It does not authorize or run an action. A Trust Kernel permit and verified device authorization are still required.")}</p>
         {reviewed ? (
           <div className="hey-computer-preview-actions">
-            <p role="status">Review recorded. Nothing was run.</p>
-            <button type="button" onClick={dismissComputerPreview}>Dismiss</button>
+            <p role="status">{t("chat.voiceOS.reviewedStatus", "Review recorded. Nothing was run.")}</p>
+            <button type="button" onClick={dismissComputerPreview}>{t("chat.voiceOS.dismiss", "Dismiss")}</button>
           </div>
         ) : (
           <div className="hey-computer-preview-actions">
-            <button type="button" className="hey-btn-primary" onClick={reviewComputerPreview}>I reviewed this preview</button>
-            <button type="button" onClick={cancelComputerPreview}>Cancel preview</button>
+            <button type="button" className="hey-btn-primary" onClick={reviewComputerPreview}>{t("chat.voiceOS.reviewedAction", "I reviewed this preview")}</button>
+            <button type="button" onClick={cancelComputerPreview}>{t("chat.voiceOS.cancelAction", "Cancel preview")}</button>
           </div>
         )}
       </section>
