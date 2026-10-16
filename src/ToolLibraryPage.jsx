@@ -12,6 +12,7 @@ import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryR
 import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolLibrarySearch.js";
 import { getDictationReadiness } from "./lib/dictationReadiness.js";
 import { getToolLibraryLifecycleView } from "./lib/toolLibraryLifecycleView.js";
+import { refreshToolLibraryLifecycleSnapshot } from "./lib/toolLibraryLifecycleRefresh.js";
 import { getToolLibraryPlatformMatrix, TOOL_LIBRARY_PLATFORMS } from "./lib/toolLibraryPlatformMatrix.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
@@ -127,6 +128,7 @@ function ToolCard({
   const [receiptState, setReceiptState] = useState(null);
   const [activityState, setActivityState] = useState(null);
   const [lifecycleState, setLifecycleState] = useState(null);
+  const [refreshingLifecycle, setRefreshingLifecycle] = useState(false);
   const receipt = isToolLibraryRecordVisible(receiptState, accountId, getAccountScope()) ? receiptState : null;
   const activity = isToolLibraryRecordVisible(activityState, accountId, getAccountScope()) ? activityState.items : [];
   const lifecycleRecord = isToolLibraryRecordVisible(lifecycleState, accountId, getAccountScope()) ? lifecycleState : null;
@@ -137,6 +139,7 @@ function ToolCard({
   const hasLifecycleControls = lifecycleView.visible && (lifecycleView.startDeclared || lifecycleView.stopDeclared || lifecycleView.retryDeclared);
   const [running, setRunning] = useState(false);
   const runLock = useRef(false);
+  const refreshRequestRef = useRef(0);
   const controllerRef = useRef(null);
   const status = STATUS_DETAILS[tool.status] || STATUS_DETAILS.unsupported;
   const StatusIcon = status.Icon;
@@ -150,31 +153,54 @@ function ToolCard({
     });
   }, [accountId]);
 
-  const refreshActivity = useCallback(() => {
+  const refreshActivity = useCallback(async () => {
+    const request = ++refreshRequestRef.current;
     if (!accountId || getAccountScope() !== `account:${accountId}`) {
       setActivityState(null);
+      setLifecycleState(null);
+      setRefreshingLifecycle(false);
       return;
     }
-    const result = HEY.tools.lifecycleActivity(tool.name, { user });
-    setActivityState(scopeToolLibraryRecord(accountId, { items: result?.success && Array.isArray(result.activity) ? result.activity : [] }));
-    const contract = HEY.tools.lifecycle(tool.name, { user, platform: "web" });
-    setLifecycleState(contract?.success ? scopeToolLibraryRecord(accountId, contract) : null);
+    setRefreshingLifecycle(true);
+    const snapshot = await refreshToolLibraryLifecycleSnapshot({
+      accountId,
+      getActiveScope: getAccountScope,
+      isCurrentRequest: () => refreshRequestRef.current === request,
+      readActivity: () => HEY.tools.lifecycleActivity(tool.name, { user }),
+      readLifecycle: () => HEY.tools.lifecycle(tool.name, { user, platform: "web" }),
+    });
+    if (snapshot.status === "ready") {
+      setActivityState(scopeToolLibraryRecord(accountId, { items: snapshot.activity }));
+      setLifecycleState(snapshot.lifecycle ? scopeToolLibraryRecord(accountId, snapshot.lifecycle) : null);
+    } else if (snapshot.status === "account_changed" && refreshRequestRef.current === request) {
+      setActivityState(null);
+      setLifecycleState(null);
+    }
+    if (refreshRequestRef.current === request) setRefreshingLifecycle(false);
   }, [accountId, tool.name, user]);
 
   useEffect(() => {
     refreshActivity();
   }, [refreshActivity]);
 
-  useEffect(() => subscribeAccountScope(() => {
-    controllerRef.current?.abort(new Error("Account scope changed."));
-    controllerRef.current = null;
-    runLock.current = false;
-    setRunning(false);
-    setPendingRun(null);
-    setReceiptState(null);
-    setActivityState(null);
-    setLifecycleState(null);
-  }), []);
+  useEffect(() => {
+    const unsubscribe = subscribeAccountScope(() => {
+      refreshRequestRef.current += 1;
+      controllerRef.current?.abort(new Error("Account scope changed."));
+      controllerRef.current = null;
+      runLock.current = false;
+      setRunning(false);
+      setPendingRun(null);
+      setReceiptState(null);
+      setActivityState(null);
+      setLifecycleState(null);
+      setRefreshingLifecycle(false);
+    });
+    return () => {
+      refreshRequestRef.current += 1;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (!lifecycleView.visible || !["starting", "running", "stopping"].includes(lifecycleView.status)) return undefined;
@@ -541,6 +567,9 @@ function ToolCard({
       </details>
       <details className="tool-library__advanced-details">
         <summary>Activity</summary>
+        <button type="button" className="tool-library__retry" disabled={refreshingLifecycle || !accountId || getAccountScope() !== `account:${accountId}`} onClick={() => { void refreshActivity(); }}>
+          {refreshingLifecycle ? "Refreshing…" : "Refresh activity and session status"}
+        </button>
         {activity.length ? <ul className="tool-library__activity-list">{activity.slice(0, 10).map((item) => (
           <li key={`${item.id}-${item.status}-${item.at}`}><span>{item.status.replaceAll("_", " ")}</span><time dateTime={item.at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.at))}</time></li>
         ))}</ul> : <p className="tool-library__run-help">No Tool Library activity is recorded for this tool on this device.</p>}

@@ -17,6 +17,9 @@ test("Tool Library renders only canonical catalog descriptors and communicates p
   assert.match(pageSource, /HEY\.tools\.catalog\(\{ platform: "web" \}\)/);
   assert.match(pageSource, /HEY\.tools\.catalog\(\{ platform: id \}\)/);
   assert.match(pageSource, /Platform availability/);
+  assert.match(pageSource, /Refresh activity and session status/);
+  assert.match(pageSource, /refreshToolLibraryLifecycleSnapshot/);
+  assert.match(pageSource, /refreshRequestRef\.current === request/);
   assert.match(pageSource, /toolLibraryPlatformMatrix/);
   assert.match(pageSource, /requestRef\.current !== request/);
   assert.doesNotMatch(pageSource, /HEY\.tools\.all\(/);
