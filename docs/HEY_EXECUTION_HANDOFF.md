@@ -41,6 +41,26 @@ This checkpoint supersedes the older checkpoint below. Coordinator branch `codex
 
 **Next:** commit and fast-forward push this handoff; resume the existing specialist chats concurrently on isolated worktrees from this checkpoint, assigning distinct missing user journeys from the V3 status map. Review every branch before cherry-picking, keep actual service/device gaps explicit, and run combined verification after each integration batch.
 
+### Active implementation wave — launched 2026-10-16 from `ff04069`
+
+All 11 existing chats have been messaged concurrently with GPT-6 Luna requested and instructed to create fresh isolated worktrees based on `ff04069bbe57a9e2f331286bf77b5d395acbf65b`. The coordinator worktree remains on its own branch. Latest observed progress is noted; branches/SHA will be replaced with exact values when workers create and commit them.
+
+| # | Task reference | Assigned branch | Current work |
+|---:|---|---|---|
+| 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave-next-01-onboarding-ui` | Isolating correct repository/worktree path; then wire account-bound onboarding Space suggestions into explicit preview/confirm UI. |
+| 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave-next-02-space-details` | Add revision/account-bound Space name/description update API if missing; focused validation. |
+| 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave-next-03-tool-lifecycle` | New lifecycle/recovery issue; focused tests passing 18/18; isolated dependency install for lint. |
+| 04 | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave-next-04-edge-safety` | Reviewing Edge device auth, lease, receipt and retry for one remaining safety gap. |
+| 05 | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave-next-05-gesture-active-track` | Clear stale camera consent after active track loss; test in-flight frame cancellation/action suppression. |
+| 06 | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave-next-06-dictation-recovery` | Bound corrected transcript expansion after raw-size cap; test rejection/retry/account-switch late callbacks. |
+| 07 | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave-next-07-voice-preview` | Bound nested/large workflow previews; reject oversized plan without partial result or execution. |
+| 08 | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave-next-08-teacher-privacy` | Inspect for another legacy/private artifact access boundary and add author-only regression tests. |
+| 09 | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave-next-09-provider-reliability` | One exact-model catalog/selection failure boundary beyond integrated routing and entitlement recheck. |
+| 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave-next-10-selector-guard` | Add one bounded parity/resource invariant; linear selector remains oracle; separate setup/cold/warm evidence. |
+| 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave-next-11-fusion-recovery` | One new cancellation/fallback test/fix beyond best-effort response cancellation. |
+
+No new Codex chats were created. Do not integrate uncommitted work. Preserve coordinator untracked V3 extraction. Next coordinator action: monitor all 11 tasks, inspect each exact diff/commit, integrate only safe completed changes, run full tests/build/lint, refresh both handoff/status documents, then commit and push.
+
 ---
 
 ## Current execution checkpoint — 2026-10-16 (America/Los_Angeles), after parallel follow-up wave
