@@ -32,14 +32,17 @@ All workers were directed to read their existing `docs/requirements/specialists/
 
 Latest app snapshots confirm all 11 resumed chats are active. No wave 6 commit is yet reported complete.
 
-- Worker 01 found its local branch worktree contains six commits beyond the published `a70b972` and is 21 commits ahead / 125 behind coordinator history. Worker 02 found 15 unique branch commits and intended to merge the coordinator history into its branch; coordinator sent a correction to avoid importing the 125-commit history wholesale and instead preserve the branch and port only unique feature changes. Both are inspecting divergence; no history was rewritten.
-- Worker 03 confirms its clean `codex/next-03-tool-library` worktree at `77a691f` and is preparing the source receipt before implementation.
-- Worker 04 found its preserved local branch at `5b74235`, two commits ahead of the published `ad79d5d`; it is fetching the coordinator state without resetting.
-- Worker 05 identified an unverified Gesture event bridge boundary in the active branch and is implementing a short-lived, single-use session authorization check plus denial/camera-loss and emergency-stop handling. This is a worker report, not yet independently confirmed or integrated.
-- Worker 06/07/08 confirmed use of the complete short-path source pack and are recording per-file hashes.
-- Worker 09 identified the request lifecycle in `callConfiguredProvider` as the app path to integrate, after reviewing existing provider entitlement and cancellation branches.
-- Worker 10 reports HEY Brain integration exists on its resumed branch and is checking the real API path plus benchmark; selector bound is already integrated on coordinator.
-- Worker 11 is adding provider usage/cap-cost receipt to a verified Fusion response and client reservation validation. This remains unverified until diff/tests land.
+- Worker 01 found its local branch worktree contains six commits beyond the published `a70b972` and is 21 commits ahead / 125 behind coordinator history. It identified a Teacher account-switch issue where the old lesson draft/readiness state could remain visible; it is adding account-bound readiness and draft clearing. Worker 02 found 15 unique branch commits, canceled its in-progress coordinator merge after the correction, and is preserving the original worktree while creating a separate continuation worktree from `4ddecd`. No history was rewritten.
+- Worker 03 confirms its clean `codex/next-03-tool-library` worktree at `77a691f`. It is applying the existing capacity reservation/activity behavior to the user-facing plan executor, preserving permission, confirmation, cancellation and receipt checks.
+- Worker 04 found its preserved local branch at `5b74235`, two commits ahead of the published `ad79d5d`; it is fetching coordinator state without resetting.
+- Worker 05 identified an unverified Gesture event bridge boundary and reports the bridge now checks current runtime-issued authorization before navigation; pause/stop/account changes invalidate it. Camera disconnect reporting and recovery controls are also being corrected. These are worker reports, not yet independently confirmed or integrated.
+- Worker 06 has active code changes and is using the complete source packet. Worker 07's focused suite passed **11/11** for account switch, missing permission and native capability denial; lint/build could not run because dependencies are absent in that checkout, so the worker is preparing dependencies. Native Rust build and desktop launch remain unverified.
+- Worker 08 is active on Teacher artifact journey/RLS work and has the complete source packet; live database is unavailable.
+- Worker 09 confirms branch `codex/next-09-hey-one-models` remains clean at `334fa8d`; it is integrating response lifecycle into the actual `callConfiguredProvider` route after review of entitlement/cancellation branches.
+- Worker 10 reports HEY Brain integration already exists on its branch and is aligning it with the complete packet, then checking the real API path and benchmark. The selector bound is already integrated on coordinator.
+- Worker 11 reports its focused Fusion suite passed **73/73**, including mocked timeout, cancellation, disagreement, grant revocation, cost reservation and no-answer release. It is checking remaining build/frontend tooling and source receipts before committing.
+
+All reports above are in-flight worker updates. No wave 6 worker commit has yet been independently reviewed or integrated.
 
 Current external blockers: this repo has only `.env.example`; no `.env` config, `supabase` CLI or `docker` executable is available in the coordinator environment. The running local page `http://127.0.0.1:5175/login` has sign-in disabled until `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are provided through a safe local config. No live DB, provider, auth, or device outcome is currently possible to claim.
 
