@@ -15,6 +15,10 @@ test("Tool Library is reachable through the protected app route and primary navi
 
 test("Tool Library renders only canonical catalog descriptors and communicates policy states", () => {
   assert.match(pageSource, /HEY\.tools\.catalog\(\{ platform: "web" \}\)/);
+  assert.match(pageSource, /HEY\.tools\.catalog\(\{ platform: id \}\)/);
+  assert.match(pageSource, /Platform availability/);
+  assert.match(pageSource, /toolLibraryPlatformMatrix/);
+  assert.match(pageSource, /requestRef\.current !== request/);
   assert.doesNotMatch(pageSource, /HEY\.tools\.all\(/);
   assert.match(pageSource, /Permission required/);
   assert.match(pageSource, /Unsupported here/);

@@ -12,6 +12,7 @@ import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryR
 import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolLibrarySearch.js";
 import { getDictationReadiness } from "./lib/dictationReadiness.js";
 import { getToolLibraryLifecycleView } from "./lib/toolLibraryLifecycleView.js";
+import { getToolLibraryPlatformMatrix, TOOL_LIBRARY_PLATFORMS } from "./lib/toolLibraryPlatformMatrix.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
@@ -105,6 +106,7 @@ function CapabilityDetails({ capabilities, errors }) {
 
 function ToolCard({
   tool,
+  platformCatalogs,
   interfaceLevel,
   user,
   accountId,
@@ -530,6 +532,14 @@ function ToolCard({
         <p className="tool-library__permission-note" role="note">This tool has no supported capability on the web platform.</p>
       )}
       <details className="tool-library__advanced-details">
+        <summary>Platform availability</summary>
+        <ul className="tool-library__platform-list">
+          {getToolLibraryPlatformMatrix(platformCatalogs, tool.name).map(({ platform, label, status }) => (
+            <li key={platform}><span>{label}</span><span className={`tool-library__platform-status tool-library__platform-status--${status}`}>{STATUS_DETAILS[status]?.label || "Unknown"}</span></li>
+          ))}
+        </ul>
+      </details>
+      <details className="tool-library__advanced-details">
         <summary>Activity</summary>
         {activity.length ? <ul className="tool-library__activity-list">{activity.slice(0, 10).map((item) => (
           <li key={`${item.id}-${item.status}-${item.at}`}><span>{item.status.replaceAll("_", " ")}</span><time dateTime={item.at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.at))}</time></li>
@@ -581,6 +591,7 @@ export default function ToolLibraryPage() {
   const { user } = useAuth();
   const accountId = user?.id ? String(user.id) : null;
   const [tools, setTools] = useState([]);
+  const [platformCatalogs, setPlatformCatalogs] = useState({});
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -618,6 +629,7 @@ export default function ToolLibraryPage() {
     const request = ++requestRef.current;
     const requestedAccountId = accountId;
     setLoading(true);
+    setPlatformCatalogs({});
     setError("");
     setPreferenceError("");
     setPreferenceState({ status: requestedAccountId ? "loading" : "account_required", accountId: requestedAccountId, preferences: null });
@@ -628,7 +640,18 @@ export default function ToolLibraryPage() {
       HEY.initialize();
       const catalog = HEY.tools.catalog({ platform: "web" });
       if (!Array.isArray(catalog)) throw new TypeError("Tool catalog returned an invalid response.");
+      const discoveredCatalogs = { web: catalog };
+      for (const { id } of TOOL_LIBRARY_PLATFORMS) {
+        if (id === "web") continue;
+        try {
+          const platformCatalog = HEY.tools.catalog({ platform: id });
+          discoveredCatalogs[id] = Array.isArray(platformCatalog) ? platformCatalog : null;
+        } catch {
+          discoveredCatalogs[id] = null;
+        }
+      }
       if (requestRef.current !== request) return;
+      setPlatformCatalogs(discoveredCatalogs);
       setTools(catalog);
       if (!requestedAccountId || getAccountScope() !== `account:${requestedAccountId}`) {
         setPreferenceState({ status: "account_required", accountId: requestedAccountId, preferences: null });
@@ -645,6 +668,7 @@ export default function ToolLibraryPage() {
       if (requestRef.current !== request) return;
       setError("The tool catalog could not be loaded. Try again in a moment.");
       setTools([]);
+      setPlatformCatalogs({});
       setPreferenceState({ status: "unavailable", accountId: requestedAccountId, preferences: null });
     } finally {
       if (requestRef.current === request) setLoading(false);
@@ -762,7 +786,7 @@ export default function ToolLibraryPage() {
           <span className="tool-library__sr-only">Search tools, permissions, and capabilities</span>
           <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools or permissions" />
         </label>
-        <p>Platform: <strong>Web</strong></p>
+        <p>Platform catalog: <strong>Web</strong></p>
       </div>
 
       <section className="tool-library__preference-panel" aria-labelledby="gesture-tool-card-title">
@@ -868,6 +892,7 @@ export default function ToolLibraryPage() {
             <ToolCard
               key={tool.name}
               tool={tool}
+              platformCatalogs={platformCatalogs}
               interfaceLevel={interfaceLevel}
               user={user}
               accountId={accountId}

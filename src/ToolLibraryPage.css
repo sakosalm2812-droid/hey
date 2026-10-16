@@ -290,6 +290,27 @@
 .tool-library__status--restricted { color: #ff9b8b; }
 .tool-library__status--unsupported { color: #aaa9b2; }
 
+.tool-library__platform-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-library__platform-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.tool-library__platform-status--supported { color: #83d9ae; }
+.tool-library__platform-status--permission_required { color: #e9c36c; }
+.tool-library__platform-status--restricted { color: #ff9b8b; }
+.tool-library__platform-status--unsupported,
+.tool-library__platform-status--unknown { color: #aaa9b2; }
+
 .tool-library__card h2 {
   margin: 0;
   font-size: 18px;
