@@ -1,4 +1,27 @@
-## Latest integration checkpoint — 2026-10-16 20:35 Asia/Baghdad
+## Latest integration checkpoint — 2026-10-16 20:43 Asia/Baghdad
+
+Coordinator branch `codex/resume-emergency-2026-10-14` integrates through `2cd6cdf` (`Bind voice edits to the active conversation`); this verified batch is ready to push with this handoff. Previous pushed coordinator checkpoint: `772aef6`. Eleven specialist commits from the 20:35 continuation wave were independently reviewed and integrated:
+
+| Area | Codex task | Source branch / commit → coordinator commit | Evidence boundary |
+|---|---|---|---|
+| Frontend notifications | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/frontend-proactive-notification-controls` / `5a0c6db` → `12a77ab` | Notification cards use explicit keyboard controls and app-route-only destinations; hostile paths/action objects fail closed. UI source/tests, no assistive-technology hardware session. |
+| Onboarding persistence | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-recovery-followup-5148f3c` / `0522010` → `d64d336` | Failed local durable reads roll back progress/preferences and suppress success notifications; storage fixtures only. |
+| Tool Library platforms | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-platform-matrix-1016` / `db5c441` → `17e561a` | UI displays Web/Windows/macOS/Linux/Android/iOS catalog states, Unknown for malformed or failed queries, and fences stale results. Catalog descriptors only; no native actions. |
+| Device transport | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-queue-auth-5148f3c` / `2d1ca37` → `8e95ad6` | Durable one-minute device limiter denies before queue touch and rechecks active credential under DB locks; SQL contract and fixtures only, migration not run live. |
+| Gesture permissions | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-permission-transition-5148f3c` / `3f59f49` → `769d0f1` | Permission reset to prompt stops capture, removes its listener and allows a fresh consented retry; synthetic browser permission/frame fixtures. |
+| Dictation proposal scope | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/dictation-confirm-account-fence-f5d2a38` / `ccf6004` → `851a74e` | Rechecks account after hostile confirmation input inspection; old account proposal cannot be consumed after account switch. No physical microphone use. |
+| Voice edit scope | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/voiceos-snapshot-freshness-5148f3c` / `9311ac2` → `2cd6cdf` | Selected-text digests, confirmation, replacement and undo bind to originating conversation; explicit review/confirmation retained. Native OS dispatch remains unverified. |
+| Teacher worksheets | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-reference-materials-ccd21c` / `fe9f310` → `6b1346a` | Teacher-authored three-level pack derives from a verified saved answer-free worksheet, binds review to author/account/project/class, and supports verified recovery. Forge fixtures only; no live database. |
+| Provider fallback | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-provider-cancel-cleanup-5148f3` / `26e775a` → `471c6d9` | Empty or unusable HTTP 200 answer bodies are rejected so automatic routing can continue; exact-model requests remain single-provider. Live providers not called. |
+| UltraSparse phrases | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-evasion-lexicon` / `49ebd20` → `095d029` | Adds common evasion phrase variants to the narrow route-suppression rule while benign uses still route normally; not a general injection detector or real benchmark. |
+| Fusion usage | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-proof-recovery-5148f3c` / `108daa3` → `ad23bfb` | Records bounded provider usage even when answer evidence is invalid, while withholding the answer and private text; mock provider fixtures only. |
+
+Verification on the integrated coordinator: **900/900** full Node tests pass; full `npm run lint` passes; `npm run build` passes (**2,786 modules**); `npm run smoke:spa` passes for `/login`, `/download`, and `/assets/index-B06UiJq3.js` at `http://127.0.0.1:4173`; `git diff --check` passes. Browser at `http://127.0.0.1:5175/download` verifies public route rendering only. Supabase URL/key, Docker, Supabase CLI and PostgreSQL are absent; authentication, database/RLS/limiter SQL, live providers, native builds/devices, physical camera/microphone and production deployment remain **UNVERIFIED**. All 47 steps remain In progress or Incomplete.
+
+Previous follow-up commits are now integrated. After pushing this checkpoint, continue all eleven existing specialist tasks concurrently from this new base, preserve the source branches, obtain exact new branch/commit receipts, and integrate only distinct verified slices. The 47-step evidence map stays conservative. Preserve untracked `docs/requirements/v3-agent-pack/` unstaged.
+
+---
+## Previous integration checkpoint — 2026-10-16 20:35 Asia/Baghdad
 
 Coordinator branch `codex/resume-emergency-2026-10-14` currently integrates through `f5d2a38` (`Require enrolled devices for command delivery`); this batch is ready to push with its handoff update. Previous pushed checkpoint: `e6b3736`. Ten specialist follow-up commits were reviewed and integrated:
 

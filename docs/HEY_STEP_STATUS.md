@@ -1,4 +1,10 @@
-## Latest implementation delta — coordinator `f5d2a38`
+## Latest implementation delta — coordinator `2cd6cdf`
+
+New evidence-backed implementation slices add failure-safe onboarding writes, account/conversation-fenced selected-text editing, usable-text checks before provider fallback, Fusion usage attribution when evidence is rejected, per-platform Tool Library availability, safe accessible notification navigation, a durable device transport rate limit, permission-reset recovery for Gesture, and Teacher-authored differentiated worksheets. Their focused adversarial tests are included in the integrated full suite. Live backends and hardware remain unverified.
+
+At `2cd6cdf`: **900/900** Node tests passed; full lint and production build passed (**2,786 modules**); SPA route smoke passed for `/login` and `/download`. The local browser confirms `/download`; Supabase configuration is absent and `/login` disables auth. **All 47 steps remain In progress or Incomplete.**
+
+## Prior implementation delta — coordinator `f5d2a38`
 
 Additional code-backed slices now cover: duplicate-ID rejection in private Space backups; frozen-camera frame recovery in Gesture; provider release and explicit retry after dictation recognition failure; VoiceOS preview fencing to the originating conversation; redirect refusal for credential-bearing chat/vision requests; normalized detection of obfuscated routing-override phrases; bounded Fusion elapsed-time receipts; policy-checked Tool Library lifecycle retry; keyboard focus through selected-text voice-edit review; and an enrolled-device requirement for queue dispatch. Their focused adversarial/contract tests are included in the combined suite. Hardware/provider/live-database evidence remains unavailable.
 
