@@ -10,6 +10,10 @@ const otherDeviceId = "87337f11-57da-4c23-a41f-fc19d1995b61";
 const commandId = "6cc95d2f-b37c-4d99-a6d6-3c59eb9126fb";
 const leaseToken = "1b8473f4-b50d-4a04-9834-7e5b446c07b4";
 
+function transportCredentialStore(authenticate, consumeRateLimit = async () => true) {
+  return { authenticate, consumeRateLimit };
+}
+
 async function credential() {
   const result = await issueDeviceCredential({
     authenticatedAccountId: accountId,
@@ -146,7 +150,7 @@ test("credential rotation store failures are sanitized and never return a creden
 test("transport binds claim, acknowledgement and failure to authenticated device identity", async () => {
   const token = await credential();
   const digest = await digestDeviceCredential(token);
-  const credentialStore = { async authenticate(received) { assert.equal(received, digest); return { accountId, deviceId, active: true }; } };
+  const credentialStore = transportCredentialStore(async (received) => { assert.equal(received, digest); return { accountId, deviceId, active: true }; });
   const calls = [];
   const queue = {
     async claimNext(...args) { calls.push(["claim", ...args]); return { commandId, envelope: { action: "computer.open_url" }, leaseToken }; },
@@ -170,12 +174,70 @@ test("transport binds claim, acknowledgement and failure to authenticated device
   ]);
 });
 
+test("exhausted or unavailable durable rate limits deny before touching the device queue", async () => {
+  const token = await credential();
+  const digest = await digestDeviceCredential(token);
+  let queueCalls = 0;
+  const queue = { async claimNext() { queueCalls += 1; return null; } };
+  const exhausted = transportCredentialStore(
+    async () => ({ accountId, deviceId, active: true }),
+    async (receivedDevice, receivedDigest) => {
+      assert.equal(receivedDevice, deviceId);
+      assert.equal(receivedDigest, digest);
+      return false;
+    },
+  );
+  assert.deepEqual(await handleDeviceTransport({
+    authorization: `Bearer ${token}`,
+    body: { operation: "claim", deviceId, idempotencyKey: "claim-rate-limit" },
+    credentialStore: exhausted,
+    queue,
+  }), { ok: false, status: 429, reason: "Device transport request limit reached." });
+  assert.equal(queueCalls, 0);
+
+  const unavailable = transportCredentialStore(async () => ({ accountId, deviceId, active: true }), async () => { throw new Error("private RPC detail"); });
+  const failedClosed = await handleDeviceTransport({
+    authorization: `Bearer ${token}`,
+    body: { operation: "claim", deviceId, idempotencyKey: "claim-rate-limit-unavailable" },
+    credentialStore: unavailable,
+    queue,
+  });
+  assert.equal(failedClosed.status, 503);
+  assert.equal(JSON.stringify(failedClosed).includes("private RPC detail"), false);
+  assert.equal(queueCalls, 0);
+
+  const noLimiter = await handleDeviceTransport({
+    authorization: `Bearer ${token}`,
+    body: { operation: "claim", deviceId, idempotencyKey: "claim-no-limiter" },
+    credentialStore: { async authenticate() { return { accountId, deviceId, active: true }; } },
+    queue,
+  });
+  assert.equal(noLimiter.status, 503);
+  assert.equal(queueCalls, 0);
+});
+
+test("durable transport limiter is credential-fenced, bounded, private, and service-only", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261016000800_device_transport_rate_limit.sql", import.meta.url), "utf8");
+  const edge = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
+  assert.match(sql, /request_count integer not null check \(request_count between 1 and 120\)/i);
+  assert.match(sql, /coalesce\(auth\.role\(\), ''\) <> 'service_role'/i);
+  assert.match(sql, /d\.status in \('online', 'offline'\) for update/i);
+  assert.match(sql, /c\.secret_hash = p_secret_hash and c\.revoked_at is null for update/i);
+  assert.match(sql, /request_count < 120/i);
+  assert.match(sql, /window_started_at <= v_now - interval '1 minute'/i);
+  assert.match(sql, /revoke all on public\.hey_device_transport_rate_limits from public, anon, authenticated, service_role/i);
+  assert.match(sql, /grant execute on function public\.consume_hey_device_transport_rate_limit\(uuid, text\) to service_role/i);
+  assert.doesNotMatch(sql, /grant execute on function public\.consume_hey_device_transport_rate_limit\([^;]+\) to [^;]*authenticated/i);
+  assert.match(edge, /rpc\("consume_hey_device_transport_rate_limit"/i);
+  assert.match(edge, /async consumeRateLimit\(deviceId: string, secretHash: string\)/);
+});
+
 test("a committed failure report can be retried with the same account, device, lease and credential digest", async () => {
   const token = await credential();
   const digest = await digestDeviceCredential(token);
   const calls = [];
   let committedTransitions = 0;
-  const credentialStore = { async authenticate(received) { assert.equal(received, digest); return { accountId, deviceId, active: true }; } };
+  const credentialStore = transportCredentialStore(async (received) => { assert.equal(received, digest); return { accountId, deviceId, active: true }; });
   const queue = {
     async recordFailure(...args) {
       calls.push(args);
@@ -207,13 +269,11 @@ test("credential rotation or revocation between authentication and dispatch is f
     async acknowledge(...args) { queueCalls.push(["ack", ...args]); return args[4] === currentDigest; },
     async recordFailure(...args) { queueCalls.push(["fail", ...args]); return args[4] === currentDigest; },
   };
-  const credentialStore = {
-    async authenticate(received) {
+  const credentialStore = transportCredentialStore(async (received) => {
       assert.equal(received, authenticatedDigest);
       currentDigest = "f".repeat(64); // Simulate rotation after auth reads the old digest.
       return { accountId, deviceId, active: true };
-    },
-  };
+  });
   const racingOperations = [
     { body: { operation: "claim", deviceId, idempotencyKey: "claim-race", leaseMs: 10_000 }, expected: { status: 200, claim: null } },
     { body: { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew-race", leaseMs: 10_000 }, expected: { status: 409, renewal: { renewed: false } } },
@@ -236,7 +296,7 @@ test("malformed, spoofed, revoked and mismatched credentials fail before queue a
   const token = await credential();
   let queueCalls = 0;
   const queue = { async claimNext() { queueCalls += 1; return null; } };
-  const goodStore = { async authenticate() { return { accountId, deviceId, active: true }; } };
+  const goodStore = transportCredentialStore(async () => ({ accountId, deviceId, active: true }));
   assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "claim-1", leaseMs: 300_001 }), null);
   assert.equal(normalizeTransportRequest({ operation: "claim", deviceId, idempotencyKey: "" }), null);
   assert.equal(normalizeTransportRequest({ operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew", leaseMs: 300_001 }), null);
@@ -256,11 +316,11 @@ test("malformed, spoofed, revoked and mismatched credentials fail before queue a
     { accountId, deviceId: otherDeviceId, active: true },
     { accountId, deviceId, active: false },
   ]) {
-    const result = await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: { async authenticate() { return identity; } }, queue });
+    const result = await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: transportCredentialStore(async () => identity), queue });
     assert.equal(result.status, 401);
   }
   assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1", accountId: otherAccountId }, credentialStore: goodStore, queue })).status, 400);
-  assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: { async authenticate() { return null; } }, queue })).status, 401);
+  assert.equal((await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "claim", deviceId, idempotencyKey: "claim-1" }, credentialStore: transportCredentialStore(async () => null), queue })).status, 401);
   assert.equal(queueCalls, 0);
   assert.equal((await digestDeviceCredential("bad-token")), null);
 });
@@ -338,7 +398,7 @@ test("pending or unknown device states cannot rotate or authenticate transport c
   const result = await handleDeviceTransport({
     authorization: `Bearer ${token}`,
     body: { operation: "claim", deviceId, idempotencyKey: "claim-1" },
-    credentialStore: { async authenticate() { return null; } },
+    credentialStore: transportCredentialStore(async () => null),
     queue: { async claimNext() { queueCalls += 1; return null; } },
   });
   assert.equal(result.status, 401);

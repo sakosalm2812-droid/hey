@@ -78,6 +78,14 @@ Deno.serve(async (request: Request) => {
         if (!data || typeof data !== "object") return null;
         return { accountId: data.accountId, deviceId: data.deviceId, active: data.active === true };
       },
+      async consumeRateLimit(deviceId: string, secretHash: string) {
+        const { data, error } = await serviceClient.rpc("consume_hey_device_transport_rate_limit", {
+          p_device_id: deviceId,
+          p_secret_hash: secretHash,
+        });
+        if (error) throw new Error("Device transport rate limit lookup failed.");
+        return data === true;
+      },
     };
 
     if (accountRequest?.operation === "rotate") {

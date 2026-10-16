@@ -169,13 +169,18 @@ export async function handleDeviceTransport({ authorization, body, credentialSto
   const request = normalizeTransportRequest(body);
   const token = typeof authorization === "string" && authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   if (!request || !validDeviceCredential(token)) return result(false, { status: 400, reason: "Device transport request is invalid." });
-  if (typeof credentialStore?.authenticate !== "function" || !queue) return result(false, { status: 503, reason: "Device transport is unavailable." });
+  if (typeof credentialStore?.authenticate !== "function" || typeof credentialStore?.consumeRateLimit !== "function" || !queue) return result(false, { status: 503, reason: "Device transport is unavailable." });
   try {
     const digest = await digestDeviceCredential(token);
     if (!digest) return result(false, { status: 503, reason: "Device transport is unavailable." });
     const identity = await credentialStore.authenticate(digest);
     if (!identity || identity.deviceId !== request.deviceId || !validUuid(identity.accountId) || identity.active !== true) {
       return result(false, { status: 401, reason: "Device credential is invalid or revoked." });
+    }
+    // The durable limiter also rechecks this credential under a database lock.
+    // Fail closed before any queue operation when that protection is unavailable.
+    if (await credentialStore.consumeRateLimit(identity.deviceId, digest) !== true) {
+      return result(false, { status: 429, reason: "Device transport request limit reached." });
     }
     if (request.operation === "claim") {
       const claim = await queue.claimNext(identity.accountId, identity.deviceId, request.idempotencyKey, request.leaseMs, digest);
