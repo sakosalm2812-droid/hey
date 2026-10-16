@@ -24,6 +24,10 @@ const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
 });
 const ROUTING_OVERRIDE_TERMS = "ignore|bypass|override|disable|circumvent|evade|disregard|forget|suppress";
 const ROUTING_POLICY_TERMS = "permissions?|polic(?:y|ies)|safety|security|authority|guardrails?|rules?|restrictions?|safeguards?|protections?";
+const NEGATED_ROUTING_OVERRIDE = new RegExp(
+  `\\b(?:do\\s+not|don['’]t|never|should\\s+not|shouldn't|must\\s+not|mustn't|cannot|can['’]t)\\s+(?:${ROUTING_OVERRIDE_TERMS})\\b`,
+  "gi",
+);
 const ADVERSARIAL_ROUTING_TEXT = new RegExp(
   `\\b(?:${ROUTING_OVERRIDE_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_POLICY_TERMS})\\b|\\b(?:${ROUTING_POLICY_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_OVERRIDE_TERMS})\\b`,
   "i",
@@ -62,9 +66,11 @@ function selectionInput(input, limit) {
 function containsAdversarialRoutingText(input) {
   // Normalize only the safety check so invisible format characters and
   // compatibility forms cannot disguise a routing-policy override phrase.
-  // This explicit phrase rule is not a general prompt-injection detector.
+  // Remove direct negations to avoid treating safety-preserving instructions
+  // as attempts to disable policy. The phrase rule remains heuristic.
   const normalizedInput = input.normalize("NFKC").replace(/\p{Cf}/gu, "");
-  return ADVERSARIAL_ROUTING_TEXT.test(normalizedInput);
+  const unnegatedInput = normalizedInput.replace(NEGATED_ROUTING_OVERRIDE, " ");
+  return ADVERSARIAL_ROUTING_TEXT.test(unnegatedInput);
 }
 
 function getHintSuppressionReason(input, selection) {
