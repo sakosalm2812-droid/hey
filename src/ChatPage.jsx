@@ -19,6 +19,7 @@ import { useAuth } from "./AuthContext.jsx";
 import {
   askHEY,
   checkHEYAIReadiness,
+  getHEYProviderCatalog,
   getHEYConversationMessages,
   listHEYConversations,
 } from "./lib/heyAI.js";
@@ -59,6 +60,8 @@ function ChatWorkspace() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
+  const [providerCatalog, setProviderCatalog] = useState({ status: "loading", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
+  const [providerProfile, setProviderProfile] = useState("automatic");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatError, setChatError] = useState("");
   const [conversationsLoading, setConversationsLoading] = useState(true);
@@ -184,6 +187,25 @@ function ChatWorkspace() {
     };
   }, [user?.id]);
 
+  useEffect(() => {
+    let active = true;
+    const catalogController = new AbortController();
+    setProviderCatalog({ status: "loading", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
+    getHEYProviderCatalog({ signal: catalogController.signal }).then((catalog) => {
+      if (!active) return;
+      setProviderCatalog(catalog);
+      setProviderProfile((current) => catalog.profiles.some((profile) => profile.id === current) ? current : "automatic");
+    }).catch(() => {
+      if (active && !catalogController.signal.aborted) {
+        setProviderCatalog({ status: "unavailable", providers: [], profiles: [{ id: "automatic", label: "Automatic" }] });
+      }
+    });
+    return () => {
+      active = false;
+      catalogController.abort();
+    };
+  }, [user?.id]);
+
   async function retryServiceChecks() {
     setAIReadiness({ status: "checking", message: "Checking the HEY AI endpoint." });
     setSupabaseStatus("checking");
@@ -239,6 +261,7 @@ function ChatWorkspace() {
     const trimmedMessage = userMessage.trim();
     if (!trimmedMessage || isSending) return;
     const requestedFusion = fusionEnabled;
+    const requestedProviderProfile = requestedFusion ? "automatic" : providerProfile;
     setFusionEnabled(false);
 
     if (displayUserMessage) setMessages((current) => [...current, { role: "user", text: trimmedMessage }]);
@@ -256,6 +279,7 @@ function ChatWorkspace() {
         onConversationId: setConversationId,
         confirmed,
         fusion: requestedFusion,
+        providerProfile: requestedProviderProfile,
         signal: controller.signal,
         onFusionVerification: (verification) => { fusionVerification = verification; },
         onExecutionResult: (execution, originalMessage) => {
@@ -561,6 +585,9 @@ function ChatWorkspace() {
                 disabled={isSending}
                 fusionEnabled={fusionEnabled}
                 setFusionEnabled={setFusionEnabled}
+                providerCatalog={providerCatalog}
+                providerProfile={providerProfile}
+                setProviderProfile={setProviderProfile}
                 onVoiceCall={toggleVoiceCall}
                 onDictationInsert={insertDictationTranscript}
               />
