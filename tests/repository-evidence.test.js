@@ -170,6 +170,7 @@ test("bounded JSON Schema comparison reports structural contract changes without
       requiredAdded: 1,
       requiredRemoved: 0,
       additionalPropertiesChanges: 1,
+      dependentRequiredChanges: 0,
       itemsChanges: 0,
       enumChanges: 1,
       constChanges: 0,
@@ -182,6 +183,56 @@ test("bounded JSON Schema comparison reports structural contract changes without
     assert.ok(report.entries.every((entry) => !Object.keys(entry).some((key) => key.startsWith("_schema"))));
     assert.deepEqual(readFileSync(path.join(root, beforePath)), originalBefore);
     assert.deepEqual(readFileSync(path.join(root, afterPath)), originalAfter);
+  });
+});
+
+test("dependentRequired contracts compare trigger rules as sorted sets without exposing property names", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    writeJson(root, "contracts/a-dependent.schema.json", {
+      $schema: dialect,
+      $id: "dependent-contract",
+      dependentRequired: { "api_key=private-secret": ["email", "phone"], active: ["reason"] },
+    });
+    writeJson(root, "contracts/z-dependent.schema.json", {
+      $schema: dialect,
+      $id: "dependent-contract",
+      dependentRequired: { active: ["reason"], "api_key=private-secret": ["phone", "email"], state: ["stateReason"] },
+    });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-dependent.schema.json", "contracts/z-dependent.schema.json"],
+    });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantic_diff");
+    assert.equal(comparison.changes.dependentRequiredChanges, 1);
+    assert.doesNotMatch(JSON.stringify(report), /dependent-contract|api_key=private-secret|email|phone|stateReason/);
+  });
+});
+
+test("dependentRequired fails closed for malformed relationships and dialects that do not define it", () => {
+  withRoot((root) => {
+    writeJson(root, "contracts/a-invalid.schema.json", {
+      $schema: "https://json-schema.org/draft/2020-12/schema", $id: "invalid-dependent", dependentRequired: { trigger: "must-be-an-array" },
+    });
+    writeJson(root, "contracts/b-invalid.schema.json", {
+      $schema: "https://json-schema.org/draft/2020-12/schema", $id: "invalid-dependent", dependentRequired: { trigger: ["ok", "ok"] },
+    });
+    writeJson(root, "contracts/a-legacy.schema.json", {
+      $schema: "http://json-schema.org/draft-07/schema#", $id: "legacy-dependent", dependentRequired: { trigger: ["required"] },
+    });
+    writeJson(root, "contracts/b-legacy.schema.json", {
+      $schema: "http://json-schema.org/draft-07/schema#", $id: "legacy-dependent", type: "object",
+    });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-invalid.schema.json", "contracts/b-invalid.schema.json", "contracts/a-legacy.schema.json", "contracts/b-legacy.schema.json"],
+    });
+    assert.ok(report.contractSemanticComparisons.every(({ status }) => status === "unsupported_schema_profile"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => itemPath.includes("invalid")).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_schema_features"));
+    assert.equal(report.entries.find(({ path: itemPath }) => itemPath.includes("a-legacy")).semanticAnalysisStatus, "unsupported_schema_features");
+    assert.equal(report.entries.find(({ path: itemPath }) => itemPath.includes("b-legacy")).semanticAnalysisStatus, "supported_profile");
+    assert.doesNotMatch(JSON.stringify(report), /invalid-dependent|legacy-dependent|must-be-an-array/);
   });
 });
 

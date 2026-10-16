@@ -24,7 +24,7 @@ const SCHEMA_CONSTRAINT_KEYS = new Set([
 ]);
 const SCHEMA_SUPPORTED_KEYS = new Set([
   ...SCHEMA_METADATA_KEYS, ...SCHEMA_CONSTRAINT_KEYS,
-  "type", "properties", "required", "additionalProperties", "items", "enum", "const",
+  "type", "properties", "required", "dependentRequired", "additionalProperties", "items", "enum", "const",
 ]);
 
 function safePath(filePath) {
@@ -229,7 +229,7 @@ function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-function validJsonSchemaNode(node, depth = 0, budget = { nodes: 0 }) {
+function validJsonSchemaNode(node, dialect, depth = 0, budget = { nodes: 0 }) {
   budget.nodes += 1;
   if (budget.nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH || !node || typeof node !== "object" || Array.isArray(node)) return null;
   if (depth > 0 && (Object.hasOwn(node, "$schema") || Object.hasOwn(node, "$id"))) return null;
@@ -245,7 +245,7 @@ function validJsonSchemaNode(node, depth = 0, budget = { nodes: 0 }) {
     if (!node.properties || typeof node.properties !== "object" || Array.isArray(node.properties)) return null;
     const properties = Object.create(null);
     for (const name of Object.keys(node.properties).sort()) {
-      const child = validJsonSchemaNode(node.properties[name], depth + 1, budget);
+      const child = validJsonSchemaNode(node.properties[name], dialect, depth + 1, budget);
       if (!child) return null;
       properties[name] = child;
     }
@@ -255,17 +255,28 @@ function validJsonSchemaNode(node, depth = 0, budget = { nodes: 0 }) {
     if (!Array.isArray(node.required) || node.required.some((name) => typeof name !== "string") || new Set(node.required).size !== node.required.length) return null;
     model.required = [...node.required].sort();
   }
+  if (Object.hasOwn(node, "dependentRequired")) {
+    if (dialect !== "https://json-schema.org/draft/2020-12/schema" && dialect !== "https://json-schema.org/draft/2019-09/schema") return null;
+    if (!node.dependentRequired || typeof node.dependentRequired !== "object" || Array.isArray(node.dependentRequired)) return null;
+    const dependencies = Object.create(null);
+    for (const trigger of Object.keys(node.dependentRequired).sort()) {
+      const required = node.dependentRequired[trigger];
+      if (!Array.isArray(required) || required.length === 0 || required.some((name) => typeof name !== "string" || name.length === 0) || new Set(required).size !== required.length) return null;
+      dependencies[trigger] = [...required].sort();
+    }
+    model.dependentRequired = dependencies;
+  }
   if (Object.hasOwn(node, "additionalProperties")) {
     if (typeof node.additionalProperties === "boolean") model.additionalProperties = node.additionalProperties;
     else {
-      const child = validJsonSchemaNode(node.additionalProperties, depth + 1, budget);
+      const child = validJsonSchemaNode(node.additionalProperties, dialect, depth + 1, budget);
       if (!child) return null;
       model.additionalProperties = child;
     }
   }
   if (Object.hasOwn(node, "items")) {
     if (Array.isArray(node.items)) return null;
-    const child = validJsonSchemaNode(node.items, depth + 1, budget);
+    const child = validJsonSchemaNode(node.items, dialect, depth + 1, budget);
     if (!child) return null;
     model.items = child;
   }
@@ -297,7 +308,7 @@ function inspectJsonSchema(doc) {
   const identity = typeof doc.$id === "string" && doc.$id.length > 0 && doc.$id.length <= 2048 ? doc.$id : null;
   const dialect = typeof doc.$schema === "string" ? doc.$schema : null;
   if (!JSON_SCHEMA_DIALECTS.has(dialect)) return { status: "unsupported_format", identity, dialect, model: null };
-  const model = validJsonSchemaNode(doc);
+  const model = validJsonSchemaNode(doc, dialect);
   return { status: model ? "supported_profile" : "unsupported_schema_features", identity, dialect, model };
 }
 
@@ -305,6 +316,7 @@ function compareSchemaModels(left, right) {
   const changes = {
     typeChanges: 0, propertiesAdded: 0, propertiesRemoved: 0,
     requiredAdded: 0, requiredRemoved: 0, additionalPropertiesChanges: 0,
+    dependentRequiredChanges: 0,
     itemsChanges: 0, enumChanges: 0, constChanges: 0, annotationChanges: 0,
     constraintChanges: 0, schemaShapeChanges: 0,
   };
@@ -319,6 +331,10 @@ function compareSchemaModels(left, right) {
     const afterRequired = new Set(b.required || []);
     changes.requiredAdded += [...afterRequired].filter((name) => !beforeRequired.has(name)).length;
     changes.requiredRemoved += [...beforeRequired].filter((name) => !afterRequired.has(name)).length;
+    const beforeDependencies = a.dependentRequired || {};
+    const afterDependencies = b.dependentRequired || {};
+    const triggerNames = new Set([...Object.keys(beforeDependencies), ...Object.keys(afterDependencies)]);
+    changes.dependentRequiredChanges += [...triggerNames].filter((trigger) => canonicalJson(beforeDependencies[trigger] ?? null) !== canonicalJson(afterDependencies[trigger] ?? null)).length;
     if (canonicalJson(a.additionalProperties ?? null) !== canonicalJson(b.additionalProperties ?? null)) changes.additionalPropertiesChanges += 1;
     const beforeProperties = a.properties || {};
     const afterProperties = b.properties || {};
@@ -508,6 +524,6 @@ export function buildRepositoryEvidenceReport({ repositoryRoot, files = [], stat
     })),
     contractSemanticComparisons: compareJsonSchemaContracts(contractEntries),
     migrationTimestampCollisions,
-    conclusions: ["Classification is limited to recognized paths and allowlisted metadata.", "Migration files are hashed and classified by path only; SQL is not parsed or executed.", "Matching direct dependency declarations prove exact text equality only; they do not prove lockfile correctness or runtime compatibility.", "Semantic comparisons cover a bounded JSON Schema profile paired by identical $id and dialect; compared dimensions include types, property/required membership, additionalProperties, items, enum/const, selected scalar constraints, and read/write/deprecation annotations. This is not full standards validation.", "OpenAPI, AsyncAPI, YAML, references, and unsupported JSON Schema features are not semantically compared.", "Contract comparison paths are sorted lexically as left and right; that ordering does not imply version chronology.", "Unrecognized files and formats remain outside this report."],
+    conclusions: ["Classification is limited to recognized paths and allowlisted metadata.", "Migration files are hashed and classified by path only; SQL is not parsed or executed.", "Matching direct dependency declarations prove exact text equality only; they do not prove lockfile correctness or runtime compatibility.", "Semantic comparisons cover a bounded JSON Schema profile paired by identical $id and dialect; compared dimensions include types, property/required membership, dependentRequired rules, additionalProperties, items, enum/const, selected scalar constraints, and read/write/deprecation annotations. This is not full standards validation.", "dependentRequired is supported only for the 2019-09 and 2020-12 dialects.", "OpenAPI, AsyncAPI, YAML, references, and unsupported JSON Schema features are not semantically compared.", "Contract comparison paths are sorted lexically as left and right; that ordering does not imply version chronology.", "Unrecognized files and formats remain outside this report."],
   };
 }
