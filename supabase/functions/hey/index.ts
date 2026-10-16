@@ -7,7 +7,9 @@ import {
   listConfiguredProviders,
   normalizeProviderEntitlements,
   orderProviderAttemptsForProfile,
+  parseProviderSelection,
   parseRoutingProfile,
+  resolveProviderSelection,
   routingPricesFromFusionConfig,
 } from "./providerCatalog.js";
 
@@ -694,6 +696,10 @@ Deno.serve(async (request) => {
   ];
 
   const fusionRequested = payload.fusion === true || payload.modelMode === "fusion" || payload.mode === "fusion";
+  const requestedProvider = parseProviderSelection(payload.providerSelection);
+  if (requestedProvider.status === "invalid" || (fusionRequested && requestedProvider.status === "selected")) {
+    return jsonResponse({ error: "The selected provider model is invalid", code: "provider_selection_invalid" }, 400);
+  }
   const requestedProfile = fusionRequested ? { status: "valid", profile: "automatic" } : parseRoutingProfile(payload.routingProfile);
   if (requestedProfile.status === "invalid") {
     return jsonResponse({ error: "The selected provider profile is invalid", code: "provider_profile_invalid" }, 400);
@@ -711,8 +717,17 @@ Deno.serve(async (request) => {
     if (!chatProviderAttempts.length) {
       return jsonResponse({ error: "Your account has no enabled remote AI provider", code: "provider_entitlement_required" }, 403);
     }
-    if (requestedProfile.profile === "lower_cost") {
-      const routingPricing = routingPricesFromFusionConfig(parseFusionPricingConfig(Deno.env.get("HEY_FUSION_PRICING_JSON") || ""));
+    const routingPricing = routingPricesFromFusionConfig(parseFusionPricingConfig(Deno.env.get("HEY_FUSION_PRICING_JSON") || ""));
+    if (requestedProvider.status === "selected") {
+      const selection = resolveProviderSelection(requestedProvider, chatProviderAttempts, entitlements, routingPricing);
+      if (selection.status === "denied") {
+        return jsonResponse({ error: "Your account is not permitted to use this provider", code: "provider_entitlement_required" }, 403);
+      }
+      if (selection.status !== "selected") {
+        return jsonResponse({ error: "The selected provider model is unavailable", code: "provider_selection_unavailable" }, 503);
+      }
+      chatProviderAttempts = [selection.attempt];
+    } else if (requestedProfile.profile === "lower_cost") {
       if (!routingPricing) {
         return jsonResponse({ error: "Cost-ranked provider routing is not configured", code: "provider_pricing_unavailable" }, 503);
       }
@@ -804,7 +819,8 @@ Deno.serve(async (request) => {
       if (!latestEntitlements) {
         throw Object.assign(new Error("Provider permissions could not be revalidated"), { providerAuthorizationUnavailable: true });
       }
-      return latestEntitlements.includes("provider.remote") && latestEntitlements.includes(`provider:${provider.id}`);
+      return latestEntitlements.includes("provider.remote") && latestEntitlements.includes(`provider:${provider.id}`) &&
+        (requestedProvider.status !== "selected" || (provider.id === requestedProvider.providerId && provider.model === requestedProvider.modelId));
     };
     try {
       providerResult = await callProvider(messages, 1200, chatProviderAttempts, authorizeChatProvider);

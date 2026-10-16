@@ -8,7 +8,9 @@ import {
   listConfiguredProviders,
   normalizeProviderEntitlements,
   orderProviderAttemptsForProfile,
+  parseProviderSelection,
   parseRoutingProfile,
+  resolveProviderSelection,
   routingPricesFromFusionConfig,
 } from "../supabase/functions/hey/providerCatalog.js";
 
@@ -67,6 +69,33 @@ test("Automatic preserves server order and Lower cost ranks only exact priced en
   assert.deepEqual(orderProviderAttemptsForProfile(permitted, null, "lower_cost"), []);
 });
 
+test("exact provider selection is canonical, grant-bound, priced, and never broadens to fallback", () => {
+  const permitted = filterEntitledProviderAttempts(attempts, ["provider.remote", "provider:openai", "provider:gemini"]);
+  const selected = parseProviderSelection({ providerId: "gemini", modelId: "gemini-fixture" });
+  assert.deepEqual(selected, { status: "selected", providerId: "gemini", modelId: "gemini-fixture" });
+  const resolution = resolveProviderSelection(selected, permitted, ["provider.remote", "provider:gemini"], routingPrices);
+  assert.equal(resolution.status, "selected");
+  assert.equal(resolution.attempt, attempts[1]);
+  assert.deepEqual([resolution.attempt], [attempts[1]]);
+  assert.equal(resolveProviderSelection(selected, permitted, ["provider.remote", "provider:openai"], routingPrices).status, "denied");
+  assert.equal(resolveProviderSelection(selected, permitted, ["provider.remote", "provider:gemini"], null).status, "unavailable");
+  assert.equal(resolveProviderSelection(parseProviderSelection({ providerId: "groq", modelId: "groq-unpriced" }), attempts, ["provider.remote", "provider:groq"], routingPrices).status, "unavailable");
+  assert.equal(resolveProviderSelection(parseProviderSelection({ providerId: "gemini", modelId: "different-model" }), permitted, ["provider.remote", "provider:gemini"], routingPrices).status, "unavailable");
+});
+
+test("exact provider selection rejects malformed IDs, extra keys, and accessors without reading them", () => {
+  for (const candidate of [
+    { providerId: "Gemini", modelId: "gemini-fixture" },
+    { providerId: "gemini", modelId: "../secret" },
+    { providerId: "gemini", modelId: "gemini-fixture", key: "attacker-key" },
+  ]) assert.equal(parseProviderSelection(candidate).status, "invalid");
+  let reads = 0;
+  const hostile = { providerId: "gemini" };
+  Object.defineProperty(hostile, "modelId", { enumerable: true, get() { reads += 1; throw new Error("must not execute"); } });
+  assert.equal(parseProviderSelection(hostile).status, "invalid");
+  assert.equal(reads, 0);
+});
+
 test("authenticated model discovery and chat profile stay opt-in and server authoritative", async () => {
   const [route, client, page, input] = await Promise.all([
     readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8"),
@@ -80,6 +109,10 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(route, /filterEntitledProviderAttempts\(getProviderAttempts\(\), entitlements\)/);
   assert.match(route, /parseFusionPricingConfig\(Deno\.env\.get\("HEY_FUSION_PRICING_JSON"/);
   assert.match(route, /orderProviderAttemptsForProfile\(chatProviderAttempts, routingPricing, "lower_cost"\)/);
+  assert.match(route, /parseProviderSelection\(payload\.providerSelection\)/);
+  assert.match(route, /chatProviderAttempts = \[selection\.attempt\]/);
+  assert.match(route, /providerSelection: invalid|provider_selection_invalid/);
+  assert.match(route, /provider\.model === requestedProvider\.modelId/);
   assert.match(route, /authorizeChatProvider = async \(provider: ProviderAttempt\)/);
   assert.match(route, /await callProvider\(messages, 1200, chatProviderAttempts, authorizeChatProvider\)/);
   assert.match(route, /if \(authorizeProvider && !await authorizeProvider\(provider\)\)[\s\S]*?const response = provider\.id/);

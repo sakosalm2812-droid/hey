@@ -27,6 +27,36 @@ export function parseRoutingProfile(value) {
     : { status: "invalid" };
 }
 
+export function parseProviderSelection(value) {
+  if (value === undefined || value === null) return { status: "automatic" };
+  if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== 2) return { status: "invalid" };
+  const providerDescriptor = Object.getOwnPropertyDescriptor(value, "providerId");
+  const modelDescriptor = Object.getOwnPropertyDescriptor(value, "modelId");
+  if (!providerDescriptor?.enumerable || !Object.hasOwn(providerDescriptor, "value") ||
+    !modelDescriptor?.enumerable || !Object.hasOwn(modelDescriptor, "value") ||
+    !canonicalText(providerDescriptor.value, 64) || !/^[a-z][a-z0-9_-]*$/.test(providerDescriptor.value) ||
+    !canonicalText(modelDescriptor.value, 128) || /[\\/]/.test(modelDescriptor.value)) return { status: "invalid" };
+  return { status: "selected", providerId: providerDescriptor.value, modelId: modelDescriptor.value };
+}
+
+export function resolveProviderSelection(selection, attempts, entitlements, pricingConfig) {
+  if (selection?.status !== "selected") return { status: "invalid" };
+  const grants = normalizeProviderEntitlements(entitlements);
+  if (!grants?.includes("provider.remote") || !grants.includes(`provider:${selection.providerId}`)) {
+    return { status: "denied" };
+  }
+  const attempt = Array.isArray(attempts) && attempts.find((candidate) =>
+    isPlainRecord(candidate) && candidate.id === selection.providerId && candidate.model === selection.modelId &&
+    canonicalText(candidate.id, 64) && canonicalText(candidate.model, 128) &&
+    typeof candidate.key === "string" && candidate.key.length > 0 && candidate.key === candidate.key.trim());
+  if (!attempt) return { status: "unavailable" };
+  const price = Array.isArray(pricingConfig?.providers) && pricingConfig.providers.find((candidate) =>
+    candidate.providerId === selection.providerId && candidate.modelId === selection.modelId &&
+    Number.isFinite(candidate.inputUsdPerMillion) && Number.isFinite(candidate.outputUsdPerMillion) &&
+    Number.isFinite(candidate.maxCostUsd));
+  return price ? { status: "selected", attempt } : { status: "unavailable" };
+}
+
 export function normalizeProviderEntitlements(value) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
   const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
