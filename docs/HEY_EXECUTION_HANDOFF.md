@@ -1,6 +1,6 @@
 ## Active continuation — 2026-10-16, current checkpoint
 
-Coordinator branch: `codex/resume-emergency-2026-10-14`; current integration HEAD `5a180ba6795ab350bfd0c10767ad1782d96fedf5`; latest pushed coordinator checkpoint `aa415ac19ff8d8b17c1cf8090f5c58ba1287e6ae`. The three implementation commits integrated after that checkpoint are `6bb67a1525cac917f32bc39b818ad49731821c50` (Step 40 local backup/restore drill), `d01595c4acd010eeab84ace63752c4f0a51dc30e` (Step 46 bounded `dependentRequired` comparison), and `5a180ba6795ab350bfd0c10767ad1782d96fedf5` (Step 41 offline conflict resolver). Preserve untracked `docs/requirements/v3-agent-pack/` and every existing specialist worktree.
+Coordinator branch: `codex/resume-emergency-2026-10-14`; current source integration `5a180ba6795ab350bfd0c10767ad1782d96fedf5`; latest pushed coordinator checkpoint `331e0381b9886b54ed0e8fe7de33187fb8ce0116`. The three implementation commits integrated after the previous checkpoint are `6bb67a1525cac917f32bc39b818ad49731821c50` (Step 40 local backup/restore drill), `d01595c4acd010eeab84ace63752c4f0a51dc30e` (Step 46 bounded `dependentRequired` comparison), and `5a180ba6795ab350bfd0c10767ad1782d96fedf5` (Step 41 offline conflict resolver). Preserve untracked `docs/requirements/v3-agent-pack/` and every existing specialist worktree.
 
 ### Current implementation workers
 
@@ -20,13 +20,11 @@ Coordinator branch: `codex/resume-emergency-2026-10-14`; current integration HEA
 
 ### Current uncommitted / unmerged state
 
-- Coordinator checkout has only the pending `docs/HEY_STEP_STATUS.md` and handoff edits for the latest integration checkpoint. Preserve `docs/requirements/v3-agent-pack/` as untracked source evidence. All three worker implementations are integrated; their original worktrees and branches remain preserved.
-- Active worker continuation branch names and SHAs must be filled from their receipts before integration; do not cherry-pick earlier source branches over current coordinator state.
+- Coordinator code and documentation are committed through source integration `5a180ba` and docs checkpoint `331e038`; the coordinator branch is pushed. Preserve `docs/requirements/v3-agent-pack/` as untracked source evidence. All three worker implementations are integrated; their original worktrees and branches remain preserved.
 
 ### Exact next actions
 
-1. Run `git diff --check`, commit the updated Step 40/41/46/47 status and this handoff, then push the coordinator checkpoint.
-2. Continue from the next incomplete product requirement, with parallel specialist worktrees from the latest coordinator SHA and exact worker SHAs recorded before integration.
+1. Continue from the next incomplete product requirement, with parallel specialist worktrees from the latest coordinator SHA and exact worker SHAs recorded before integration.
 3. Keep the app open at `http://127.0.0.1:5175`; once valid Supabase URL/key and an authorized test account are configured, demonstrate authenticated frontend-to-backend journeys. Until then, keep those functions marked **UNVERIFIED**.
 
 ---
