@@ -626,6 +626,7 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /requestCapUsd: fusion\.requestCapUsd/);
   assert.match(route, /cost: fusion\.costReceipt/);
   assert.match(route, /partialProviderFailure: fusion\.partialProviderFailure/);
+  assert.match(route, /conflictSummary:\s*\{\s*count: Math\.min\(fusion\.conflicts\.length, 16\),\s*truncated: fusion\.conflictsTruncated === true/);
 });
 
 test("Edge chat checks cancellation after verification and before persisting, and aborts an in-flight insert", async () => {

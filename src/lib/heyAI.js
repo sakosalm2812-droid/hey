@@ -168,15 +168,22 @@ function getFusionFailureCostSummary(details) {
       partial.disposition === "answer_withheld" && partial.successfulResponses === 1 && partial.failedResponses === 1
       ? " One provider returned a response, but the other failed. The response was withheld because independent confirmation is required."
       : "";
-    if (!isPlainDataRecord(details.fusion.cost)) return partialSummary;
+    const conflict = details.fusion.conflictSummary;
+    const conflictSummary = details.fusion.status === "conflict" && isPlainDataRecord(conflict) &&
+      Object.keys(conflict).length === 2 && Number.isSafeInteger(conflict.count) && conflict.count >= 1 && conflict.count <= 16 &&
+      typeof conflict.truncated === "boolean"
+      ? ` Fusion withheld an answer because providers disagreed on ${conflict.count}${conflict.truncated ? " or more" : ""} evidence claim(s).`
+      : "";
+    const failureSummary = `${partialSummary}${conflictSummary}`;
+    if (!isPlainDataRecord(details.fusion.cost)) return failureSummary;
     const cost = details.fusion.cost;
     if (!Number.isFinite(cost.providerReportedUsd) || cost.providerReportedUsd < 0 ||
       !Number.isFinite(cost.reservedUsd) || cost.reservedUsd < cost.providerReportedUsd ||
       !Number.isFinite(cost.requestCapUsd) || cost.requestCapUsd <= 0 || cost.requestCapUsd > 0.25 ||
       cost.reservedUsd > cost.requestCapUsd || !Number.isSafeInteger(cost.callsDispatched) || cost.callsDispatched < 0 || cost.callsDispatched > 4 ||
-      !Number.isSafeInteger(cost.callsMetered) || cost.callsMetered < 0 || cost.callsMetered > cost.callsDispatched) return "";
+      !Number.isSafeInteger(cost.callsMetered) || cost.callsMetered < 0 || cost.callsMetered > cost.callsDispatched) return failureSummary;
     if (cost.callsDispatched === 0) {
-      return ` No provider call was dispatched; $0.0000 of the $${cost.requestCapUsd.toFixed(2)} request budget was reserved.${partialSummary}`;
+      return ` No provider call was dispatched; $0.0000 of the $${cost.requestCapUsd.toFixed(2)} request budget was reserved.${failureSummary}`;
     }
     const attempts = parseFusionProviderAttempts(cost.providerAttempts, cost.callsDispatched, cost.callsMetered);
     const unknownCalls = cost.callsDispatched - cost.callsMetered;
@@ -186,8 +193,8 @@ function getFusionFailureCostSummary(details) {
       ? ` Provider attempts: ${attempts.map((attempt) => `${FUSION_PROVIDER_LABELS[attempt.providerId]} ${attempt.modelId} (${attempt.role}; usage ${attempt.usageStatus})`).join("; ")}.`
       : "";
     return unknownCalls > 0
-      ? `${usage}${reserve}${partialSummary}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
-      : `${usage}${reserve}${partialSummary}${attemptSummary} Final provider billing may differ.`;
+      ? `${usage}${reserve}${failureSummary}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
+      : `${usage}${reserve}${failureSummary}${attemptSummary} Final provider billing may differ.`;
   } catch {
     return "";
   }

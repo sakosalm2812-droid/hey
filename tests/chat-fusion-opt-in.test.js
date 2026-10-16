@@ -32,6 +32,17 @@ test("Fusion permission, configuration, and disagreement responses stay visible 
   }, true);
   assert.match(partialFailure, /One provider returned a response, but the other failed/i);
   assert.match(partialFailure, /withheld because independent confirmation is required/i);
+  const disagreement = getHEYChatError({ status: 409 }, {
+    error: "The providers did not independently confirm a safe answer.",
+    fusion: { status: "conflict", conflictSummary: { count: 3, truncated: true } },
+  }, true);
+  assert.match(disagreement, /disagreed on 3 or more evidence claim\(s\)/i);
+  assert.doesNotMatch(disagreement, /provider value|raw response/i);
+  const malformedDisagreement = getHEYChatError({ status: 409 }, {
+    error: "The providers did not independently confirm a safe answer.",
+    fusion: { status: "conflict", conflictSummary: { count: 1000, truncated: true, details: "private provider text" } },
+  }, true);
+  assert.doesNotMatch(malformedDisagreement, /1000|private provider text|evidence claim/i);
   assert.match(getHEYChatError({ status: 409 }, {}, true), /No verified response was returned/i);
   assert.match(getHEYChatError({ status: 499 }, {}, true), /cancelled before a verified response/i);
   assert.equal(getHEYChatError({ status: 409 }, { error: "x".repeat(300) }, true).length, 240);

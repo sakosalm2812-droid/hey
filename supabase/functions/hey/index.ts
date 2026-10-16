@@ -872,10 +872,14 @@ Deno.serve(async (request) => {
         : "Model fusion is unavailable until its provider permissions and pricing are configured.";
       return jsonResponse({
         error,
-        ...(fusion.costReceipt || fusion.partialProviderFailure ? { fusion: {
+        ...(fusion.costReceipt || fusion.partialProviderFailure || fusion.status === "conflict" ? { fusion: {
           status: fusion.status,
           ...(fusion.costReceipt ? { cost: fusion.costReceipt } : {}),
           ...(fusion.partialProviderFailure ? { partialProviderFailure: fusion.partialProviderFailure } : {}),
+          ...(fusion.status === "conflict" && Array.isArray(fusion.conflicts) ? { conflictSummary: {
+            count: Math.min(fusion.conflicts.length, 16),
+            truncated: fusion.conflictsTruncated === true,
+          } } : {}),
         } } : {}),
       }, status);
     }
