@@ -12,7 +12,7 @@ import {
   orderProviderAttemptsForProfile,
   resolveProviderSelection,
 } from "./providerCatalog.js";
-import { callConfiguredProvider } from "./providerDispatch.js";
+import { callConfiguredProvider, fetchWithTimeout } from "./providerDispatch.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 const corsHeaders = {
@@ -64,20 +64,6 @@ function resolveAccountPlan(profile: Record<string, unknown> | null): AccountPro
   if (rawPlan === "elite" || entitlements.includes("elite")) return "elite";
   if (rawPlan === "pro" || entitlements.includes("pro")) return "pro";
   return "free";
-}
-
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 30_000, parentSignal?: AbortSignal) {
-  const controller = new AbortController();
-  const abortFromParent = () => controller.abort(parentSignal?.reason);
-  if (parentSignal?.aborted) abortFromParent();
-  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
-  const timeout = setTimeout(() => controller.abort(new DOMException("Provider request timed out.", "TimeoutError")), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-    parentSignal?.removeEventListener("abort", abortFromParent);
-  }
 }
 
 function getProviderAttempts() {
@@ -376,6 +362,7 @@ Deno.serve(async (request) => {
     const visionAttempts = getProviderAttempts();
 
     for (const attempt of visionAttempts.slice(0, 3)) {
+      if (request.signal.aborted) return jsonResponse({ error: "The vision request was cancelled", code: "request_cancelled" }, 499);
       try {
         let response: Response;
         if (attempt.id === "gemini") {
@@ -390,7 +377,7 @@ Deno.serve(async (request) => {
               ] }],
               generationConfig: { maxOutputTokens: 900, temperature: 0.3 },
             }),
-          }, 30_000);
+          }, 30_000, request.signal);
         } else {
           response = await fetchWithTimeout(
             attempt.id === "openai" ? "https://api.openai.com/v1/chat/completions" : attempt.id === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions",
@@ -411,10 +398,12 @@ Deno.serve(async (request) => {
               }),
             },
             30_000,
+            request.signal,
           );
         }
 
         const data = await response.json();
+        if (request.signal.aborted) return jsonResponse({ error: "The vision request was cancelled", code: "request_cancelled" }, 499);
         if (response.ok) {
           visionData = data;
           visionProvider = { providerId: attempt.id, model: attempt.model };
@@ -423,6 +412,9 @@ Deno.serve(async (request) => {
         lastVisionError = `${attempt.id}: ${String(data?.error?.message || response.status)}`;
         console.error("HEY vision provider error", lastVisionError);
       } catch (error) {
+        if (request.signal.aborted || (error as Error)?.name === "AbortError") {
+          return jsonResponse({ error: "The vision request was cancelled", code: "request_cancelled" }, 499);
+        }
         lastVisionError = `${attempt.id}: ${String(error)}`;
         console.error("HEY vision provider request error", lastVisionError);
       }

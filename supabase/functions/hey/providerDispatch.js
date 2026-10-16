@@ -7,7 +7,7 @@ const PROVIDER_ENDPOINTS = Object.freeze({
   gemini: "https://generativelanguage.googleapis.com/v1beta/models",
 });
 
-async function fetchWithTimeout(url, init, timeoutMs, parentSignal, fetchImpl) {
+export async function fetchWithTimeout(url, init, timeoutMs = 30_000, parentSignal, fetchImpl = fetch) {
   const controller = new AbortController();
   const abortFromParent = () => controller.abort(parentSignal?.reason);
   if (parentSignal?.aborted) abortFromParent();

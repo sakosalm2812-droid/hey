@@ -15,7 +15,7 @@ import {
   planProviderCallBudget,
   resolveProviderSelection,
 } from "../supabase/functions/hey/providerCatalog.js";
-import { callConfiguredProvider } from "../supabase/functions/hey/providerDispatch.js";
+import { callConfiguredProvider, fetchWithTimeout } from "../supabase/functions/hey/providerDispatch.js";
 
 const attempts = [
   { id: "openai", model: "gpt-fixture", key: "fixture-secret" },
@@ -255,6 +255,50 @@ test("Gemini dispatch refuses redirects without leaking its key", async () => {
   }
 });
 
+test("provider timeout and caller cancellation abort a pending fetch without retry", async () => {
+  const makePendingFetch = () => {
+    let resolveStarted;
+    const started = new Promise((resolve) => { resolveStarted = resolve; });
+    let signal;
+    const fetchImpl = (_url, init) => {
+      signal = init.signal;
+      resolveStarted();
+      return new Promise((_resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      });
+    };
+    return { fetchImpl, started, get signal() { return signal; } };
+  };
+
+  const caller = new AbortController();
+  const cancelledFetch = makePendingFetch();
+  const cancelledRequest = fetchWithTimeout(
+    "https://provider.example/request",
+    { method: "POST", body: "private prompt" },
+    10_000,
+    caller.signal,
+    cancelledFetch.fetchImpl,
+  );
+  await cancelledFetch.started;
+  caller.abort(new DOMException("client disconnected", "AbortError"));
+  await assert.rejects(cancelledRequest, { name: "AbortError" });
+  assert.equal(cancelledFetch.signal.aborted, true);
+
+  const timedOutFetch = makePendingFetch();
+  const timedOutRequest = fetchWithTimeout(
+    "https://provider.example/request",
+    { method: "POST", body: "private prompt" },
+    10,
+    undefined,
+    timedOutFetch.fetchImpl,
+  );
+  await timedOutFetch.started;
+  await assert.rejects(timedOutRequest, { name: "TimeoutError" });
+  assert.equal(timedOutFetch.signal.aborted, true);
+});
+
 test("an explicit model failure does not silently fall back to another provider", async () => {
   const calls = [];
   await assert.rejects(callConfiguredProvider({
@@ -441,7 +485,10 @@ test("Edge model discovery is authenticated and selected provider calls stay bou
   assert.match(geminiVisionDispatch[1], /encodeURIComponent\(attempt\.model\)/);
   assert.match(geminiVisionDispatch[1], /"x-goog-api-key": attempt\.key/);
   assert.match(geminiVisionDispatch[1], /redirect: "error"/);
+  assert.match(geminiVisionDispatch[1], /30_000, request\.signal/);
   assert.doesNotMatch(geminiVisionDispatch[1], /\?key=/);
+  assert.match(source, /for \(const attempt of visionAttempts\.slice\(0, 3\)\) \{\s+if \(request\.signal\.aborted\)/);
+  assert.match(source, /if \(request\.signal\.aborted \|\| \(error as Error\)\?\.name === "AbortError"\) \{\s+return jsonResponse\(\{ error: "The vision request was cancelled", code: "request_cancelled" \}, 499\)/);
   assert.doesNotMatch(client, /OPENAI_API_KEY|OPENROUTER_API_KEY|GEMINI_API_KEY|GROQ_API_KEY/);
   assert.doesNotMatch(page, /localStorage\.(?:getItem|setItem)\([^)]*provider(?:Selection|Profile)/i);
   assert.match(envExample, /HEY_CHAT_PRICING_JSON/);
