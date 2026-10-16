@@ -190,6 +190,7 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
       headers,
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: "error",
     });
     if (controller.signal.aborted) throw new Error("Provider request cancelled");
     responseText = await response.text();

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { parseFusionPricingConfig, runFusionChatRequest } from "../supabase/functions/hey/fusionProvider.js";
 
@@ -101,6 +102,60 @@ test("Gemini dispatch keeps the API key in a header and out of the request URL",
   assert.ok(gemini, "independent checker should use the configured Gemini provider");
   assert.equal(new URL(gemini.url).searchParams.has("key"), false);
   assert.equal(gemini.init.headers["x-goog-api-key"], "fake-gemini-key");
+  assert.equal(gemini.init.redirect, "error");
+});
+
+test("Gemini redirects are rejected before credentials can reach a second host", async () => {
+  const secretKey = "fixture-gemini-key-never-forward";
+  const attackerRequests = [];
+  let attackerPort;
+  const providerRequests = [];
+  const providerServer = createServer(async (request, response) => {
+    providerRequests.push({ url: request.url, key: request.headers["x-goog-api-key"] });
+    response.writeHead(302, { Location: `http://127.0.0.1:${attackerPort}/stolen` });
+    response.end("private provider redirect response");
+  });
+  const attackerServer = createServer((request, response) => {
+    attackerRequests.push({ url: request.url, key: request.headers["x-goog-api-key"] });
+    response.end("unexpected");
+  });
+  const listen = (server) => new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve(server.address().port);
+    });
+  });
+  const close = (server) => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  let providerPort;
+  try {
+    [providerPort, attackerPort] = await Promise.all([listen(providerServer), listen(attackerServer)]);
+    const fetchImpl = async (url, init) => {
+      if (String(url).includes("generativelanguage.googleapis.com")) {
+        assert.equal(init.redirect, "error");
+        assert.equal(new URL(url).searchParams.has("key"), false);
+        return fetch(`http://127.0.0.1:${providerPort}/redirect`, init);
+      }
+      return new Response(JSON.stringify(providerPayload("openai", "42", 0.9, null)), { status: 200 });
+    };
+    const result = await runFusionChatRequest({
+      requested: true,
+      accountId: "account-a",
+      entitlements,
+      attempts: attempts.map((attempt) => attempt.id === "gemini" ? { ...attempt, key: secretKey } : attempt),
+      pricingConfig: pricing,
+      messages,
+      fetchImpl,
+    });
+    assert.notEqual(result.status, "complete");
+    assert.equal("answer" in result, false);
+    assert.deepEqual(providerRequests, [{ url: "/redirect", key: secretKey }]);
+    assert.deepEqual(attackerRequests, []);
+    assert.equal(JSON.stringify(result).includes(secretKey), false);
+    assert.equal(JSON.stringify(result).includes("private provider redirect response"), false);
+  } finally {
+    await Promise.all([close(providerServer), close(attackerServer)]);
+  }
 });
 
 test("malformed request identities cannot start a provider call", async () => {
@@ -322,6 +377,7 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /models\/\$\{attempt\.model\}:generateContent/);
   assert.match(route, /"x-goog-api-key": provider\.key/);
   assert.match(route, /"x-goog-api-key": attempt\.key/);
+  assert.equal([...route.matchAll(/"x-goog-api-key": (?:provider|attempt)\.key[\s\S]{0,80}?redirect: "error"/g)].length, 2);
   assert.doesNotMatch(route, /generateContent\?key=\$\{(?:provider|attempt)\.key\}/);
   assert.match(route, /\["conflict", "inconclusive", "verification_unavailable", "time_budget_exhausted", "budget_exhausted", "provider_contract_invalid"\]\.includes\(fusion\.status\)/);
   assert.match(route, /fusion\.status === "verification_unavailable"[\s\S]*?no answer was delivered/i);
