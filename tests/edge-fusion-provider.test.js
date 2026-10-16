@@ -612,6 +612,19 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /requestCapUsd: fusion\.requestCapUsd/);
 });
 
+test("Edge chat checks cancellation after verification and before persisting, and aborts an in-flight insert", async () => {
+  const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
+  const hashPosition = route.indexOf("responseSha256: await sha256Hex(answer)");
+  const persistencePosition = route.indexOf('from("hey_messages").insert([');
+  const cancellationPosition = route.lastIndexOf("if (request.signal.aborted)", persistencePosition);
+  assert.ok(hashPosition >= 0 && persistencePosition > hashPosition);
+  assert.ok(cancellationPosition > hashPosition && cancellationPosition < persistencePosition);
+  assert.match(route.slice(persistencePosition, persistencePosition + 600), /\.abortSignal\(request\.signal\)/);
+  const persistenceBlock = route.slice(persistencePosition, persistencePosition + 1400);
+  assert.match(persistenceBlock, /if \(request\.signal\.aborted\)/);
+  assert.match(persistenceBlock, /catch \(error\)[\s\S]*?error as Error\)\?\.name === "AbortError"/);
+});
+
 test("server budget prevents the independent provider call when its reservation would exceed the cap", async () => {
   const constrainedPricing = parseFusionPricingConfig(JSON.stringify({
     budgetUsd: 0.03,

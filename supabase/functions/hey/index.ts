@@ -956,10 +956,28 @@ Deno.serve(async (request) => {
     agentTeam: payload.agentTeam || null,
   };
 
-  const { error: messageError } = await serviceSupabase.from("hey_messages").insert([
+  // Fusion may finish verification and response hashing after the client has
+  // cancelled. Fence persistence at the last possible point and propagate the
+  // abort signal to Supabase so an in-flight insert can be stopped as well.
+  if (request.signal.aborted) {
+    return jsonResponse({ error: fusionRequested ? "The fusion request was cancelled." : "The provider request was cancelled", code: "request_cancelled" }, 499);
+  }
+  const messageInsert = serviceSupabase.from("hey_messages").insert([
     { conversation_id: conversationId, user_id: user.id, role: "user", content: message },
     { conversation_id: conversationId, user_id: user.id, role: "assistant", content: answer, metadata },
-  ]);
+  ]).abortSignal(request.signal);
+  let messageError: unknown = null;
+  try {
+    ({ error: messageError } = await messageInsert);
+  } catch (error) {
+    if (request.signal.aborted || (error as Error)?.name === "AbortError") {
+      return jsonResponse({ error: fusionRequested ? "The fusion request was cancelled." : "The provider request was cancelled", code: "request_cancelled" }, 499);
+    }
+    messageError = error;
+  }
+  if (request.signal.aborted) {
+    return jsonResponse({ error: fusionRequested ? "The fusion request was cancelled." : "The provider request was cancelled", code: "request_cancelled" }, 499);
+  }
 
   if (messageError) {
     console.error("Message persistence error", messageError);
