@@ -470,7 +470,7 @@ class ArtifactEngine {
       if (data) {
         const version = this.deserializeVersion(data);
         const parent = await this.getArtifact(artifactId);
-        const accessRecord = { content: version.content, metadata: { ...parent?.metadata, ...version.metadata } };
+        const accessRecord = { content: version.content, metadata: { ...parent?.metadata, ...version.metadata }, createdBy: parent?.createdBy };
         if (!parent || !await canReadTeacherArtifact(accessRecord)) return null;
         return version;
       }
@@ -494,7 +494,7 @@ class ArtifactEngine {
       if (!parent) return [];
       const versions = (data || []).map((record) => this.deserializeVersion(record));
       return (await Promise.all(versions.map(async (version) => {
-        const accessRecord = { content: version.content, metadata: { ...parent.metadata, ...version.metadata } };
+        const accessRecord = { content: version.content, metadata: { ...parent.metadata, ...version.metadata }, createdBy: parent.createdBy };
         return await canReadTeacherArtifact(accessRecord) ? version : null;
       }))).filter(Boolean);
     } catch (err) {

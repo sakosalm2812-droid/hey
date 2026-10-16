@@ -156,10 +156,12 @@ test("teacher workflow creates a scoped, provenance-bearing Forge-compatible exp
 test("answer-key access ignores audience metadata and requires authenticated teacher claims", () => {
   const artifact = {
     content: { type: "teacher_assessment", questions: [{ teacherAnswer: "4" }] },
+    createdBy: "teacher-1",
     metadata: { audience: "student", accountScope: "account:teacher-1", classId: "class-1" },
   };
   const teacher = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
   assert.equal(authorizeTeacherArtifactRead(artifact, {}, teacher), true);
+  assert.equal(authorizeTeacherArtifactRead(artifact, {}, { ...teacher, id: "teacher-2" }), false);
   assert.equal(authorizeTeacherArtifactRead(artifact, {}, { ...teacher, app_metadata: { ...teacher.app_metadata, hey_role: "student" } }), false);
   assert.equal(authorizeTeacherArtifactRead({ ...artifact, metadata: { ...artifact.metadata, audience: "teacher_only" } }, {}, null), false);
 });
@@ -167,6 +169,7 @@ test("answer-key access ignores audience metadata and requires authenticated tea
 test("answer-key access denies missing role and account or class claim mismatches", () => {
   const artifact = {
     content: { questions: [{ teacherAnswer: "4" }] },
+    createdBy: "teacher-1",
     metadata: { accountScope: "account:teacher-1", classId: "class-1" },
   };
   const claims = { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] };
@@ -174,6 +177,22 @@ test("answer-key access denies missing role and account or class claim mismatche
   assert.equal(authorizeTeacherArtifactRead(artifact, {}, { id: "teacher-1", app_metadata: { ...claims, hey_account_scope: "account:other" } }), false);
   assert.equal(authorizeTeacherArtifactRead(artifact, {}, { id: "teacher-1", app_metadata: { ...claims, hey_class_ids: ["class-2"] } }), false);
   assert.equal(authorizeTeacherArtifactRead(artifact, { classId: "class-2" }, { id: "teacher-1", app_metadata: claims }), false);
+});
+
+test("same-class Teacher cannot derive private artifacts from another Teacher's lesson", async () => {
+  const lesson = await buildTeacherLessonArtifact(lessonInput());
+  const originalGetUser = supabaseClient.auth.getUser;
+  try {
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-2", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    await assert.rejects(buildTeacherAssessmentArtifact(lesson, assessmentInput(), teacherContext()), /authored this lesson/);
+    assert.equal(authorizeTeacherArtifactRead({ ...lesson, id: "legacy-private-lesson", createdBy: undefined }, {}, {
+      id: "teacher-2", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    }), false, "legacy private artifacts without a creator fail closed");
+  } finally {
+    supabaseClient.auth.getUser = originalGetUser;
+  }
 });
 
 test("student worksheets require a matching authenticated class and cannot be exported by students", () => {
@@ -190,6 +209,7 @@ test("student worksheets require a matching authenticated class and cannot be ex
 test("teacher lesson content is not readable by student-role or cross-account users", () => {
   const lesson = {
     content: { learningObjectives: ["Objective"], activities: [], assessment: { prompt: "Check" }, durationMinutes: 30 },
+    createdBy: "teacher-1",
     metadata: { accountScope: "account:teacher-1", classId: "class-1" },
   };
   const teacher = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
@@ -202,16 +222,29 @@ test("canonical artifact reads deny cached answer keys to students", async () =>
   const artifact = {
     id: "teacher-key-auth-test", projectId: "school-space", type: "document", title: "Scoped key",
     content: { questions: [{ teacherAnswer: "4" }] },
+    createdBy: "teacher-1",
     metadata: { workflow: "teacher_assessment", audience: "student", accountScope: "account:teacher-1", classId: "class-1" },
   };
   const worksheet = {
     id: "teacher-worksheet-auth-test", projectId: "school-space", type: "document", title: "Student sheet",
     content: { type: "teacher_worksheet", questions: [{ prompt: "Question", points: 1 }] },
+    createdBy: "teacher-1",
     metadata: { workflow: "teacher_worksheet", audience: "teacher_only", accountScope: "account:teacher-1", classId: "class-1" },
   };
   artifactEngine.artifacts.set(artifact.id, artifact);
   artifactEngine.artifacts.set(worksheet.id, worksheet);
   assert.equal((await HEY.artifacts.get(artifact.id)).id, artifact.id);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "teacher-2", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+  } }, error: null });
+  assert.equal(await HEY.artifacts.get(artifact.id), null, "same-class Teacher cannot reopen another Teacher's answer key");
+  assert.equal((await HEY.artifacts.get(worksheet.id)).id, worksheet.id, "student worksheet remains class-readable");
+  assert.equal(await HEY.artifacts.getVersion(artifact.id, "version-1"), null);
+  assert.deepEqual(await HEY.artifacts.getHistory(artifact.id), []);
+  supabaseClient.auth.getUser = async () => ({ data: { user: {
+    id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+  } }, error: null });
+  assert.equal((await HEY.artifacts.get(artifact.id)).id, artifact.id, "author retains access to the answer key");
   supabaseClient.auth.getUser = async () => ({ data: { user: {
     id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
   } }, error: null });
@@ -226,7 +259,7 @@ test("canonical artifact reads deny cached answer keys to students", async () =>
       id: value.id, project_id: value.projectId, type: value.type, title: value.title,
       description: value.description, content: value.content, metadata: value.metadata,
       status: "draft", version: 1, parent_version_id: null, branch_name: "main",
-      created_at: "2026-10-15T00:00:00.000Z", updated_at: "2026-10-15T00:00:00.000Z", tags: [],
+      created_at: "2026-10-15T00:00:00.000Z", updated_at: "2026-10-15T00:00:00.000Z", created_by: value.createdBy, tags: [],
     }));
     const query = {
       select() { return this; },
@@ -300,6 +333,7 @@ test("verified lessons are stored through the shared Forge artifact contract wit
   assert.equal(saved.project_id, "school-space");
   assert.equal(saved.type, "document");
   assert.equal(saved.metadata.artifactContract, "hey.teacher.lesson.v1");
+  assert.equal(saved.created_by, "teacher-1");
   assert.equal(saved.metadata.accountScope, "account:teacher-1");
   assert.equal(saved.metadata.workspaceId, "school-space");
   assert.equal(saved.metadata.verification.contentDigest, lesson.metadata.verification.contentDigest);

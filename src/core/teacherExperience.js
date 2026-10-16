@@ -1,5 +1,6 @@
 import { createArtifact as createForgeArtifact, createTeacherArtifactBatch } from "./artifactEngine.js";
-import { canReadTeacherArtifact, canWriteTeacherArtifact } from "./teacherArtifactAccess.js";
+import { canReadTeacherArtifact, canWriteTeacherArtifact, authorizeTeacherArtifactWrite } from "./teacherArtifactAccess.js";
+import { supabaseClient } from "../lib/supabase.js";
 
 const REQUEST_FIELDS = new Set([
   "title", "subject", "gradeBand", "durationMinutes", "learningObjectives",
@@ -7,13 +8,13 @@ const REQUEST_FIELDS = new Set([
   "workspaceId", "currentAccountScope", "currentWorkspaceId", "createdAt",
 ]);
 const ASSESSMENT_REQUEST_FIELDS = new Set(["title", "directions", "questions", "createdAt"]);
-const WORKSHEET_ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
+const WORKSHEET_ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata", "createdBy"]);
 const REFERENCE_FIELDS = new Set(["title", "url"]);
 const ACTIVITY_FIELDS = new Set(["title", "instructions", "minutes"]);
 const ASSESSMENT_FIELDS = new Set(["prompt", "expectedLearning"]);
 const ASSESSMENT_QUESTION_FIELDS = new Set(["objective", "prompt", "expectedLearning", "teacherAnswer", "points"]);
 const WORKSHEET_QUESTION_FIELDS = new Set(["prompt", "points"]);
-const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata"]);
+const ARTIFACT_FIELDS = new Set(["type", "title", "description", "content", "metadata", "createdBy"]);
 const METADATA_FIELDS = new Set(["workflow", "accountScope", "workspaceId", "classId", "journeyId", "studentDataPolicy", "audience", "provenance", "safety", "verification"]);
 const VERIFICATION_FIELDS = new Set(["valid", "checks", "contentDigest"]);
 const VERIFICATION_CHECK_FIELDS = new Set(["accountWorkspaceBound", "studentDataAbsent", "objectivesPresent", "assessmentPresent", "activityTimeWithinDuration"]);
@@ -256,6 +257,15 @@ async function digestLesson(lesson) {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+async function requireTeacherAuthor(accountScope, classId) {
+  try {
+    const { data, error } = await supabaseClient.auth.getUser();
+    const user = data?.user;
+    if (!error && user?.id && authorizeTeacherArtifactWrite({ metadata: { accountScope } }, { accountScope, classId }, user)) return user.id;
+  } catch { /* fail closed below */ }
+  throw new Error(`Authenticated teacher access to this account${classId ? " and class" : ""} is required`);
+}
+
 export async function buildTeacherLessonArtifact(input) {
   assertOnlyDataFields(input, "Lesson request", REQUEST_FIELDS);
   const accountScope = requiredText(input.accountScope, "Account scope", 240);
@@ -263,6 +273,7 @@ export async function buildTeacherLessonArtifact(input) {
   if (input.currentAccountScope !== accountScope || input.currentWorkspaceId !== workspaceId) {
     throw new Error("Lesson request account and workspace must match the active context");
   }
+  const createdBy = await requireTeacherAuthor(accountScope);
   if (!GRADE_BANDS.has(input.gradeBand)) throw new TypeError("Choose a supported grade band");
 
   const learningObjectives = input.learningObjectives;
@@ -303,6 +314,7 @@ export async function buildTeacherLessonArtifact(input) {
   const contentDigest = await digestLesson(lesson);
   const artifact = {
     type: "document",
+    createdBy,
     title: lesson.title,
     description: `${lesson.subject} · ${lesson.gradeBand} · ${lesson.durationMinutes} minutes`,
     content: lesson,
@@ -342,6 +354,7 @@ export async function verifyTeacherLessonArtifact(artifact, { accountScope, work
   let detectedSafetyReview = null;
   try {
     assertOnlyDataFields(artifact, "Artifact", ARTIFACT_FIELDS);
+    requiredText(artifact.createdBy, "Artifact creator", 200);
     assertOnlyDataFields(artifact.metadata, "Artifact metadata", METADATA_FIELDS);
     assertOnlyDataFields(artifact.metadata.provenance, "Artifact provenance", new Set(["generatedBy", "method", "references", "createdAt", "factualClaimsVerified"]));
     assertOnlyDataFields(artifact.metadata.safety, "Artifact safety metadata", new Set(["gradeBand", "reviewRequired", "reviewReasons", "teacherReviewRequiredBeforeUse"]));
@@ -441,8 +454,9 @@ export async function buildTeacherActivityHandoutArtifact(lessonArtifact, activi
   if (!Number.isInteger(activityIndex) || activityIndex < 0 || activityIndex >= lessonArtifact.content.activities.length) {
     throw new RangeError("Choose an activity from the verified lesson");
   }
-  if (!await canWriteTeacherArtifact(lessonArtifact, { accountScope, classId })) {
-    throw new Error("Authenticated teacher access to this account and class is required to author an activity handout");
+  const createdBy = await requireTeacherAuthor(accountScope, classId);
+  if (lessonArtifact.createdBy !== createdBy) {
+    throw new Error("Only the Teacher who authored this lesson can create its class handout");
   }
 
   const lesson = lessonArtifact.content;
@@ -468,6 +482,7 @@ export async function buildTeacherActivityHandoutArtifact(lessonArtifact, activi
   });
   const artifact = freezeDeep({
     type: "document",
+    createdBy,
     title: content.title,
     description: `${content.subject} · ${content.gradeBand} · ${content.estimatedMinutes} minutes`,
     content,
@@ -510,6 +525,7 @@ export async function verifyTeacherActivityHandoutArtifact(artifact, { accountSc
   try {
     artifact = snapshotLessonData(artifact);
     assertOnlyDataFields(artifact, "Activity handout artifact", ARTIFACT_FIELDS);
+    requiredText(artifact.createdBy, "Artifact creator", 200);
     assertOnlyDataFields(artifact.content, "Activity handout content", new Set([
       "type", "title", "subject", "gradeBand", "objective", "directions", "estimatedMinutes", "materials", "sourceLessonTitle",
     ]));
@@ -591,6 +607,10 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
   }
   const lessonVerification = await verifyTeacherLessonArtifact(stableLesson, { accountScope, workspaceId });
   if (!lessonVerification.valid) throw new Error("Assessment source lesson failed verification for the active account and workspace");
+  const createdBy = await requireTeacherAuthor(accountScope, classId);
+  if (stableLesson.createdBy !== createdBy) {
+    throw new Error("Only the Teacher who authored this lesson can create its private answer key");
+  }
 
   const lesson = stableLesson.content;
   const title = scanAssessmentText(stableInput.title, "Assessment title");
@@ -619,6 +639,7 @@ export async function buildTeacherAssessmentArtifact(lessonArtifact, input, cont
   const contentDigest = await digestLesson(content);
   const artifact = {
     type: "document",
+    createdBy,
     title,
     description: `${subject} · ${lesson.gradeBand} · ${questions.length} questions`,
     content,
@@ -674,6 +695,7 @@ export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, 
   let detectedSafetyReview = null;
   try {
     assertOnlyDataFields(artifact, "Assessment artifact", ARTIFACT_FIELDS);
+    requiredText(artifact.createdBy, "Artifact creator", 200);
     assertOnlyDataFields(artifact.metadata, "Assessment metadata", METADATA_FIELDS);
     assertOnlyDataFields(artifact.metadata.provenance, "Assessment provenance", new Set([
       "generatedBy", "method", "sourceLessonDigest", "createdAt", "factualClaimsVerified",
@@ -729,6 +751,7 @@ export async function verifyTeacherAssessmentArtifact(artifact, { accountScope, 
   }
   const checks = {
     workflow: artifact?.metadata?.workflow === "teacher_assessment",
+    creatorBound: typeof artifact?.createdBy === "string" && artifact.createdBy.length > 0,
     artifactType: artifact?.type === "document",
     titleMatchesContent: artifact?.title === artifact?.content?.title,
     contentShapeSafe,
@@ -780,6 +803,10 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
   }
   const sourceVerification = await verifyTeacherAssessmentArtifact(assessmentArtifact, { accountScope, workspaceId, classId });
   if (!sourceVerification.valid) throw new Error("Worksheet source assessment failed verification for the active account and workspace");
+  const createdBy = await requireTeacherAuthor(accountScope, classId);
+  if (stableAssessment.createdBy !== createdBy) {
+    throw new Error("Only the Teacher who authored this answer key can create its worksheet");
+  }
 
   const assessment = stableAssessment.content;
   const content = {
@@ -800,6 +827,7 @@ export async function buildTeacherWorksheetArtifact(assessmentArtifact, context)
   const contentDigest = await digestLesson(content);
   const artifact = {
     type: "document",
+    createdBy,
     title: content.title,
     description: `${content.subject} · ${content.gradeBand} · ${content.questions.length} questions`,
     content,
@@ -855,6 +883,7 @@ export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, w
   let detectedSafetyReview = null;
   try {
     assertOnlyDataFields(artifact, "Worksheet artifact", WORKSHEET_ARTIFACT_FIELDS);
+    requiredText(artifact.createdBy, "Artifact creator", 200);
     assertOnlyDataFields(artifact.metadata, "Worksheet metadata", METADATA_FIELDS);
     assertOnlyDataFields(artifact.metadata.provenance, "Worksheet provenance", new Set([
       "generatedBy", "method", "sourceAssessmentDigest", "createdAt", "factualClaimsVerified",
@@ -903,6 +932,7 @@ export async function verifyTeacherWorksheetArtifact(artifact, { accountScope, w
   }
   const checks = {
     workflow: artifact?.metadata?.workflow === "teacher_worksheet",
+    creatorBound: typeof artifact?.createdBy === "string" && artifact.createdBy.length > 0,
     artifactType: artifact?.type === "document",
     titleMatchesContent: artifact?.title === artifact?.content?.title,
     contentShapeSafe,
@@ -962,7 +992,14 @@ async function prepareTeacherArtifactSave(artifact, context, builtArtifacts, ver
   }
   const verification = await verifyArtifact(artifact, { accountScope, workspaceId, classId });
   if (!verification.valid) throw new Error(`${label} artifact failed verification for the active account and workspace`);
-  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope, classId })) {
+  let author;
+  try {
+    const { data, error } = await supabaseClient.auth.getUser();
+    if (!error && authorizeTeacherArtifactWrite(stableArtifact, { accountScope, classId }, data?.user)) author = data.user;
+  } catch {
+    author = null;
+  }
+  if (!author || stableArtifact.createdBy !== author.id) {
     throw new Error(`Authenticated teacher access to this account${classId ? " and class" : ""} is required to save the ${label} artifact`);
   }
   freezeDeep(stableArtifact);
@@ -971,6 +1008,7 @@ async function prepareTeacherArtifactSave(artifact, context, builtArtifacts, ver
   return {
     ...(journey.id ? { id: journey.id } : {}),
     projectId: workspaceId,
+    createdBy: author.id,
     type: "document",
     title: stableArtifact.title,
     description: stableArtifact.description,

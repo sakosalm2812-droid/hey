@@ -42,7 +42,9 @@ function hasTeacherClassAccess(artifact, context, user) {
 
 export function authorizeTeacherArtifactRead(artifact, context, user) {
   if (isTeacherAnswerKeyArtifact(artifact)) {
-    return user?.app_metadata?.hey_role === "teacher" && hasTeacherClassAccess(artifact, context, user);
+    return user?.app_metadata?.hey_role === "teacher"
+      && artifact?.createdBy === user.id
+      && hasTeacherClassAccess(artifact, context, user);
   }
   if (isStudentWorksheetArtifact(artifact)) {
     const role = user?.app_metadata?.hey_role;
@@ -50,7 +52,7 @@ export function authorizeTeacherArtifactRead(artifact, context, user) {
   }
   if (isTeacherLessonArtifact(artifact)) {
     const claims = user?.app_metadata;
-    if (!user?.id || claims?.hey_role !== "teacher"
+    if (!user?.id || claims?.hey_role !== "teacher" || artifact?.createdBy !== user.id
       || claims.hey_account_scope !== artifact?.metadata?.accountScope) return false;
     if (context?.accountScope !== undefined && context.accountScope !== artifact.metadata.accountScope) return false;
     if (artifact.metadata.classId !== undefined
@@ -65,6 +67,7 @@ export function authorizeTeacherArtifactWrite(artifact, context, user) {
   if (!user?.id || claims?.hey_role !== "teacher" || !claims.hey_account_scope
     || claims.hey_account_scope !== artifact?.metadata?.accountScope) return false;
   if (context?.accountScope !== undefined && context.accountScope !== claims.hey_account_scope) return false;
+  if (artifact?.createdBy !== undefined && artifact.createdBy !== user.id) return false;
   const classId = context?.classId || artifact?.metadata?.classId;
   if (classId !== undefined && (!Array.isArray(claims.hey_class_ids) || !claims.hey_class_ids.includes(classId))) return false;
   return true;
