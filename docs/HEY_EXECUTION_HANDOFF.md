@@ -1,6 +1,6 @@
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 4 integrated
 
-Coordinator branch `codex/resume-emergency-2026-10-14` has wave 4 code checkpoint `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`; wave 5 worktrees use that code commit as their base, and a later docs-only checkpoint records current assignments. The previous code checkpoint was `3d3c583326ea006d787ff6f5b73cbb2c7e492fe1`. The wave 4 worker changes below are all reviewed and cherry-picked; wave 4 has no unmerged changes. Preserve the coordinator's untracked `docs/requirements/v3-agent-pack/` extraction; do not stage or delete it.
+Coordinator branch `codex/resume-emergency-2026-10-14` has integrated wave 5 commit `156b69a401b14b7bb1d37def782376fb8bcef5b2`. Wave 5 worktrees were started from code base `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`; the only wave 5 change integrated so far is worker 07's monotonic VoiceOS preview expiry. The wave 4 baseline is `0265c82`; all wave 4 worker changes are integrated. Preserve the coordinator's untracked `docs/requirements/v3-agent-pack/` extraction; do not stage or delete it.
 
 ### Integrated wave 4 implementations
 
@@ -27,25 +27,25 @@ Coordinator branch `codex/resume-emergency-2026-10-14` has wave 4 code checkpoin
 
 All eleven existing Codex tasks were resumed together on separate worktrees from `10e8c3b351b7a67317995da4dfae8af78c3864da`, requesting GPT-6 Luna where selectable. Every worker change is now integrated; no new Codex chats were created. `codex/wave4-01-space-details-ui` `992e1bb`, `codex/wave4-02-space-recovery` `2f3a6fb`, `codex/wave4-03-tool-lifecycle` `60e6ae3`, `codex/wave4-04-edge-privacy` `69cfe3c`, `codex/wave4-05-gesture-visibility` `b7826b0`, `codex/wave4-06-dictation-visibility` `3af79d1`, `codex/wave4-07-voice-preview` `d11ad1b`, `codex/wave4-08-teacher-access` `4ab661f`, `codex/wave4-09-provider-error` `9ca7804`, `codex/wave4-10-selector-memory` `67083b6`, and `codex/wave4-11-fusion-recovery` `567922a` are retained locally. Task references are unchanged: `01a14073-33bf-7403-940b-871cd0de9ebc`, `01a14073-9827-7f42-bf35-4eb2faee522d`, `01a14073-ae0b-7fa2-a145-2d4b3283f087`, `01a14073-c424-70e2-9773-630d488b24ae`, `01a14073-de07-7a90-b8bb-08faadea17bc`, `01a14073-f7e7-7601-8957-8d8cdfafa1d0`, `01a14074-1024-7e32-a5c1-c134d8e204a7`, `01a14074-2bb4-7b73-af09-a38e11a10c3d`, `01a14074-4bdf-7f33-bf83-bb7e1dff5097`, `01a14074-6e4f-79e2-805f-30ce26dab60e`, `01a14074-9f63-7672-9965-154a8394ffca`. Workers are completed/idle. There is no unmerged wave 4 work; coordinator-only pending work is this handoff update and the preserved untracked extracted agent pack.
 
-### Active wave 5 — launched concurrently from `0265c82`
+### Wave 5 progress and active workers
 
-All eleven existing specialist chats have been messaged concurrently and are active on distinct slices. GPT-6 Luna was requested where selectable. Each was told to make a new isolated worktree from exact pushed base `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`, preserve coordinator/older worker worktrees, implement and test, then commit. At handoff update time, they had begun worktree setup; no wave 5 commit or uncommitted coordinator change exists.
+All eleven existing specialist chats were messaged concurrently on distinct slices. GPT-6 Luna was requested where selectable. Each used a new isolated worktree from exact code base `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`, preserving the coordinator and older worker worktrees.
 
 | # | Existing Codex task reference | Assigned branch | Slice | State |
 |---:|---|---|---|---|
 | 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave5-01-space-archive-ui` | Accessible Spaces archive/restore UI wired to the new API, including confirmation, stale revision and account-switch behavior. | Active |
-| 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave5-02-space-sync` | Backend-only account-safe cross-tab Space archive/lifecycle refresh recovery, if absent. | Active |
-| 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave5-03-tool-capacity` | Backend-only bounded resource/concurrency race after the active session cap. | Active |
+| 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave5-02-space-sync` | Backend-only account-safe cross-tab Space archive/lifecycle refresh recovery; addressing cache-clear failure notifications. | Active |
+| 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave5-03-tool-capacity` | Backend-only bounded resource/concurrency race after active session cap. | Active; installing dependencies |
 | 04 | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave5-04-device-transport` | Verify/close post-auth device-status or credential-revocation race while preserving fixed RPC contract. | Active |
-| 05 | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave5-05-gesture-runtime` | Distinct bounded slow-detector/runtime work and cancellation cleanup. Synthetic fixtures only. | Active |
-| 06 | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave5-06-dictation-metrics` | Bounded privacy-safe dictation interruption/recovery metrics, if current contract lacks them. | Active |
-| 07 | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave5-07-voice-preview` | Bound abandoned inert VoiceOS preview storage/lifecycle. No OS execution. | Active |
-| 08 | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave5-08-teacher-rls` | Add missing private Teacher artifact creator/write database policy and static SQL tests, if genuinely absent. | Active |
-| 09 | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave5-09-provider-timeout` | Bound cancellation for ordinary exact-provider calls with mocked stalled-stream tests; no silent substitution. | Active |
+| 05 | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave5-05-gesture-runtime` | Distinct bounded slow-detector/runtime work and cancellation cleanup. Synthetic fixtures only. | Active; focused tests pass, reviewing/linting |
+| 06 | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave5-06-dictation-metrics` | Bounded privacy-safe dictation interruption/recovery metrics. | Active; focused tests/lint pass, committing |
+| 07 | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave5-07-voice-preview` | Monotonic preview expiration resists wall-clock rollback; no OS execution. | Completed; worker `0ab327e`, integrated `156b69a`; VoiceOS 12/12 and lint pass, worker full suite 661/661/build pass |
+| 08 | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave5-08-teacher-rls` | Add missing private Teacher artifact creator/write database policy and static SQL tests, if genuinely absent. | Active; building RLS fences |
+| 09 | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave5-09-provider-timeout` | Bound cancellation for ordinary exact-provider calls with mocked stalled-stream tests; no silent substitution. | Active; implementing abortable bounded reader |
 | 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave5-10-selector-budget` | Enforce another deterministic UltraSparse pathological catalog resource bound with oracle parity. | Active |
 | 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave5-11-fusion-stream` | New Fusion late-stream cancellation/cleanup invariant, if absent. Preserve opt-in and grant checks. | Active |
 
-**Exact next actions:** monitor these same eleven tasks; inspect each commit/diff and tests, cherry-pick only reviewed changes, run full `npm test`, production build, changed-file lint and `git diff --check` for each integration batch, then update and push this handoff with exact SHAs. Preserve the untracked V3 agent pack. Keep all authenticated-service/device behavior marked unverified until exercised against real configured services/devices.
+**Current unmerged work:** workers 01–06 and 08–11 are still active on the branches above; no uncommitted changes are in the coordinator. **Exact next actions:** monitor these same tasks; inspect each commit/diff and tests, cherry-pick only reviewed changes, run full `npm test`, production build, changed-file lint and `git diff --check` for each integration batch, then update and push this handoff with exact SHAs. Preserve the untracked V3 agent pack. Keep authenticated-service/device behavior marked unverified until exercised against real configured services/devices.
 
 ---
 
