@@ -20,6 +20,31 @@ function canonicalText(value, maxLength) {
   });
 }
 
+export function snapshotProviderAttempts(value) {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > 8) return null;
+    const snapshot = [];
+    const seen = new Set();
+    for (let index = 0; index < value.length; index += 1) {
+      const item = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!item?.enumerable || !Object.hasOwn(item, "value") || !isPlainRecord(item.value)) return null;
+      const source = item.value;
+      if (Reflect.ownKeys(source).length !== 3) return null;
+      const descriptors = ["id", "model", "key"].map((key) => Object.getOwnPropertyDescriptor(source, key));
+      if (descriptors.some((descriptor) => !descriptor?.enumerable || !Object.hasOwn(descriptor, "value"))) return null;
+      const [id, model, key] = descriptors.map((descriptor) => descriptor.value);
+      if (!canonicalText(id, 64) || !/^[a-z][a-z0-9_-]*$/.test(id) || !canonicalText(model, 128) ||
+        /[\\/]/.test(model) || typeof key !== "string" || !key || key !== key.trim() || seen.has(id)) return null;
+      seen.add(id);
+      snapshot.push(Object.freeze({ id, model, key }));
+    }
+    if (Reflect.ownKeys(value).length !== value.length + 1) return null;
+    return Object.freeze(snapshot);
+  } catch {
+    return null;
+  }
+}
+
 export function parseRoutingProfile(value) {
   if (value === undefined || value === null) return { status: "valid", profile: "automatic" };
   return typeof value === "string" && ROUTING_PROFILES.includes(value)
@@ -29,14 +54,18 @@ export function parseRoutingProfile(value) {
 
 export function parseProviderSelection(value) {
   if (value === undefined || value === null) return { status: "automatic" };
-  if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== 2) return { status: "invalid" };
-  const providerDescriptor = Object.getOwnPropertyDescriptor(value, "providerId");
-  const modelDescriptor = Object.getOwnPropertyDescriptor(value, "modelId");
-  if (!providerDescriptor?.enumerable || !Object.hasOwn(providerDescriptor, "value") ||
-    !modelDescriptor?.enumerable || !Object.hasOwn(modelDescriptor, "value") ||
-    !canonicalText(providerDescriptor.value, 64) || !/^[a-z][a-z0-9_-]*$/.test(providerDescriptor.value) ||
-    !canonicalText(modelDescriptor.value, 128) || /[\\/]/.test(modelDescriptor.value)) return { status: "invalid" };
-  return { status: "selected", providerId: providerDescriptor.value, modelId: modelDescriptor.value };
+  try {
+    if (!isPlainRecord(value) || Reflect.ownKeys(value).length !== 2) return { status: "invalid" };
+    const providerDescriptor = Object.getOwnPropertyDescriptor(value, "providerId");
+    const modelDescriptor = Object.getOwnPropertyDescriptor(value, "modelId");
+    if (!providerDescriptor?.enumerable || !Object.hasOwn(providerDescriptor, "value") ||
+      !modelDescriptor?.enumerable || !Object.hasOwn(modelDescriptor, "value") ||
+      !canonicalText(providerDescriptor.value, 64) || !/^[a-z][a-z0-9_-]*$/.test(providerDescriptor.value) ||
+      !canonicalText(modelDescriptor.value, 128) || /[\\/]/.test(modelDescriptor.value)) return { status: "invalid" };
+    return { status: "selected", providerId: providerDescriptor.value, modelId: modelDescriptor.value };
+  } catch {
+    return { status: "invalid" };
+  }
 }
 
 export function resolveProviderSelection(selection, attempts, entitlements, pricingConfig) {

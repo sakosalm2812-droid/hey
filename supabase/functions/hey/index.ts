@@ -11,6 +11,7 @@ import {
   parseRoutingProfile,
   resolveProviderSelection,
   routingPricesFromFusionConfig,
+  snapshotProviderAttempts,
 } from "./providerCatalog.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
@@ -93,9 +94,10 @@ function getProviderAttempts() {
     { id: "groq", key: Deno.env.get("GROQ_API_KEY"), model: Deno.env.get("GROQ_MODEL") || "llama-3.3-70b-versatile" },
   ].filter((provider): provider is ProviderAttempt => Boolean(provider.key));
   const preferred = Deno.env.get("HEY_PROVIDER");
-  return preferred
+  const ordered = preferred
     ? [...configured.filter((provider) => provider.id === preferred), ...configured.filter((provider) => provider.id !== preferred)]
     : configured;
+  return snapshotProviderAttempts(ordered) || [];
 }
 
 async function callProvider(

@@ -12,6 +12,7 @@ import {
   parseRoutingProfile,
   resolveProviderSelection,
   routingPricesFromFusionConfig,
+  snapshotProviderAttempts,
 } from "../supabase/functions/hey/providerCatalog.js";
 
 const attempts = [
@@ -94,6 +95,31 @@ test("exact provider selection rejects malformed IDs, extra keys, and accessors 
   Object.defineProperty(hostile, "modelId", { enumerable: true, get() { reads += 1; throw new Error("must not execute"); } });
   assert.equal(parseProviderSelection(hostile).status, "invalid");
   assert.equal(reads, 0);
+  assert.equal(parseProviderSelection(new Proxy({}, { ownKeys() { throw new Error("hostile trap"); } })).status, "invalid");
+});
+
+test("provider attempts use an immutable request snapshot across concurrent configuration changes", () => {
+  const source = attempts.map((attempt) => ({ ...attempt }));
+  const snapshot = snapshotProviderAttempts(source);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(Object.isFrozen(snapshot[1]), true);
+  source[1].model = "attacker-swapped-model";
+  source[1].key = "attacker-swapped-key";
+  assert.equal(snapshot[1].model, "gemini-fixture");
+  assert.equal(snapshot[1].key, "gemini-private-key");
+  assert.throws(() => { snapshot[1].model = "attacker-swapped-model"; }, TypeError);
+
+  const selection = parseProviderSelection({ providerId: "gemini", modelId: "gemini-fixture" });
+  assert.equal(resolveProviderSelection(selection, snapshot, ["provider.remote", "provider:gemini"], routingPrices).status, "selected");
+  // A later account snapshot revoking the provider wins over the original catalog snapshot.
+  assert.equal(resolveProviderSelection(selection, snapshot, ["provider.remote"], routingPrices).status, "denied");
+});
+
+test("provider snapshot rejects malformed, duplicate, sparse, and hostile configuration atomically", () => {
+  assert.equal(snapshotProviderAttempts([attempts[0], attempts[0]]), null);
+  assert.equal(snapshotProviderAttempts([attempts[0], , attempts[1]]), null);
+  assert.equal(snapshotProviderAttempts(new Proxy([], { getPrototypeOf() { throw new Error("hostile trap"); } })), null);
+  assert.equal(snapshotProviderAttempts([{ id: "openai", model: "gpt-fixture", get key() { throw new Error("must not run"); } }]), null);
 });
 
 test("authenticated model discovery and chat profile stay opt-in and server authoritative", async () => {
@@ -112,6 +138,7 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(route, /parseProviderSelection\(payload\.providerSelection\)/);
   assert.match(route, /chatProviderAttempts = \[selection\.attempt\]/);
   assert.match(route, /providerSelection: invalid|provider_selection_invalid/);
+  assert.match(route, /snapshotProviderAttempts\(ordered\) \|\| \[\]/);
   assert.match(route, /provider\.model === requestedProvider\.modelId/);
   assert.match(route, /authorizeChatProvider = async \(provider: ProviderAttempt\)/);
   assert.match(route, /await callProvider\(messages, 1200, chatProviderAttempts, authorizeChatProvider\)/);
