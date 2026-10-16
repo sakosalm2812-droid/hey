@@ -288,12 +288,14 @@ export class SpaceCreationEngine {
     this.accountScope = getAccountScope();
     this.spaces = new Map();
     this.previews = new Map();
+    this.deletePreviews = new Map();
     this.listeners = new Set();
     this.loadError = false;
     this.load(this.accountScope);
     this.unsubscribeAccountScope = subscribeAccountScope(() => {
       this.accountScope = getAccountScope();
       this.previews.clear();
+      this.deletePreviews.clear();
       this.load(this.accountScope);
       this.notify("account_scope_changed", { accountScope: this.accountScope });
     });
@@ -350,6 +352,7 @@ export class SpaceCreationEngine {
     this.unsubscribeAccountScope?.();
     this.listeners.clear();
     this.previews.clear();
+    this.deletePreviews.clear();
   }
 
   save() {
@@ -599,6 +602,93 @@ export class SpaceCreationEngine {
     }
   }
 
+  previewDeleteSpace(request) {
+    const safeRequest = readDataRecord(request, ["accountScope", "spaceId", "expectedDetailsRevision", "expectedLayoutRevision"]);
+    if (safeRequest.error) return safeRequest;
+    const { accountScope, spaceId, expectedDetailsRevision, expectedLayoutRevision } = safeRequest.value;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to delete a Space" };
+    if (typeof accountScope !== "string" || accountScope !== scope || accountScope !== getAccountScope()) return { error: "Account scope mismatch" };
+    if (typeof spaceId !== "string" || spaceId.length > 100) return { error: "A valid Space ID is required" };
+    if (!Number.isSafeInteger(expectedDetailsRevision) || expectedDetailsRevision < 0
+      || !Number.isSafeInteger(expectedLayoutRevision) || expectedLayoutRevision < 0) return { error: "Valid Space revisions are required" };
+    const refreshed = this.refreshFromStorage(scope, { notify: true });
+    if (refreshed.error) return refreshed;
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry the request" };
+    const space = this.spaces.get(spaceId);
+    if (!space || space.accountScope !== scope) return { error: "Space not found" };
+    if (space.detailsRevision !== expectedDetailsRevision || space.layoutPreferences.revision !== expectedLayoutRevision) {
+      return { error: "Space changed; reload before reviewing deletion", code: "stale_revision", current: cloneSpace(space) };
+    }
+    const previewId = createId();
+    const expiresAt = Date.now() + SPACE_CREATION_LIMITS.previewLifetimeMs;
+    const snapshot = JSON.stringify(space);
+    this.deletePreviews.set(previewId, { accountScope: scope, spaceId, snapshot, expiresAt });
+    return {
+      previewId,
+      accountScope: scope,
+      expiresAt: new Date(expiresAt).toISOString(),
+      action: "delete_private_space",
+      space: cloneSpace(space),
+      effects: [`Permanently delete the private Space “${space.name}” and its saved layout and tool selections`],
+      permissionsChanged: false,
+      requiresConfirmation: true,
+    };
+  }
+
+  confirmDeleteSpace(request) {
+    const safeRequest = readDataRecord(request, ["previewId", "confirm"]);
+    if (safeRequest.error) return safeRequest;
+    const { previewId, confirm } = safeRequest.value;
+    const scope = this.accountScope;
+    if (typeof previewId !== "string" || previewId.length > 100) return { error: "A valid deletion preview ID is required" };
+    if (confirm !== true) return { error: "Explicit confirmation is required" };
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to delete a Space" };
+    if (getAccountScope() !== scope) {
+      this.deletePreviews.clear();
+      return { error: "Account scope changed; deletion preview is no longer valid" };
+    }
+    const pending = this.deletePreviews.get(previewId);
+    if (!pending || pending.accountScope !== scope) return { error: "Deletion preview not found or already used" };
+    if (Date.now() > pending.expiresAt) {
+      this.deletePreviews.delete(previewId);
+      return { error: "Deletion preview expired; review deletion again" };
+    }
+    const writeLockKey = JSON.stringify([scope, pending.spaceId]);
+    if (activeSpaceWrites.has(writeLockKey)) return { error: "A Space update is already in progress", code: "write_in_progress" };
+    activeSpaceWrites.add(writeLockKey);
+    try {
+      const refreshed = this.refreshFromStorage(scope, { notify: true });
+      if (refreshed.error) return refreshed;
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; deletion preview is no longer valid" };
+      const current = this.spaces.get(pending.spaceId);
+      if (!current || current.accountScope !== scope) {
+        this.deletePreviews.delete(previewId);
+        return { error: "Space no longer exists" };
+      }
+      if (JSON.stringify(current) !== pending.snapshot) {
+        this.deletePreviews.delete(previewId);
+        return { error: "Space changed after deletion review; review the latest version", code: "stale_revision", current: cloneSpace(current) };
+      }
+      // Consume before persistence so a reentrant storage implementation cannot
+      // apply the same explicit deletion confirmation twice.
+      this.deletePreviews.delete(previewId);
+      const nextSpaces = new Map(this.spaces);
+      nextSpaces.delete(pending.spaceId);
+      const saved = this.persistSpaces(nextSpaces, scope);
+      if (saved.error) return { error: "Space could not be deleted", code: "write_failed" };
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before deleting" };
+      this.spaces = nextSpaces;
+      const result = { success: true, accountScope: scope, spaceId: pending.spaceId, permissionsChanged: false };
+      this.notify("space_deleted", result);
+      publish("spaces.private_space_deleted", result);
+      recordAudit({ action: "space.private_deleted", status: "completed", metadata: { spaceId: pending.spaceId, accountScope: scope } });
+      return result;
+    } finally {
+      activeSpaceWrites.delete(writeLockKey);
+    }
+  }
+
   previewNaturalLanguageRequest(request) {
     const safeRequest = readDataRecord(request, ["accountScope", "prompt", "templateId"]);
     if (safeRequest.error) return safeRequest;
@@ -719,6 +809,19 @@ export function getPrivateSpaces() {
 
 export function getOnboardingSpaceSuggestions() {
   return spaceCreationEngine.getOnboardingSuggestions();
+}
+
+/**
+ * Deletion is a two-step, account-scoped contract. Preview requires the current
+ * account scope, Space ID, details revision, and layout revision; confirmation
+ * accepts only { previewId, confirm: true } and rechecks the saved snapshot.
+ */
+export function previewPrivateSpaceDeletion(request) {
+  return spaceCreationEngine.previewDeleteSpace(request);
+}
+
+export function confirmPrivateSpaceDeletion(request) {
+  return spaceCreationEngine.confirmDeleteSpace(request);
 }
 
 export function getSpaceLayoutPreferences(spaceId) {

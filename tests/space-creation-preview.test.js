@@ -71,6 +71,8 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(typeof spacesApi.setToolMembership, "function");
   assert.equal(typeof spacesApi.updateDetails, "function");
   assert.equal(typeof spacesApi.subscribe, "function");
+  assert.equal(typeof spacesApi.previewDeletion, "function");
+  assert.equal(typeof spacesApi.confirmDeletion, "function");
 });
 
 test("Space starting points are previewed, persisted, and never add tool permissions", () => withStorage(() => {
@@ -125,6 +127,76 @@ test("onboarding motivation suggestions connect to private Space previews for th
     assert.deepEqual(spacesApi.getOnboardingSuggestions().motivationSelections, []);
     assert.deepEqual(spacesApi.getPrivateSpaces(), []);
     assert.match(spacesApi.previewNaturalLanguageCreation(staleSuggestion.previewRequest).error, /Account scope changed/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space deletion reviews the current saved Space, rejects stale and switched accounts, and preserves data on write failure", () => withStorage((storage) => {
+  const previousScope = "spaces-delete-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("spaces-delete-owner-a");
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a private space called Keep until confirmed" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).space;
+    engine.updateDetails({ accountScope: created.accountScope, spaceId: created.id, expectedRevision: 0, description: "Saved working context" });
+    engine.updateLayoutPreferences({ accountScope: created.accountScope, spaceId: created.id, expectedRevision: 0, preferences: { widgetIds: ["notes"], toolIds: [] } });
+    const current = engine.getSpaces()[0];
+    const request = {
+      accountScope: current.accountScope,
+      spaceId: current.id,
+      expectedDetailsRevision: current.detailsRevision,
+      expectedLayoutRevision: current.layoutPreferences.revision,
+    };
+
+    const stale = engine.previewDeleteSpace({ ...request, expectedLayoutRevision: 0 });
+    assert.equal(stale.code, "stale_revision");
+    assert.deepEqual(engine.getSpaces(), [current]);
+
+    const reviewed = engine.previewDeleteSpace(request);
+    assert.equal(reviewed.action, "delete_private_space");
+    assert.equal(reviewed.requiresConfirmation, true);
+    assert.equal(reviewed.permissionsChanged, false);
+    assert.match(reviewed.effects[0], /Keep until confirmed/);
+    assert.deepEqual(engine.getSpaces(), [current]);
+    assert.match(engine.confirmDeleteSpace({ previewId: reviewed.previewId, confirm: false }).error, /Explicit confirmation/);
+
+    const staleReview = engine.previewDeleteSpace(request);
+    engine.updateDetails({ accountScope: current.accountScope, spaceId: current.id, expectedRevision: current.detailsRevision, name: "Changed after review" });
+    const changed = engine.confirmDeleteSpace({ previewId: staleReview.previewId, confirm: true });
+    assert.equal(changed.code, "stale_revision");
+    assert.equal(engine.getSpaces()[0].name, "Changed after review");
+
+    const latest = engine.getSpaces()[0];
+    const retry = engine.previewDeleteSpace({ ...request, expectedDetailsRevision: latest.detailsRevision });
+    storage.failWrites = true;
+    assert.equal(engine.confirmDeleteSpace({ previewId: retry.previewId, confirm: true }).code, "write_failed");
+    assert.equal(engine.getSpaces()[0].name, "Changed after review");
+    storage.failWrites = false;
+
+    const finalSpace = engine.getSpaces()[0];
+    const accountAReview = engine.previewDeleteSpace({
+      accountScope: finalSpace.accountScope,
+      spaceId: finalSpace.id,
+      expectedDetailsRevision: finalSpace.detailsRevision,
+      expectedLayoutRevision: finalSpace.layoutPreferences.revision,
+    });
+    setAccountScope("spaces-delete-owner-b");
+    assert.match(engine.confirmDeleteSpace({ previewId: accountAReview.previewId, confirm: true }).error, /Account scope changed|not found or already used/);
+    assert.deepEqual(engine.getSpaces(), []);
+    setAccountScope("spaces-delete-owner-a");
+    assert.equal(engine.getSpaces()[0].name, "Changed after review");
+    const stored = JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces")));
+    assert.equal(Object.hasOwn(stored.spaces, finalSpace.id), true);
+    const finalCurrent = engine.getSpaces()[0];
+    const finalReview = engine.previewDeleteSpace({
+      accountScope: finalCurrent.accountScope,
+      spaceId: finalCurrent.id,
+      expectedDetailsRevision: finalCurrent.detailsRevision,
+      expectedLayoutRevision: finalCurrent.layoutPreferences.revision,
+    });
+    assert.equal(engine.confirmDeleteSpace({ previewId: finalReview.previewId, confirm: true }).success, true);
+    assert.deepEqual(new SpaceCreationEngine().getSpaces(), []);
+    assert.equal(Object.hasOwn(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).spaces, finalCurrent.id), false);
   } finally { setAccountScope(previousScope); }
 }));
 
