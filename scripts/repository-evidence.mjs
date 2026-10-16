@@ -19,7 +19,7 @@ const JSON_SCHEMA_DIALECTS = new Set([
 const SCHEMA_METADATA_KEYS = new Set(["$schema", "$id", "title", "description", "$comment", "examples", "deprecated", "readOnly", "writeOnly"]);
 const SCHEMA_CONSTRAINT_KEYS = new Set([
   "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-  "minLength", "maxLength", "pattern", "format", "minItems", "maxItems",
+  "pattern", "format", "minItems", "maxItems",
   "uniqueItems",
 ]);
 const SCHEMA_PROPERTY_BOUND_KEYS = new Set(["minProperties", "maxProperties"]);

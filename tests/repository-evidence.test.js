@@ -308,6 +308,7 @@ test("minLength and maxLength compare non-negative safe integer bounds including
     const comparison = report.contractSemanticComparisons[0];
     assert.equal(comparison.status, "semantic_diff");
     assert.equal(comparison.changes.stringLengthBoundChanges, 1);
+    assert.equal(comparison.changes.constraintChanges, 0);
     assert.doesNotMatch(JSON.stringify(report), /string-length-bounds|9007199254740991/);
   });
 });
