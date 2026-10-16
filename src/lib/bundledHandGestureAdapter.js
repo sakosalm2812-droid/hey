@@ -68,13 +68,12 @@ function classifyLandmarks(landmarks, handScore, previousGesture, sensitivity = 
 function defaultAssetBaseUrl() {
   const basePath = import.meta.env?.BASE_URL || "/";
   const documentBase = globalThis.document?.baseURI || globalThis.location?.href;
-  if (!documentBase) return `${basePath.replace(/\/?$/u, "/")}mediapipe/hands/`;
-  return new URL(`${basePath.replace(/\/?$/u, "/")}mediapipe/hands/`, documentBase).href;
+  if (!documentBase) return `${basePath.replace(/\/?$/u, "/")}mediapipe/vision/`;
+  return new URL(`${basePath.replace(/\/?$/u, "/")}mediapipe/vision/`, documentBase).href;
 }
 
 async function loadBundledHands() {
-  await import("@mediapipe/hands/hands.js");
-  return globalThis.Hands;
+  return import("@mediapipe/tasks-vision");
 }
 
 export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBaseUrl(), handsLoader = loadBundledHands } = {}) {
@@ -85,7 +84,7 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
   let canvas = null;
   let canvasContext = null;
   let latestObservation = null;
-  const frameResults = new WeakMap();
+  let lastFrameTimestamp = 0;
 
   return {
     kind: "mediapipe-hands-bundled",
@@ -95,26 +94,25 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
       if (loading) return loading;
       const prepareGeneration = ++generation;
       const prepareTask = (async () => {
-        const Hands = await handsLoader();
+        const vision = await handsLoader();
         if (signal?.aborted || prepareGeneration !== generation) return false;
-        if (typeof Hands !== "function") throw new Error("Bundled hand detector did not load.");
-        const detector = new Hands({
-          locateFile: (path) => new URL(path.replace("hands_solution_simd_wasm_bin", "hands_solution_wasm_bin"), assetBaseUrl).href,
-        });
-        try {
-          detector.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 0,
-            minDetectionConfidence: 0.65,
-            minTrackingConfidence: 0.6,
-            selfieMode: true,
-          });
-          detector.onResults((result) => frameResults.set(detector, result));
-          await detector.initialize();
-        } catch (error) {
-          try { await detector.close(); } catch { /* Initialization failed; release best-effort. */ }
-          throw error;
+        if (typeof vision?.HandLandmarker?.createFromOptions !== "function") {
+          throw new Error("Bundled hand landmarker did not load.");
         }
+        const detector = await vision.HandLandmarker.createFromOptions({
+          wasmLoaderPath: new URL("wasm/vision_wasm_nosimd_internal.js", assetBaseUrl).href,
+          wasmBinaryPath: new URL("wasm/vision_wasm_nosimd_internal.wasm", assetBaseUrl).href,
+        }, {
+          baseOptions: {
+            modelAssetPath: new URL("models/hand_landmarker.task", assetBaseUrl).href,
+            delegate: "CPU",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+          minHandDetectionConfidence: 0.65,
+          minHandPresenceConfidence: 0.6,
+          minTrackingConfidence: 0.6,
+        });
         if (signal?.aborted || prepareGeneration !== generation) {
           try { await detector.close(); } catch { /* A cancelled load is already unavailable. */ }
           return false;
@@ -139,18 +137,19 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
       canvas.width = frame.width;
       canvas.height = frame.height;
       canvasContext.putImageData(frame, 0, 0);
-      frameResults.set(detector, null);
-      await detector.send({ image: canvas });
+      const now = globalThis.performance?.now?.() ?? Date.now();
+      lastFrameTimestamp = Math.max(Math.floor(now), lastFrameTimestamp + 1);
+      const result = detector.detectForVideo(canvas, lastFrameTimestamp);
       if (signal?.aborted || hands !== detector) return null;
-      const result = frameResults.get(detector);
-      const landmarks = result?.multiHandLandmarks?.[0];
+      const landmarks = result?.landmarks?.[0];
       if (!landmarks) {
         previousGesture = null;
         latestObservation = null;
         return null;
       }
-      const score = result?.multiHandedness?.[0]?.score;
-      const handLabel = String(result?.multiHandedness?.[0]?.label || "").toLowerCase();
+      const handCategory = result?.handedness?.[0]?.[0];
+      const score = handCategory?.score;
+      const handLabel = String(handCategory?.categoryName || "").toLowerCase();
       const handedness = handLabel === "left" || handLabel === "right" ? handLabel : "unknown";
       const preferredHand = profile?.handedness || profile?.dominantHand || "both";
       if (preferredHand !== "both" && handedness !== "unknown" && preferredHand !== handedness) {
@@ -203,6 +202,7 @@ export function createBundledHandGestureAdapter({ assetBaseUrl = defaultAssetBas
       canvas = null;
       canvasContext = null;
       latestObservation = null;
+      lastFrameTimestamp = 0;
       if (detector) void Promise.resolve(detector.close()).catch(() => {});
     },
   };

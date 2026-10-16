@@ -31,23 +31,27 @@ test("bundled landmark classifier maps only the supported low-risk gesture IDs",
 });
 
 test("bundled adapter initializes local MediaPipe assets, emits hand detections, and releases the model", async () => {
-  let resultListener;
   let detectedImage;
   let detectorClosed = 0;
-  let assetUrl;
-  class FakeHands {
-    constructor({ locateFile }) { assetUrl = locateFile("hands_solution_simd_wasm_bin.wasm"); }
-    setOptions(options) { assert.equal(options.maxNumHands, 1); }
-    async initialize() {}
-    onResults(listener) { resultListener = listener; }
-    async send({ image }) {
-      detectedImage = image;
-      resultListener({
-        multiHandLandmarks: [makeLandmarks([true, true, true, true, true])],
-        multiHandedness: [{ score: 0.98 }],
-      });
+  let wasmFileset;
+  let landmarkerOptions;
+  let lastTimestamp = -1;
+  class FakeHandLandmarker {
+    static async createFromOptions(fileset, options) {
+      wasmFileset = fileset;
+      landmarkerOptions = options;
+      return new FakeHandLandmarker();
     }
-    async close() { detectorClosed += 1; }
+    detectForVideo(image, timestamp) {
+      detectedImage = image;
+      assert.ok(timestamp > lastTimestamp);
+      lastTimestamp = timestamp;
+      return {
+        landmarks: [makeLandmarks([true, true, true, true, true])],
+        handedness: [[{ score: 0.98, categoryName: "Left" }]],
+      };
+    }
+    close() { detectorClosed += 1; }
   }
   globalThis.document = {
     createElement() {
@@ -57,18 +61,22 @@ test("bundled adapter initializes local MediaPipe assets, emits hand detections,
     },
   };
   const adapter = createBundledHandGestureAdapter({
-    assetBaseUrl: "https://local.test/app/mediapipe/hands/",
-    handsLoader: async () => FakeHands,
+    assetBaseUrl: "https://local.test/app/mediapipe/vision/",
+    handsLoader: async () => ({ HandLandmarker: FakeHandLandmarker }),
   });
 
   assert.equal(adapter.isReady(), false);
   assert.equal(await adapter.prepare({ signal: new AbortController().signal }), true);
   assert.equal(adapter.isReady(), true);
-  assert.equal(assetUrl, "https://local.test/app/mediapipe/hands/hands_solution_wasm_bin.wasm");
+  assert.equal(wasmFileset.wasmLoaderPath, "https://local.test/app/mediapipe/vision/wasm/vision_wasm_nosimd_internal.js");
+  assert.equal(wasmFileset.wasmBinaryPath, "https://local.test/app/mediapipe/vision/wasm/vision_wasm_nosimd_internal.wasm");
+  assert.equal(landmarkerOptions.baseOptions.modelAssetPath, "https://local.test/app/mediapipe/vision/models/hand_landmarker.task");
+  assert.equal(landmarkerOptions.runningMode, "VIDEO");
+  assert.equal(landmarkerOptions.numHands, 1);
   const imageData = { width: 640, height: 480, data: new Uint8ClampedArray(640 * 480 * 4) };
   const detection = await adapter.detect(imageData, {}, { signal: new AbortController().signal });
   assert.equal(detectedImage.width, 640);
-  assert.deepEqual(detection, { id: "G01", confidence: 0.98, handedness: "unknown" });
+  assert.deepEqual(detection, { id: "G01", confidence: 0.98, handedness: "left" });
 
   adapter.stop("user_stop");
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -79,17 +87,12 @@ test("bundled adapter initializes local MediaPipe assets, emits hand detections,
 test("cancelled detector preparation cannot publish a ready instance", async () => {
   let resolveLoader;
   const adapter = createBundledHandGestureAdapter({
-    assetBaseUrl: "https://local.test/mediapipe/hands/",
+    assetBaseUrl: "https://local.test/mediapipe/vision/",
     handsLoader: () => new Promise((resolve) => { resolveLoader = resolve; }),
   });
   const pending = adapter.prepare({ signal: new AbortController().signal });
   adapter.stop("cancelled");
-  class LateHands {
-    setOptions() {}
-    async initialize() {}
-    async close() {}
-  }
-  resolveLoader(LateHands);
+  resolveLoader({ HandLandmarker: { createFromOptions() { throw new Error("must not initialize after cancellation"); } } });
 
   assert.equal(await pending, false);
   assert.equal(adapter.isReady(), false);

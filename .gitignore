@@ -15,6 +15,7 @@ src-tauri/Cargo.lock.orig
 node_modules
 dist
 dist-ssr
+public/mediapipe/vision/wasm/
 
 # Environment files (never commit real credentials)
 .env
