@@ -338,6 +338,8 @@ export function createDictationSession({ speechProvider, environment = globalThi
   const vocabularySnapshot = normalizeDictationVocabulary(vocabulary, sessionLanguage, correctionSnapshot);
   const state = createVoiceState();
   const startingScope = getAccountScope();
+  let visibilityDocument = null;
+  try { visibilityDocument = environment?.document ?? null; } catch { /* Visibility support is optional in non-browser runtimes. */ }
   let recognition = null;
   let generation = 0;
   let starting = null;
@@ -399,7 +401,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
 
   function stop(terminalStatus = "stopped") {
     generation += 1;
-    finishAttempt(terminalStatus === "account_changed" ? terminalStatus : active ? terminalStatus : "cancelled");
+    finishAttempt(["account_changed", "visibility_hidden"].includes(terminalStatus) ? terminalStatus : active ? terminalStatus : "cancelled");
     attempt = null;
     active = false;
     try { activeSpeechProvider?.stop(recognition); } catch { /* The local session is still stopped. */ }
@@ -410,10 +412,26 @@ export function createDictationSession({ speechProvider, environment = globalThi
     }
   }
 
+  function isDocumentHidden() {
+    try { return visibilityDocument?.visibilityState === "hidden"; }
+    catch { return false; }
+  }
+
+  function removeVisibilityListener() {
+    try { visibilityDocument?.removeEventListener?.("visibilitychange", onVisibilityChange); } catch { /* The session remains fenced. */ }
+  }
+
+  function onVisibilityChange() {
+    if (isDocumentHidden() && (active || starting) && !destroyed) stop("visibility_hidden");
+  }
+
+  try { visibilityDocument?.addEventListener?.("visibilitychange", onVisibilityChange); } catch { /* Visibility support is optional in non-browser runtimes. */ }
+
   const unsubscribeScope = subscribeAccountScope(() => {
     if (getAccountScope() !== startingScope) {
       stop("account_changed");
       destroyed = true;
+      removeVisibilityListener();
       unsubscribeScope();
     }
   });
@@ -422,6 +440,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     if (destroyed || getAccountScope() !== startingScope) {
       return { success: false, status: "session_ended", error: "Dictation session ended after the account changed." };
     }
+    if (isDocumentHidden()) return { success: false, status: "visibility_hidden", error: "Dictation can only start while the page is visible." };
     if (consentGiven !== true) {
       return { success: false, status: "consent_required", error: "Consent is required before dictation starts." };
     }
@@ -456,6 +475,10 @@ export function createDictationSession({ speechProvider, environment = globalThi
     if (destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) {
       finishAttempt("cancelled");
       return { success: false, status: "cancelled", error: "Dictation start was cancelled." };
+    }
+    if (isDocumentHidden()) {
+      finishAttempt("visibility_hidden");
+      return { success: false, status: "visibility_hidden", error: "Dictation can only start while the page is visible." };
     }
     if (!permission.granted) {
       finishAttempt("permission_failed");
@@ -524,6 +547,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     if (destroyed) return;
     stop();
     destroyed = true;
+    removeVisibilityListener();
     unsubscribeScope();
   }
 

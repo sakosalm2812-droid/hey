@@ -9,6 +9,18 @@ function environmentWithPermission(getUserMedia = async () => ({ getTracks: () =
   };
 }
 
+function createVisibilityDocument(initialState = "visible") {
+  let visibilityState = initialState;
+  let listener = null;
+  return {
+    get visibilityState() { return visibilityState; },
+    addEventListener(type, callback) { if (type === "visibilitychange") listener = callback; },
+    removeEventListener(type, callback) { if (type === "visibilitychange" && listener === callback) listener = null; },
+    setVisibility(nextState) { visibilityState = nextState; listener?.(); },
+    hasListener() { return listener !== null; },
+  };
+}
+
 test("dictation reports bounded privacy-safe provider timing and aggregate transcript metrics", async () => {
   let time = 0;
   let callbacks;
@@ -239,4 +251,71 @@ test("account switches stop dictation and emit only an aggregate terminal metric
   assert.equal(JSON.stringify(reports).includes("late account text"), false);
   session.destroy();
   setAccountScope(null);
+});
+
+test("hiding the document stops recognition, drops late text, and requires fresh consent to resume", async () => {
+  const document = createVisibilityDocument();
+  const callbacks = [];
+  const transcripts = [];
+  const metrics = [];
+  let starts = 0;
+  let stops = 0;
+  const environment = environmentWithPermission();
+  environment.document = document;
+  const session = createDictationSession({
+    speechProvider: { start(options) { starts += 1; callbacks.push(options); return {}; }, stop() { stops += 1; } },
+    environment,
+    onTranscript: (value) => transcripts.push(value),
+    onMetrics: (value) => metrics.push(value),
+  });
+
+  assert.equal(document.hasListener(), true);
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  document.setVisibility("hidden");
+  assert.equal(stops, 1);
+  assert.equal(metrics[0].status, "visibility_hidden");
+  callbacks[0].onTranscript("late hidden-tab transcript");
+  assert.deepEqual(transcripts, []);
+
+  document.setVisibility("visible");
+  assert.equal(starts, 1);
+  assert.equal((await session.start()).status, "consent_required");
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks[1].onTranscript("visible retry");
+  assert.deepEqual(transcripts, ["visible retry"]);
+  session.destroy();
+  assert.equal(document.hasListener(), false);
+});
+
+test("a hidden page cannot start or finish a pending microphone permission into recognition", async () => {
+  const document = createVisibilityDocument("hidden");
+  let resolvePermission;
+  let permissionRequests = 0;
+  let trackStops = 0;
+  let starts = 0;
+  const environment = environmentWithPermission(() => {
+    permissionRequests += 1;
+    return new Promise((resolve) => { resolvePermission = resolve; });
+  });
+  environment.document = document;
+  const metrics = [];
+  const session = createDictationSession({
+    speechProvider: { start() { starts += 1; return {}; }, stop() {} },
+    environment,
+    onMetrics: (value) => metrics.push(value),
+  });
+
+  assert.equal((await session.start({ consentGiven: true })).status, "visibility_hidden");
+  assert.equal(permissionRequests, 0);
+  document.setVisibility("visible");
+  const pending = session.start({ consentGiven: true });
+  await Promise.resolve();
+  assert.equal(permissionRequests, 1);
+  document.setVisibility("hidden");
+  resolvePermission({ getTracks: () => [{ stop() { trackStops += 1; } }] });
+  assert.equal((await pending).status, "cancelled");
+  assert.equal(trackStops, 1);
+  assert.equal(starts, 0);
+  assert.equal(metrics.at(-1).status, "visibility_hidden");
+  session.destroy();
 });
