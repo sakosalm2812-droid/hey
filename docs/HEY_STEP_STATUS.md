@@ -104,4 +104,3 @@ Step 16 delta: opt-in dictation metrics are integrated at coordinator `30848c6` 
 ## Latest verification checkpoint — 2026-10-16, coordinator `13b90be`
 
 Integrated follow-up wave verification: `npm test` 619/619 passed; Vite production build passed (2,767 modules); changed-file JavaScript/JSX ESLint and `git diff --check` passed. This is code/test/build evidence only. The actual local page is `http://127.0.0.1:5175/login`; it truthfully shows Supabase URL/public anon key are missing and disables sign-in. Authenticated browser journeys, live Supabase/database/RLS, live AI inference, camera/microphone permission, native runtime, and production deployment are **UNVERIFIED**. All 47 steps remain In progress or Incomplete; none is production-certified complete. Exact integration SHAs, workers, test scope, blockers and next actions are recorded at the top of `docs/HEY_EXECUTION_HANDOFF.md`.
-
