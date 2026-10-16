@@ -1,6 +1,6 @@
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 4 integrated
 
-Coordinator branch `codex/resume-emergency-2026-10-14` is at pushed checkpoint `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`. The previous pushed checkpoint was `3d3c583326ea006d787ff6f5b73cbb2c7e492fe1`. The wave 4 worker changes below are all reviewed and cherry-picked; wave 4 has no unmerged changes. Preserve the coordinator's untracked `docs/requirements/v3-agent-pack/` extraction; do not stage or delete it.
+Coordinator branch `codex/resume-emergency-2026-10-14` has wave 4 code checkpoint `0265c82cc86949de3c02a1bfd93ff58be26ec5d8`; wave 5 worktrees use that code commit as their base, and a later docs-only checkpoint records current assignments. The previous code checkpoint was `3d3c583326ea006d787ff6f5b73cbb2c7e492fe1`. The wave 4 worker changes below are all reviewed and cherry-picked; wave 4 has no unmerged changes. Preserve the coordinator's untracked `docs/requirements/v3-agent-pack/` extraction; do not stage or delete it.
 
 ### Integrated wave 4 implementations
 
