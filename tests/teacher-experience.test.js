@@ -721,7 +721,10 @@ test("complete lesson journey routes distinct teacher and student artifacts thro
   let forgeCalls;
   const journey = await withForgeBatchPersistence(async (calls) => {
     const result = await HEY.teacher.createLessonWorksheetJourney({
-      lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+      lesson: lessonInput(), assessment: assessmentInput({ questions: [
+        assessmentInput().questions[0],
+        { objective: "Place unit fractions on a number line", prompt: "Which is greater, 2/4 or 3/4?", expectedLearning: "Learner compares fractions with the same denominator.", teacherAnswer: "3/4 is greater because three equal parts exceed two.", points: 3 },
+      ] }), context: teacherContext(),
     });
     forgeCalls = calls;
     return result;
@@ -738,8 +741,12 @@ test("complete lesson journey routes distinct teacher and student artifacts thro
   assert.equal(journey.saved.teacherArtifact.metadata.audience, "teacher_only");
   assert.equal(journey.saved.studentArtifact.metadata.audience, "student");
   assert.notEqual(journey.saved.teacherArtifact.id, journey.saved.studentArtifact.id);
+  assert.equal(journey.saved.teacherArtifact.content.questions.length, 2);
+  assert.equal(journey.saved.teacherArtifact.content.questions[1].teacherAnswer, "3/4 is greater because three equal parts exceed two.");
+  assert.equal(journey.saved.studentArtifact.content.questions.length, 2);
   assert.match(JSON.stringify(journey.saved.teacherArtifact.content), /teacherAnswer/);
-  assert.doesNotMatch(JSON.stringify(journey.saved.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts/);
+  assert.doesNotMatch(JSON.stringify(journey.saved.studentArtifact.content), /teacherAnswer|expectedLearning|One quarter is one of four equal parts|three equal parts exceed two/);
+  assert.match(JSON.stringify(journey.saved.studentArtifact.content), /Which is greater, 2\/4 or 3\/4\?/);
   assert.equal(new Set(forgeWrites.map((write) => write.metadata.journeyId)).size, 1);
 });
 

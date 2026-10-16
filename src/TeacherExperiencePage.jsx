@@ -8,6 +8,7 @@ import { listRecords } from "./lib/heyRecords.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "./teacherExperiencePageContract.js";
 import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount, readTeacherJourneyRecoveryHint, writeTeacherJourneyRecoveryHint } from "./teacherPageState.js";
+import { buildTeacherAssessmentQuestions, createTeacherQuestionDraft } from "./teacherQuestionDraft.js";
 import "./TeacherExperiencePage.css";
 
 const EMPTY_LESSON = Object.freeze({
@@ -19,11 +20,17 @@ const EMPTY_LESSON = Object.freeze({
   activityTitle: "Build a number line",
   activityInstructions: "Place fraction cards and explain each choice.",
   activityMinutes: "20",
-  questionPrompt: "Where does 1/4 belong on the number line?",
-  expectedLearning: "Learner places 1/4 between 0 and 1/2 and explains why.",
-  teacherAnswer: "One quarter is one of four equal parts; mark it one quarter of the way from zero to one.",
-  points: "2",
+  questions: [createTeacherQuestionDraft("question-1", {
+    prompt: "Where does 1/4 belong on the number line?",
+    expectedLearning: "Learner places 1/4 between 0 and 1/2 and explains why.",
+    teacherAnswer: "One quarter is one of four equal parts; mark it one quarter of the way from zero to one.",
+    points: "2",
+  })],
 });
+
+function createEmptyLessonForm() {
+  return { ...EMPTY_LESSON, questions: EMPTY_LESSON.questions.map((question) => ({ ...question })) };
+}
 
 function downloadMarkdown(exported) {
   const url = URL.createObjectURL(new Blob([exported.content], { type: exported.mimeType }));
@@ -61,6 +68,7 @@ export default function TeacherExperiencePage() {
   const accountId = user?.id || "";
   const accountRef = useRef(accountId);
   const previousAccountIdRef = useRef(accountId);
+  const nextQuestionIdRef = useRef(1);
   useLayoutEffect(() => { accountRef.current = accountId; }, [accountId]);
   const [access, setAccess] = useState({ status: "checking", classIds: [] });
   const [accessAccountId, setAccessAccountId] = useState("");
@@ -68,7 +76,7 @@ export default function TeacherExperiencePage() {
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedClassId, setSelectedClassId] = useState("");
-  const [lessonForm, setLessonForm] = useState({ ...EMPTY_LESSON });
+  const [lessonForm, setLessonForm] = useState(createEmptyLessonForm);
   const [preview, setPreview] = useState(null);
   const [savedJourney, setSavedJourney] = useState(null);
   const [recoveryHint, setRecoveryHint] = useState(null);
@@ -96,7 +104,7 @@ export default function TeacherExperiencePage() {
     draftRevisionRef.current += 1;
     resetTransientJourney();
     setRecoveryHint(null);
-    setLessonForm({ ...EMPTY_LESSON });
+    setLessonForm(createEmptyLessonForm());
     setProjects([]);
     setSelectedProjectId("");
     setSelectedClassId("");
@@ -112,7 +120,7 @@ export default function TeacherExperiencePage() {
     setAccessAccountId("");
     if (accountChanged) {
       draftRevisionRef.current += 1;
-      setLessonForm({ ...EMPTY_LESSON });
+      setLessonForm(createEmptyLessonForm());
       resetTransientJourney();
       setProjects([]);
       setSelectedProjectId("");
@@ -183,6 +191,30 @@ export default function TeacherExperiencePage() {
     resetTransientJourney();
   }
 
+  function updateQuestion(questionId, field, value) {
+    draftRevisionRef.current += 1;
+    setLessonForm((current) => ({
+      ...current,
+      questions: current.questions.map((question) => question.id === questionId ? { ...question, [field]: value } : question),
+    }));
+    resetTransientJourney();
+  }
+
+  function addQuestion() {
+    if (lessonForm.questions.length >= 20) return;
+    draftRevisionRef.current += 1;
+    const id = globalThis.crypto?.randomUUID?.() || `question-${nextQuestionIdRef.current++}`;
+    setLessonForm((current) => ({ ...current, questions: [...current.questions, createTeacherQuestionDraft(id)] }));
+    resetTransientJourney();
+  }
+
+  function removeQuestion(questionId) {
+    if (lessonForm.questions.length <= 1) return;
+    draftRevisionRef.current += 1;
+    setLessonForm((current) => ({ ...current, questions: current.questions.filter((question) => question.id !== questionId) }));
+    resetTransientJourney();
+  }
+
   function buildRequests() {
     const accountScope = access.accountScope;
     const workspaceId = selectedProject?.id;
@@ -191,16 +223,18 @@ export default function TeacherExperiencePage() {
       || !workspaceId || !projects.some((project) => project.id === workspaceId)) {
       throw new Error("Choose a project and a class assigned to your verified Teacher account.");
     }
+    const learningObjectives = lessonForm.objectives.split("\n").map((item) => item.trim()).filter(Boolean);
+    const assessmentQuestions = buildTeacherAssessmentQuestions(lessonForm.questions, learningObjectives[0]);
     const lessonRequest = {
       title: lessonForm.title.trim(),
       subject: lessonForm.subject.trim(),
       gradeBand: lessonForm.gradeBand,
       durationMinutes: Number(lessonForm.durationMinutes),
-      learningObjectives: lessonForm.objectives.split("\n").map((item) => item.trim()).filter(Boolean),
+      learningObjectives,
       curriculumReferences: [],
       resources: [],
       activities: [{ title: lessonForm.activityTitle.trim(), instructions: lessonForm.activityInstructions.trim(), minutes: Number(lessonForm.activityMinutes) }],
-      assessment: { prompt: lessonForm.questionPrompt.trim(), expectedLearning: lessonForm.expectedLearning.trim() },
+      assessment: { prompt: assessmentQuestions[0].prompt, expectedLearning: assessmentQuestions[0].expectedLearning },
       accountScope,
       workspaceId,
       currentAccountScope: accountScope,
@@ -210,13 +244,7 @@ export default function TeacherExperiencePage() {
     const assessmentRequest = {
       title: `${lessonForm.title.trim()} — exit check`,
       directions: "Show your reasoning for each answer.",
-      questions: [{
-        objective: lessonRequest.learningObjectives[0],
-        prompt: lessonForm.questionPrompt.trim(),
-        expectedLearning: lessonForm.expectedLearning.trim(),
-        teacherAnswer: lessonForm.teacherAnswer.trim(),
-        points: Number(lessonForm.points),
-      }],
+      questions: assessmentQuestions,
       createdAt: lessonRequest.createdAt,
     };
     const context = {
@@ -493,13 +521,20 @@ export default function TeacherExperiencePage() {
             </section>
 
             <section className="teacher-experience__section" aria-labelledby="teacher-assessment-heading">
-              <div className="teacher-experience__section-heading"><span>03</span><div><h2 id="teacher-assessment-heading">Assessment and private answer</h2><p>Assessment answers are stored only in the Teacher-only artifact.</p></div></div>
-              <div className="teacher-experience__grid">
-                <label className="teacher-experience__wide">Question<input value={lessonForm.questionPrompt} onChange={(event) => updateField("questionPrompt", event.target.value)} required /></label>
-                <label className="teacher-experience__wide">Expected learning<textarea rows={2} value={lessonForm.expectedLearning} onChange={(event) => updateField("expectedLearning", event.target.value)} required /></label>
-                <label className="teacher-experience__wide teacher-experience__answer">Teacher answer<textarea rows={2} value={lessonForm.teacherAnswer} onChange={(event) => updateField("teacherAnswer", event.target.value)} required /></label>
-                <label>Points<input type="number" min="1" max="10" value={lessonForm.points} onChange={(event) => updateField("points", event.target.value)} required /></label>
+              <div className="teacher-experience__section-heading"><span>03</span><div><h2 id="teacher-assessment-heading">Assessment question bank</h2><p>Teacher answers are stored only in the Teacher-only artifact. Add 1–20 authored questions.</p></div></div>
+              <div className="teacher-experience__question-list" aria-label="Assessment questions">
+                {lessonForm.questions.map((question, index) => <fieldset className="teacher-experience__question" key={question.id}>
+                  <legend>Question {index + 1}</legend>
+                  <div className="teacher-experience__grid">
+                    <label className="teacher-experience__wide">Question prompt<input value={question.prompt} onChange={(event) => updateQuestion(question.id, "prompt", event.target.value)} required /></label>
+                    <label className="teacher-experience__wide">Expected learning<textarea rows={2} value={question.expectedLearning} onChange={(event) => updateQuestion(question.id, "expectedLearning", event.target.value)} required /></label>
+                    <label className="teacher-experience__wide teacher-experience__answer">Teacher answer<textarea rows={2} value={question.teacherAnswer} onChange={(event) => updateQuestion(question.id, "teacherAnswer", event.target.value)} required /></label>
+                    <label>Points<input type="number" min="1" max="10" value={question.points} onChange={(event) => updateQuestion(question.id, "points", event.target.value)} required /></label>
+                    <button className="teacher-experience__secondary teacher-experience__remove-question" type="button" onClick={() => removeQuestion(question.id)} disabled={lessonForm.questions.length <= 1}>Remove question</button>
+                  </div>
+                </fieldset>)}
               </div>
+              <div className="teacher-experience__question-controls"><span>{lessonForm.questions.length} of 20 questions</span><button className="teacher-experience__secondary" type="button" onClick={addQuestion} disabled={lessonForm.questions.length >= 20}>Add question</button></div>
               <p className="teacher-experience__privacy"><ShieldCheck size={16} aria-hidden="true" /> Student records and personal answers are not part of this workflow.</p>
             </section>
 
@@ -515,7 +550,7 @@ export default function TeacherExperiencePage() {
               ? <div className="teacher-experience__notice" role="status"><ShieldCheck size={18} aria-hidden="true" /><p>Safety review flags: {[...new Set([...(preview.lesson.metadata.safety.reviewReasons || []), ...(preview.assessment.metadata.safety.reviewReasons || [])])].join(", ")}. Review the content before classroom use.</p></div> : null}
             <div className="teacher-experience__outputs">
               <article><h3>{preview.lesson.title}</h3><p>{preview.lesson.content.subject} · {preview.lesson.content.gradeBand} · {preview.lesson.content.durationMinutes} minutes</p><h4>Objectives</h4><ul>{preview.lesson.content.learningObjectives.map((objective) => <li key={objective}>{objective}</li>)}</ul><h4>Activity</h4><p>{preview.lesson.content.activities[0]?.instructions}</p></article>
-              <article className="teacher-experience__private"><h3>Teacher-only answer key</h3><p>{preview.assessment.content.questions[0]?.prompt}</p><p><strong>Answer:</strong> {preview.assessment.content.questions[0]?.teacherAnswer}</p></article>
+              <article className="teacher-experience__private"><h3>Teacher-only answer key</h3><ol>{preview.assessment.content.questions.map((question, index) => <li key={`${index}-${question.prompt}`}><strong>{question.prompt}</strong><p>{question.expectedLearning}</p><p><strong>Answer:</strong> {question.teacherAnswer} ({question.points} points)</p></li>)}</ol></article>
               <article><h3>Student worksheet</h3><p>Checked to exclude teacher-answer fields.</p><ol>{preview.worksheet.content.questions.map((question, index) => <li key={`${index}-${question.prompt}`}>{question.prompt} ({question.points} points)</li>)}</ol></article>
             </div>
             <div className="teacher-experience__actions">

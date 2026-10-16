@@ -78,11 +78,16 @@ test("active Teacher page fences readiness and drafts to the signed-in account",
   assert.equal(shouldResetTeacherDraft("teacher-1", "teacher-2"), true);
   assert.equal(shouldResetTeacherDraft("teacher-1", "teacher-1"), false);
   assert.match(page, /previousAccountIdRef/);
-  assert.match(page, /setLessonForm\(\{ \.\.\.EMPTY_LESSON \}\)/);
+  assert.match(page, /setLessonForm\(createEmptyLessonForm\(\)\)/);
   assert.match(page, /setAccessAccountId\(""\)/);
   assert.match(page, /const currentAccess = accessIsCurrent/);
   assert.match(page, /currentAccess\.status === "ready" && projects\.length > 0/);
   assert.match(page, /accountRef\.current === operationAccountId && getAccountScope\(\) === operationAccountScope/);
+  assert.match(page, /buildTeacherAssessmentQuestions\(lessonForm\.questions, learningObjectives\[0\]\)/);
+  assert.match(page, /lessonForm\.questions\.map\(\(question, index\)/);
+  assert.match(page, /onClick=\{\(\) => removeQuestion\(question\.id\)\}/);
+  assert.match(page, /Add question/);
+  assert.match(page, /preview\.assessment\.content\.questions\.map/);
 });
 
 test("in-flight Teacher actions do not block the newly signed-in account or clear its lock", () => {

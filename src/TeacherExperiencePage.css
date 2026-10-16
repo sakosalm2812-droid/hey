@@ -129,6 +129,11 @@
 
 .teacher-experience__wide { grid-column: 1 / -1; }
 .teacher-experience__answer textarea { border-color: rgba(196, 169, 125, .42); }
+.teacher-experience__question-list { display: grid; gap: 14px; }
+.teacher-experience__question { min-width: 0; margin: 0; border: 1px solid rgba(255, 255, 255, .12); border-radius: 14px; padding: 16px; }
+.teacher-experience__question legend { padding: 0 7px; color: var(--accent, #c4a97d); font-weight: 700; }
+.teacher-experience__remove-question { align-self: end; }
+.teacher-experience__question-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; color: var(--text-secondary, #c4c4ca); font-size: 13px; }
 
 .teacher-experience__primary,
 .teacher-experience__secondary {
