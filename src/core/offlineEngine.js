@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from "./settingsRegistry.js";
-import { getAccountScope } from "./accountScope.js";
+import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 
 const LOCAL_STATES = Object.freeze({
   READY: "ready_local",
@@ -33,6 +33,25 @@ const MAX_SYNC_FIELDS = 128;
 const MAX_SYNC_FIELD_NAME_LENGTH = 128;
 const MAX_SYNC_STRING_LENGTH = 4096;
 const FORBIDDEN_SYNC_FIELDS = new Set(["__proto__", "prototype", "constructor"]);
+const LEGACY_OFFLINE_STORAGE_KEY = "hey_offline";
+const DEVICE_OFFLINE_STORAGE_KEY = "hey_offline_device_v1";
+const OFFLINE_STORAGE_VERSION = 2;
+const RESOURCE_BUDGET_LIMITS = Object.freeze({
+  cpu: [1, 100],
+  memory: [1, 1_048_576],
+  storage: [1, 1_048_576],
+  batteryFloor: [0, 100],
+});
+
+function mergeResourceBudget(current, candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return { ...current };
+  const next = { ...current };
+  for (const [key, [minimum, maximum]] of Object.entries(RESOURCE_BUDGET_LIMITS)) {
+    const value = candidate[key];
+    if (Number.isFinite(value) && value >= minimum && value <= maximum) next[key] = value;
+  }
+  return next;
+}
 
 function isRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -175,58 +194,143 @@ function generateOutboxId() {
 
 class OfflineEngine {
   constructor() {
-    this.localRuntime = {
-      state: LOCAL_STATES.READY,
-      modelPacks: new Map(),
-      resourceBudget: {
-        cpu: 50,
-        memory: 2048,
-        storage: 5120,
-        batteryFloor: getSetting("local.battery_floor") || 20,
-      },
-      cache: new Map(),
-      outbox: [],
-      lanCompute: { enabled: false, peers: [] },
+    this.deviceResourceBudget = {
+      cpu: 50,
+      memory: 2048,
+      storage: 5120,
+      batteryFloor: getSetting("local.battery_floor") || 20,
     };
+    this.accountScope = getAccountScope();
+    this.scopeEpoch = 0;
+    this.localRuntime = this.createRuntime();
     this.listeners = new Set();
+    this.unsubscribeAccountScope = subscribeAccountScope((_previous, next) => this.changeAccountScope(next));
     this.load();
     this.startResourceMonitor();
   }
 
-  load() {
+  createRuntime() {
+    return {
+      state: LOCAL_STATES.READY,
+      modelPacks: new Map(),
+      resourceBudget: { ...this.deviceResourceBudget },
+      cache: new Map(),
+      outbox: [],
+      lanCompute: { enabled: false, peers: [] },
+    };
+  }
+
+  captureScope() {
+    return { accountScope: this.accountScope, epoch: this.scopeEpoch, runtime: this.localRuntime };
+  }
+
+  isCurrentScope(capture) {
+    return Boolean(capture
+      && capture.accountScope === this.accountScope
+      && capture.accountScope === getAccountScope()
+      && capture.epoch === this.scopeEpoch
+      && capture.runtime === this.localRuntime);
+  }
+
+  changeAccountScope(nextScope) {
+    if (nextScope === this.accountScope) return;
+    this.scopeEpoch += 1;
+    this.accountScope = nextScope;
+    this.localRuntime = this.createRuntime();
+    this.load();
+  }
+
+  applyStoredState(parsed, scope) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    if (Object.hasOwn(parsed, "accountScope") && parsed.accountScope !== scope) return false;
+    if (parsed.storageVersion !== undefined && parsed.storageVersion !== OFFLINE_STORAGE_VERSION) return false;
+    if (Object.values(LOCAL_STATES).includes(parsed.state)) this.localRuntime.state = parsed.state;
+    if (parsed.modelPacks && typeof parsed.modelPacks === "object" && !Array.isArray(parsed.modelPacks)) {
+      for (const [id, pack] of Object.entries(parsed.modelPacks)) {
+        if (id && pack && typeof pack === "object" && !Array.isArray(pack)) this.localRuntime.modelPacks.set(id, pack);
+      }
+    }
+    if (Array.isArray(parsed.outbox)) this.localRuntime.outbox = parsed.outbox;
+    if (parsed.lanCompute && typeof parsed.lanCompute === "object" && !Array.isArray(parsed.lanCompute)) {
+      this.localRuntime.lanCompute = {
+        enabled: parsed.lanCompute.enabled === true,
+        peers: Array.isArray(parsed.lanCompute.peers) ? parsed.lanCompute.peers : [],
+      };
+    }
+    return true;
+  }
+
+  load(scope = this.accountScope) {
+    const capture = this.captureScope();
+    if (scope !== capture.accountScope || !this.isCurrentScope(capture)) return false;
     try {
-      const stored = localStorage.getItem("hey_offline");
+      const storage = globalThis.localStorage;
+      if (!storage || !this.isCurrentScope(capture)) return false;
+      const devicePreferences = storage.getItem(DEVICE_OFFLINE_STORAGE_KEY);
+      if (!this.isCurrentScope(capture)) return false;
+      if (devicePreferences) {
+        const parsedPreferences = JSON.parse(devicePreferences);
+        if (parsedPreferences?.resourceBudget) {
+          this.deviceResourceBudget = mergeResourceBudget(this.deviceResourceBudget, parsedPreferences.resourceBudget);
+          this.localRuntime.resourceBudget = { ...this.deviceResourceBudget };
+        }
+      }
+
+      const scopedKey = getAccountStorageKey("hey_offline", capture.accountScope);
+      let stored = storage.getItem(scopedKey);
+      if (!this.isCurrentScope(capture)) return false;
+      let migratingLegacy = false;
+      if (!stored && scope === "anonymous") {
+        stored = storage.getItem(LEGACY_OFFLINE_STORAGE_KEY);
+        if (!this.isCurrentScope(capture)) return false;
+        migratingLegacy = Boolean(stored);
+      }
       if (stored) {
         const parsed = JSON.parse(stored);
-        this.localRuntime.state = parsed.state || this.localRuntime.state;
-        if (parsed.modelPacks) Object.entries(parsed.modelPacks).forEach(([k, v]) => this.localRuntime.modelPacks.set(k, v));
-        if (parsed.resourceBudget) this.localRuntime.resourceBudget = { ...this.localRuntime.resourceBudget, ...parsed.resourceBudget };
-        if (parsed.outbox) this.localRuntime.outbox = parsed.outbox;
-        if (parsed.lanCompute) this.localRuntime.lanCompute = parsed.lanCompute;
+        if (!this.isCurrentScope(capture) || !this.applyStoredState(parsed, scope) || !this.isCurrentScope(capture)) return false;
+        if (migratingLegacy && parsed.resourceBudget && typeof parsed.resourceBudget === "object") {
+          this.deviceResourceBudget = mergeResourceBudget(this.deviceResourceBudget, parsed.resourceBudget);
+          this.localRuntime.resourceBudget = { ...this.deviceResourceBudget };
+        }
+        if (migratingLegacy && this.save(capture) && this.isCurrentScope(capture)) storage.removeItem(LEGACY_OFFLINE_STORAGE_KEY);
       }
+      return true;
     } catch (err) {
       console.warn("Failed to load offline engine:", err);
+      return false;
     }
   }
 
-  save() {
+  save(capture = this.captureScope()) {
+    if (!this.isCurrentScope(capture)) return false;
     try {
-      localStorage.setItem("hey_offline", JSON.stringify({
-        state: this.localRuntime.state,
-        modelPacks: Object.fromEntries(this.localRuntime.modelPacks),
-        resourceBudget: this.localRuntime.resourceBudget,
-        outbox: this.localRuntime.outbox,
-        lanCompute: this.localRuntime.lanCompute,
-      }));
+      const storage = globalThis.localStorage;
+      if (!storage) return false;
+      const serialized = JSON.stringify({
+        storageVersion: OFFLINE_STORAGE_VERSION,
+        accountScope: capture.accountScope,
+        state: capture.runtime.state,
+        modelPacks: Object.fromEntries(capture.runtime.modelPacks),
+        outbox: capture.runtime.outbox,
+        lanCompute: capture.runtime.lanCompute,
+      });
+      if (!this.isCurrentScope(capture)) return false;
+      storage.setItem(getAccountStorageKey("hey_offline", capture.accountScope), serialized);
+      if (!this.isCurrentScope(capture)) return false;
+      storage.setItem(DEVICE_OFFLINE_STORAGE_KEY, JSON.stringify({ resourceBudget: this.deviceResourceBudget }));
+      return true;
     } catch (err) {
       console.warn("Failed to save offline engine:", err);
+      return false;
     }
   }
 
   startResourceMonitor() {
     setInterval(() => {
+      const capture = this.captureScope();
       if (navigator.getBattery) {
         navigator.getBattery().then(battery => {
+          if (!this.isCurrentScope(capture)) return;
           if (battery.level * 100 < this.localRuntime.resourceBudget.batteryFloor) {
             this.notify("battery_low", { level: battery.level * 100, floor: this.localRuntime.resourceBudget.batteryFloor });
           }
@@ -256,6 +360,7 @@ class OfflineEngine {
   }
 
   async installModelPack(input) {
+    const capture = this.captureScope();
     const packId = generateModelPackId();
     const pack = {
       id: packId,
@@ -275,11 +380,16 @@ class OfflineEngine {
       createdAt: new Date().toISOString(),
     };
 
-    this.localRuntime.modelPacks.set(packId, pack);
-    this.save();
+    capture.runtime.modelPacks.set(packId, pack);
+    this.save(capture);
 
     try {
-      const response = await fetch(input.downloadUrl);
+      const downloadUrl = input.downloadUrl;
+      const expectedChecksum = input.checksum;
+      const modelType = input.type;
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+      const response = await fetch(downloadUrl);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       const reader = response.body.getReader();
       const contentLength = +response.headers.get("Content-Length");
       let received = 0;
@@ -287,50 +397,60 @@ class OfflineEngine {
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!this.isCurrentScope(capture)) return { error: "account_changed" };
         if (done) break;
         chunks.push(value);
         received += value.length;
         pack.progress = Math.round((received / contentLength) * 100);
-        this.localRuntime.modelPacks.set(packId, pack);
-        this.save();
+        capture.runtime.modelPacks.set(packId, pack);
+        this.save(capture);
+        if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       }
 
       const blob = new Blob(chunks);
       const checksum = await this.computeChecksum(blob);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       
-      if (checksum !== input.checksum) {
+      if (checksum !== expectedChecksum) {
         pack.state = LOCAL_STATES.FAILED;
         pack.error = "Checksum mismatch";
-        this.localRuntime.modelPacks.set(packId, pack);
-        this.save();
+        capture.runtime.modelPacks.set(packId, pack);
+        this.save(capture);
+        if (!this.isCurrentScope(capture)) return { error: "account_changed" };
         return { error: "Checksum mismatch" };
       }
 
       pack.state = LOCAL_STATES.VALIDATING;
-      this.localRuntime.modelPacks.set(packId, pack);
-      this.save();
+      capture.runtime.modelPacks.set(packId, pack);
+      this.save(capture);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
 
-      const valid = await this.validateModelPack(blob, input.type);
+      const valid = await this.validateModelPack(blob, modelType);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       if (!valid) {
         pack.state = LOCAL_STATES.FAILED;
         pack.error = "Validation failed";
-        this.localRuntime.modelPacks.set(packId, pack);
-        this.save();
+        capture.runtime.modelPacks.set(packId, pack);
+        this.save(capture);
+        if (!this.isCurrentScope(capture)) return { error: "account_changed" };
         return { error: "Validation failed" };
       }
 
       pack.state = LOCAL_STATES.AVAILABLE;
       pack.blob = blob;
-      this.localRuntime.modelPacks.set(packId, pack);
-      this.save();
+      capture.runtime.modelPacks.set(packId, pack);
+      this.save(capture);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
 
       this.notify("model_pack_installed", pack);
       return pack;
     } catch (error) {
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       pack.state = LOCAL_STATES.FAILED;
       pack.error = error.message;
-      this.localRuntime.modelPacks.set(packId, pack);
-      this.save();
+      capture.runtime.modelPacks.set(packId, pack);
+      this.save(capture);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       return { error: error.message };
     }
   }
@@ -356,7 +476,8 @@ class OfflineEngine {
   }
 
   setResourceBudget(budget) {
-    this.localRuntime.resourceBudget = { ...this.localRuntime.resourceBudget, ...budget };
+    this.deviceResourceBudget = mergeResourceBudget(this.deviceResourceBudget, budget);
+    this.localRuntime.resourceBudget = { ...this.deviceResourceBudget };
     setSetting("local.battery_floor", budget.batteryFloor);
     this.save();
     return this.localRuntime.resourceBudget;
@@ -432,22 +553,35 @@ class OfflineEngine {
   }
 
   async sendOutboxItem(item) {
+    const capture = this.captureScope();
+    if (!capture.runtime.outbox.includes(item)) return { error: "item_not_queued" };
     try {
-      await fetch(item.destination, {
+      const destination = item.destination;
+      const body = JSON.stringify(item.payload);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+      await fetch(destination, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(item.payload),
+        body,
       });
-      this.localRuntime.outbox.shift();
-      this.save();
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+      const itemIndex = capture.runtime.outbox.indexOf(item);
+      if (itemIndex < 0) return { error: "item_not_queued" };
+      capture.runtime.outbox.splice(itemIndex, 1);
+      this.save(capture);
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
       this.notify("outbox_sent", item);
+      return { success: true };
     } catch (error) {
+      if (!this.isCurrentScope(capture)) return { error: "account_changed" };
+      if (!capture.runtime.outbox.includes(item)) return { error: "item_not_queued" };
       item.attempts++;
       item.lastError = error.message;
       if (item.attempts >= 3) {
-        this.localRuntime.outbox.shift();
+        capture.runtime.outbox.splice(capture.runtime.outbox.indexOf(item), 1);
       }
-      this.save();
+      this.save(capture);
+      return { error: error.message };
     }
   }
 
