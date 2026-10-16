@@ -97,7 +97,7 @@ test("failure recording sends only scoped lease identifiers and accepts only a b
 });
 
 test("transport queue migration locks current device and credential before every mutation", async () => {
-  const sql = await readFile(new URL("../supabase/migrations/20261016000100_atomic_device_transport_credential_fence.sql", import.meta.url), "utf8");
+  const sql = await readFile(new URL("../supabase/migrations/20261016000200_atomic_device_transport_credential_fence.sql", import.meta.url), "utf8");
   for (const [name, signature] of [
     ["claim_hey_device_command", "uuid, uuid, integer, text"],
     ["renew_hey_device_command_lease", "uuid, uuid, uuid, uuid, text, integer, text"],
