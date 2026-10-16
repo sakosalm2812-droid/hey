@@ -362,8 +362,8 @@ export async function runFusionChatRequest({
     calls: 0,
     costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0, providerAttempts: Object.freeze([]) }),
   };
-  const selectedProviders = pricedProviders.slice(0, 2);
-  if (selectedProviders.reduce((total, provider) => total + provider.reservedCostUsd, 0) > pricingConfig.budgetUsd) {
+  const selectedProviders = pricedProviders.slice(0, 4);
+  if (selectedProviders.slice(0, 2).reduce((total, provider) => total + provider.reservedCostUsd, 0) > pricingConfig.budgetUsd) {
     return {
       status: "budget_exhausted",
       reason: "independent_calls_exceed_server_budget",
@@ -375,13 +375,13 @@ export async function runFusionChatRequest({
     return { status: "unconfigured", reason: "authorization_revalidation_failed" };
   }
 
-  const providerModels = selectedProviders.map((provider, priority) => ({
+  const providerModels = selectedProviders.map((provider, index) => ({
     id: provider.model,
     providerId: provider.id,
     providerName: provider.id,
     capabilities: ["chat"],
     local: false,
-    priority,
+    priority: index + 1,
     maxCostUsd: provider.reservedCostUsd,
   }));
 
@@ -401,7 +401,7 @@ export async function runFusionChatRequest({
     providerModels,
     signal,
     isCurrent,
-    authorizeProviderCall: async ({ accountScope, signal: authoritySignal }) => {
+    authorizeProviderCall: async ({ providerId, accountScope, signal: authoritySignal }) => {
       const currentEntitlements = typeof getCurrentEntitlements === "function"
         ? await getCurrentEntitlements(accountScope, authoritySignal)
         : entitlements;
@@ -410,7 +410,7 @@ export async function runFusionChatRequest({
       }
       const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
       return currentGrants.has("hey.fusion") && currentGrants.has("provider.remote") &&
-        selectedProviders.every((provider) => currentGrants.has(`provider:${provider.id}`));
+        currentGrants.has(`provider:${providerId}`);
     },
     maxCostUsd: pricingConfig.budgetUsd,
     minConfidence: pricingConfig.minConfidence,
@@ -459,7 +459,7 @@ export async function runFusionChatRequest({
           }
           const currentGrants = new Set(currentEntitlements.map((value) => value.toLowerCase()));
           const authorized = currentGrants.has("hey.fusion") && currentGrants.has("provider.remote") &&
-            selectedProviders.every((selectedProvider) => currentGrants.has(`provider:${selectedProvider.id}`));
+            currentGrants.has(`provider:${provider.id}`);
           if (!authorized) authorityFailure = "revoked";
         } catch {
           if (!authorityController.signal.aborted) authorityFailure = "unavailable";

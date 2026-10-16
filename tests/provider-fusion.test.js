@@ -11,11 +11,12 @@ test("the canonical HEY provider API exposes the fusion contract and modes", () 
   assert.equal(HEY.providers.fusionModes, FUSION_MODES);
 });
 
-function providers({ secondCost = 0.02, withLocal = false, priced = true } = {}) {
+function providers({ secondCost = 0.02, withLocal = false, priced = true, withThird = false } = {}) {
   clearProviders();
   setAccountScope("fixture-a");
   const grants = [
     "provider.remote", "provider:fusion-primary", "provider:fusion-checker",
+    ...(withThird ? ["provider:fusion-backup"] : []),
     ...(withLocal ? ["provider.local", "provider:fusion-local"] : []),
   ].map((permission) => ({ permission, status: "granted", scope: "account" }));
   seedPermissions(grants, "fixture-a");
@@ -25,6 +26,14 @@ function providers({ secondCost = 0.02, withLocal = false, priced = true } = {})
     capabilities: ["chat", "reasoning"],
     models: [{ id: "primary-v1", priority: 1, ...(priced ? { maxCostUsd: 0.02 } : {}) }],
   });
+  if (withThird) {
+    registerProvider({
+      id: "fusion-backup",
+      name: "Fixture Backup",
+      capabilities: ["chat", "reasoning"],
+      models: [{ id: "backup-v1", priority: 3, maxCostUsd: 0.02 }],
+    });
+  }
   registerProvider({
     id: "fusion-checker",
     name: "Fixture Checker",
@@ -281,6 +290,67 @@ test("Fusion returns no partial answer when the independent checker fails", asyn
   });
   assert.deepEqual(calls, ["fusion-primary", "fusion-checker"]);
   assert.equal(JSON.stringify(response).includes("private provider failure"), false);
+});
+
+test("Fusion retries a failed checker with another permitted provider", async () => {
+  providers({ withThird: true });
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    maxCostUsd: 0.07,
+    permissions: [...base.permissions, "provider:fusion-backup"],
+    mode: FUSION_MODES.FUSION,
+    invoke: async ({ providerId, role }) => {
+      calls.push({ providerId, role });
+      if (providerId === "fusion-checker") throw new Error("private checker outage");
+      return {
+        text: "42",
+        confidence: 0.95,
+        evidence: role === "checker" ? checkedEvidence("42") : evidence("42"),
+        costUsd: 0.005,
+      };
+    },
+  });
+  assert.equal(response.status, "complete");
+  assert.equal(response.answer, "42");
+  assert.deepEqual(response.providers.map(({ providerId }) => providerId), ["fusion-primary", "fusion-backup"]);
+  assert.deepEqual(calls, [
+    { providerId: "fusion-primary", role: "primary" },
+    { providerId: "fusion-checker", role: "checker" },
+    { providerId: "fusion-backup", role: "checker" },
+  ]);
+  assert.equal(JSON.stringify(response).includes("private checker outage"), false);
+});
+
+test("Fusion retries a checker that returns an unconfirmed candidate", async () => {
+  providers({ withThird: true });
+  const calls = [];
+  const response = await runProviderFusion({
+    ...base,
+    maxCostUsd: 0.07,
+    permissions: [...base.permissions, "provider:fusion-backup"],
+    mode: FUSION_MODES.FUSION,
+    invoke: async ({ providerId, role }) => {
+      calls.push({ providerId, role });
+      if (providerId === "fusion-checker") {
+        return { text: "43", confidence: 0.95, evidence: checkedEvidence("43", false), costUsd: 0.005 };
+      }
+      return {
+        text: "42",
+        confidence: 0.95,
+        evidence: role === "checker" ? checkedEvidence("42") : evidence("42"),
+        costUsd: 0.005,
+      };
+    },
+  });
+  assert.equal(response.status, "complete");
+  assert.equal(response.answer, "42");
+  assert.deepEqual(response.providers.map(({ providerId }) => providerId), ["fusion-primary", "fusion-backup"]);
+  assert.deepEqual(calls, [
+    { providerId: "fusion-primary", role: "primary" },
+    { providerId: "fusion-checker", role: "checker" },
+    { providerId: "fusion-backup", role: "checker" },
+  ]);
 });
 
 test("Fusion withholds a fallback when the primary fails and reports one success plus one failure", async () => {

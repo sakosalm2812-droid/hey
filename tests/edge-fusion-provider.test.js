@@ -214,9 +214,55 @@ test("Fusion dispatches two mocked provider HTTP requests and returns only a che
   assert.equal(calls[0].init.body.includes("Return only JSON"), true);
   assert.equal(calls[1].init.body.includes("Independently verify its answer"), true);
   assert.equal(calls[1].init.body.includes("The answer is 42."), true);
-  assert.equal(JSON.parse(calls[1].init.body).messages.at(-1).role, "user");
+  const checkerBody = JSON.parse(calls[1].init.body);
+  if (calls[1].providerId === "gemini") {
+    assert.equal(checkerBody.contents[0].parts[0].text.includes("The answer is 42."), true);
+  } else {
+    assert.equal(checkerBody.messages.at(-1).role, "user");
+  }
   assert.equal(calls[1].init.body.includes('"claimId":"verification"'), false, "the candidate evidence itself remains untrusted input");
   assert.equal(result.accountScope, undefined);
+});
+
+test("Fusion recovers checker verification through a third permitted provider", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") return new Response("private vendor error", { status: 503 });
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: threeProviderEntitlements,
+    attempts: threeProviderAttempts,
+    pricingConfig: threeProviderPricing,
+    messages,
+    fetchImpl,
+  });
+  assert.equal(result.status, "complete");
+  assert.equal(result.answer, "The answer is 42.");
+  assert.deepEqual(calls, ["openai", "gemini", "groq"]);
+  assert.deepEqual(result.providers.map(({ providerId }) => providerId), ["openai", "groq"]);
+  assert.deepEqual(result.costReceipt.providerAttempts.map(({ providerId, role }) => ({ providerId, role })), [
+    { providerId: "openai", role: "primary" },
+    { providerId: "gemini", role: "checker" },
+    { providerId: "groq", role: "checker" },
+  ]);
+  assert.equal(JSON.stringify(result).includes("private vendor error"), false);
 });
 
 test("oversized provider response streams are cancelled before the body is fully buffered", async () => {
@@ -691,8 +737,8 @@ test("a failed checker returns a bounded cost receipt with unknown usage marked 
   assert.equal(result.costReceipt.callsDispatched, 2);
   assert.equal(result.costReceipt.callsMetered, 1);
   assert.deepEqual(result.costReceipt.providerAttempts, [
-    { providerId: "gemini", modelId: "fixture-gemini", role: "primary", usageStatus: "unknown" },
-    { providerId: "openai", modelId: "fixture-openai", role: "fallback", usageStatus: "reported" },
+    { providerId: "openai", modelId: "fixture-openai", role: "primary", usageStatus: "reported" },
+    { providerId: "gemini", modelId: "fixture-gemini", role: "checker", usageStatus: "unknown" },
   ]);
   assert.ok(Number.isSafeInteger(result.costReceipt.fusionElapsedMs));
   assert.ok(result.costReceipt.fusionElapsedMs >= 0 && result.costReceipt.fusionElapsedMs <= 40_000);

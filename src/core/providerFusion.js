@@ -12,6 +12,7 @@ export const FUSION_MODES = Object.freeze({
 });
 
 const MAX_MODELS = 2;
+const MAX_FUSION_PROVIDER_ATTEMPTS = 4;
 const MAX_PROMPT_CHARS = 20_000;
 const MAX_OUTPUT_CHARS = 8_000;
 const MAX_CONFLICTS = 16;
@@ -301,7 +302,7 @@ export async function runProviderFusion({
   }).filter((model, index, models) => models.findIndex((candidate) => candidate.providerId === model.providerId) === index);
   const selected = mode === FUSION_MODES.MANUAL
     ? candidates.slice(0, 1)
-    : candidates.slice(0, MAX_MODELS);
+    : candidates.slice(0, mode === FUSION_MODES.FUSION ? MAX_FUSION_PROVIDER_ATTEMPTS : MAX_MODELS);
 
   if (!selected.length && sensitive) {
     return result("denied", { reason: "sensitive_prompt_requires_permitted_local_provider" });
@@ -321,14 +322,15 @@ export async function runProviderFusion({
   let primaryFailed = false;
   let independentCheckRequired = mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck;
   const withPartialProviderFailure = (status, details) => {
-    if (!independentCheckRequired || outputs.length !== 1 || dispatchedCalls !== 2) return result(status, details);
+    const failedResponses = Math.max(0, dispatchedCalls - outputs.length);
+    if (!independentCheckRequired || !outputs.length || !failedResponses) return result(status, details);
     return result(status, {
       ...details,
       partialProviderFailure: Object.freeze({
         policy: "require_independent_confirmation",
         disposition: "answer_withheld",
-        successfulResponses: 1,
-        failedResponses: 1,
+        successfulResponses: outputs.length,
+        failedResponses,
       }),
     });
   };
@@ -354,10 +356,9 @@ export async function runProviderFusion({
   };
   for (let index = 0; index < planned.length; index += 1) {
     const model = planned[index];
-    const shouldCall = index === 0 || (primaryFailed || (
-      mode === FUSION_MODES.FUSION || requireIndependentCheck ||
-      mode === FUSION_MODES.HYBRID || outputs[0]?.confidence < minConfidence
-    ));
+    const shouldCall = index === 0 || (primaryFailed && !outputs.length) ||
+      (independentCheckRequired && outputs.length < 2) ||
+      (!independentCheckRequired && outputs.length === 1 && outputs[0]?.confidence < minConfidence);
     if (!shouldCall) break;
     if (signal?.aborted || !isScopeCurrent()) return result("cancelled");
     const elapsedMs = performance.now() - startedAt;
@@ -398,7 +399,7 @@ export async function runProviderFusion({
     let raw;
     try {
       dispatchedCalls += 1;
-      const isCheckerCall = outputs.length > 0 && !primaryFailed;
+      const isCheckerCall = outputs.length > 0;
       const candidate = isCheckerCall ? Object.freeze({
         providerId: outputs[0].providerId,
         modelId: outputs[0].modelId,
@@ -409,7 +410,7 @@ export async function runProviderFusion({
       raw = await invokeWithTimeout(invoke, {
         providerId: model.providerId,
         modelId: model.id,
-        role: isCheckerCall ? "checker" : primaryFailed ? "fallback" : "primary",
+        role: isCheckerCall ? "checker" : index > 0 || primaryFailed ? "fallback" : "primary",
         candidate,
         prompt,
         accountScope,
@@ -430,9 +431,13 @@ export async function runProviderFusion({
           : result("time_budget_exhausted", { calls: dispatchedCalls, reservedCostUsd });
       }
       if (error?.providerTimeout && outputs.length && independentCheckRequired) {
+        if (mode === FUSION_MODES.FUSION && index + 1 < planned.length) continue;
         return withPartialProviderFailure("verification_unavailable", { reason: "provider_timeout", calls: dispatchedCalls, reservedCostUsd });
       }
-      if (outputs.length) break;
+      if (outputs.length) {
+        if (mode === FUSION_MODES.FUSION && index + 1 < planned.length) continue;
+        break;
+      }
       primaryFailed = true;
       continue;
     }
@@ -451,27 +456,39 @@ export async function runProviderFusion({
     }
     const parsedOutput = parseProviderOutput(raw, estimate);
     if (!parsedOutput) {
+      if (mode === FUSION_MODES.FUSION && outputs.length && index + 1 < planned.length) continue;
       return withPartialProviderFailure("provider_contract_invalid", { calls: dispatchedCalls, reservedCostUsd });
     }
     if (!parsedOutput.evidence.length) {
+      if (mode === FUSION_MODES.FUSION && outputs.length && index + 1 < planned.length) continue;
       return withPartialProviderFailure("inconclusive", { reason: "candidate_evidence_missing", calls: dispatchedCalls, reservedCostUsd });
     }
-    if (index === 0 && !primaryFailed) {
+    if (!outputs.length) {
       if (mode === FUSION_MODES.FUSION || mode === FUSION_MODES.HYBRID || requireIndependentCheck || parsedOutput.confidence < minConfidence) {
         independentCheckRequired = true;
-        if (!hasBoundAnswerEvidence(parsedOutput)) {
-          return result("provider_contract_invalid", { reason: "candidate_answer_not_bound_to_evidence", calls: dispatchedCalls, reservedCostUsd });
-        }
       }
-    } else if (independentCheckRequired || primaryFailed) {
-      if (!hasBoundAnswerEvidence(parsedOutput)) {
-        return withPartialProviderFailure("provider_contract_invalid", {
-          reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "checker_answer_not_bound_to_evidence",
+      if ((independentCheckRequired || primaryFailed) && !hasBoundAnswerEvidence(parsedOutput)) {
+        if (mode === FUSION_MODES.FUSION && planned.length - index >= 3) {
+          primaryFailed = true;
+          continue;
+        }
+        return result("provider_contract_invalid", {
+          reason: primaryFailed ? "fallback_answer_not_bound_to_evidence" : "candidate_answer_not_bound_to_evidence",
           calls: dispatchedCalls,
           reservedCostUsd,
         });
       }
-      if (!primaryFailed && !hasConfirmedVerificationEvidence(parsedOutput)) {
+    } else if (independentCheckRequired) {
+      if (!hasBoundAnswerEvidence(parsedOutput)) {
+        if (mode === FUSION_MODES.FUSION && index + 1 < planned.length) continue;
+        return withPartialProviderFailure("provider_contract_invalid", {
+          reason: "checker_answer_not_bound_to_evidence",
+          calls: dispatchedCalls,
+          reservedCostUsd,
+        });
+      }
+      if (!hasConfirmedVerificationEvidence(parsedOutput)) {
+        if (mode === FUSION_MODES.FUSION && index + 1 < planned.length) continue;
         return withPartialProviderFailure("provider_contract_invalid", {
           reason: "checker_verification_not_confirmed",
           calls: dispatchedCalls,
