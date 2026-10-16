@@ -1,3 +1,52 @@
+## Active coordinator checkpoint — 2026-10-16 (Asia/Baghdad)
+
+Coordinator branch: `codex/resume-emergency-2026-10-14`. Integrated HEAD before this handoff update: `c62f076dec595a52a50c2adc09a8f88c4e24331d` (includes `1e83914` Space recovery and `c62f076` Tool Library lifecycle controls). Remote coordinator checkpoint before this batch: `2f7e0c889506a8c1be75384ff7cbfd2a91b29acb`. Ten commits ahead of remote; docs checkpoint will be committed and pushed after this update. Preserve untracked `docs/requirements/v3-agent-pack/` untouched.
+
+### Latest integration batch and evidence
+
+- Space missing-primary recovery: `014fae9` (`codex/space-backend-contract-gap`) integrated as `1e83914`. When the primary Spaces record is absent but a valid recovery snapshot remains, reads fail safely without replacing that snapshot; a preview requires explicit confirmation; failed writes preserve both records; malformed/foreign snapshots fail closed. Existing purpose-based Space/tutorial recommendations remain intact. These cases are included in the combined focused suite below.
+- Tool Library lifecycle controls: `48d7fb0` (`codex/tool-library-lifecycle-a0df523`) integrated as `c62f076`. UI now exposes guarded start/stop session controls from canonical lifecycle contract, account scope, declared actions, supported status, readiness, permission, and confirmation. Accessor-bearing lifecycle data is read without invoking getters. Lifecycle and UI cases are included in the combined focused suite below.
+- Combined focused Space + Tool Library suite passed **48/48**.
+- Full `npm test`: **851/851** passed.
+- `npm run lint`: passed (exit 0).
+- `npm run build`: passed, **2,780 modules**; sitemap is skipped without `SITE_URL`; known mixed static/dynamic `contextManager.js` warning remains.
+- `npm run smoke:spa`: passed for `/login`, `/download`, and built entry bundle at `http://127.0.0.1:4173/` (`/assets/index-DsiD5Vas.js`). This is route-delivery evidence only.
+- `git diff --check`: passed.
+
+### Current specialist tasks and checkpoints
+
+All 11 existing specialist Codex tasks were explicitly resumed concurrently with GPT-6 Luna requested where available. Each was told to inspect latest coordinator handoff and preserve integrated work, select a new concrete gap, implement/test/commit, and return exact evidence. Current tasks were idle immediately before these follow-ups; this checkpoint records them as resumed/in progress, with outcomes pending.
+
+| Specialist | Codex task reference | Latest known source branch / commit | Coordinator state |
+|---|---|---|---|
+| Frontend Director | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/frontend-followup-6dd5c54` / `2d17a50` | Earlier first-run purpose setup integrated at `a0df523`, downstream recommendation integration at `8bf1fd1`; new continuation dispatched, receipt pending. |
+| Onboarding & Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-backend-contract-gap` / `014fae9` | Latest missing-primary recovery integrated at `1e83914`; continuation dispatched, receipt pending. |
+| Universal Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-lifecycle-a0df523` / `48d7fb0` | Latest lifecycle controls integrated at `c62f076`; continuation dispatched, receipt pending. |
+| Edge & Everywhere | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-lease-floor-6dd5c54` / `fc6d7a1` | Lease floor and idempotency integrated earlier; migration/database verification still blocked by no live service; continuation dispatched, receipt pending. |
+| Gesture Control | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-selected-camera-recovery` / `7070a73` | Calibration and saved-camera recovery integrated; physical camera remains unverified; continuation dispatched, receipt pending. |
+| Flow & Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/dictation-edit-preview-a0df523` / `e7457dd` | Cancellation/account fencing integrated at `29cf85b`; actual external-app insertion remains unverified; continuation dispatched, receipt pending. |
+| VoiceOS & Computer Control | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-lifecycle-6dd5c54` / `35da8fa` | Typed/spoken cancellation integrated at `abb211c`; real OS execution remains unverified; continuation dispatched, receipt pending. |
+| Teacher Experience | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-feature-6dd5c54` / `9858427` | Standalone handouts integrated at `9d92b81`; real Forge/Auth remains unverified; continuation dispatched, receipt pending. |
+| HEY One Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-evaluation-receipt-a0df523` / `77ba1bb` | Response-error cancellation and independent evaluation attestation integrated; live model evaluation remains unverified; continuation dispatched, receipt pending. |
+| UltraSparse Research | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-adversarial-benchmark` / `ffcd0d1` | Top-k parity and adversarial benchmark integrated; synthetic routing only, no production inference claim; continuation dispatched, receipt pending. |
+| Fusion Multi-Model | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-partial-failure` / `3c587ed` | Provider attribution and withheld partial failures integrated at `5c69c49`; no live provider/billing claim; continuation dispatched, receipt pending. |
+
+### Product proof and blockers
+
+- Local app URL is `http://127.0.0.1:5175` (launch from this checkout with `npm run dev -- --host 127.0.0.1 --port 5175`). Browser inspection previously rendered `/download` and showed the truthful web/native target statuses. Current build route smoke establishes client route delivery only.
+- `/login` disables sign-in because `VITE_SUPABASE_URL` and the public Supabase anon key are not configured. Authenticated feature journeys remain **UNVERIFIED**.
+- Live Supabase/Forge/PostgreSQL, provider inference and billing, native apps, physical camera/microphone permissions and production deployment remain **UNVERIFIED**. Do not label these features complete based on mocks or source tests.
+- No uncommitted tracked changes. No unresolved cherry-pick. Worker branches and worktrees must remain preserved.
+
+### Exact next actions
+
+1. Collect resumed worker receipts without repeating completed work. Inspect each new source diff and its base before integration; preserve coordinator improvements if branches are stale.
+2. Integrate safe commits in small batches; run their focused tests and then full tests, lint, build, SPA smoke, and diff check.
+3. Refresh `docs/HEY_STEP_STATUS.md` only from verified code/test evidence; leave steps In progress/Incomplete until each required real-app capability chain is demonstrated.
+4. Refresh this handoff with each worker commit, coordinator SHA, test result, active task, blockers, and exact next action; commit and push every verified checkpoint.
+5. Obtain usable Supabase project configuration/provider credentials/device targets before attempting the currently blocked production-backed journeys. Until then, report them UNVERIFIED.
+
+---
 ## Current authoritative handoff — 2026-10-16 (Asia/Baghdad)
 
 Coordinator checkout: `C:\Users\DELL\Documents\Codex\2026-10-14\hey-emergency-continuation-resume-execution-the\work\hey`
