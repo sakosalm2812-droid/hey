@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 
-import { readProviderJson } from "../supabase/functions/hey/providerResponse.js";
+import { cancelProviderResponse, readProviderJson } from "../supabase/functions/hey/providerResponse.js";
 import { parseProviderSelection, resolveProviderSelection, snapshotProviderAttempts } from "../supabase/functions/hey/providerCatalog.js";
 
 const attempts = snapshotProviderAttempts([
@@ -29,6 +29,23 @@ test("oversized streamed provider errors are cancelled instead of fully buffered
   });
   assert.deepEqual(await readProviderJson(new Response(body), 16), { status: "too_large" });
   assert.equal(cancelled, true);
+});
+
+test("provider HTTP error bodies are cancelled without awaiting upstream cleanup", () => {
+  let cancelRequested = false;
+  let pullCount = 0;
+  const response = new Response(new ReadableStream({
+    pull() { pullCount += 1; },
+    cancel() {
+      cancelRequested = true;
+      return new Promise(() => {});
+    },
+  }, { highWaterMark: 0 }), { status: 429 });
+
+  cancelProviderResponse(response);
+
+  assert.equal(cancelRequested, true);
+  assert.equal(pullCount, 0, "the provider diagnostic body is never read");
 });
 
 test("a stalled provider body times out promptly even when upstream cancellation never settles", async () => {
@@ -78,6 +95,7 @@ test("chat handles bad provider bodies as recoverable failures while exact selec
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   const providerCall = route.slice(route.indexOf("async function callProvider"), route.indexOf("function shouldSearch"));
   assert.match(route, /readProviderJson\(response, undefined, \{/);
+  assert.match(providerCall, /if \(!response\.ok\) \{\s*cancelProviderResponse\(response\);[\s\S]*?continue;\s*\}\s*const parsedResponse = await readProviderJson/);
   assert.match(route, /parsedResponse\.status !== "ok"[\s\S]*?continue;/);
   assert.match(route, /readProviderJson\(response, undefined, \{[\s\S]*?signal,[\s\S]*?timeoutMs: Math\.max/);
   assert.match(route, /callProvider\(messages, 1200, chatProviderAttempts, authorizeChatProvider, request\.signal\)/);
@@ -85,6 +103,6 @@ test("chat handles bad provider bodies as recoverable failures while exact selec
   assert.match(route, /request\.signal\.aborted\) return jsonResponse\(\{ error: "The provider request was cancelled"/);
   assert.match(route, /chatProviderAttempts = \[selection\.attempt\]/);
   assert.match(route, /if \(authorizeProvider && !await authorizeProvider\(provider\)\)[\s\S]*?const response = provider\.id/);
-  assert.match(route, /if \(response\.ok\) \{[\s\S]*?const stillAuthorized = await authorizeProvider\(provider\)/);
+  assert.match(route, /const stillAuthorized = await authorizeProvider\(provider\)/);
   assert.doesNotMatch(providerCall, /data\?\.error\?\.message/);
 });

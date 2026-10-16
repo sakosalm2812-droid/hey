@@ -1,7 +1,18 @@
 const MAX_PROVIDER_RESPONSE_BYTES = 1_000_000;
 
+function cancelQuietly(stream) {
+  try {
+    const cancellation = stream?.cancel?.();
+    if (cancellation && typeof cancellation.catch === "function") void cancellation.catch(() => {});
+  } catch { /* Upstream cleanup must not delay a bounded failure path. */ }
+}
+
+export function cancelProviderResponse(response) {
+  cancelQuietly(response?.body);
+}
+
 function cancelBody(reader) {
-  try { void Promise.resolve(reader.cancel()).catch(() => {}); } catch { /* The stream may already be closed. */ }
+  cancelQuietly(reader);
 }
 
 /** Read provider JSON with a hard byte cap; malformed and oversized bodies fail closed. */

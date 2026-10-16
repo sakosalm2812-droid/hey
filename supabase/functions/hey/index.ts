@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
-import { readProviderJson } from "./providerResponse.js";
+import { cancelProviderResponse, readProviderJson } from "./providerResponse.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
 import {
   filterEntitledProviderAttempts,
@@ -136,6 +136,13 @@ async function callProvider(
           body: JSON.stringify({ model: provider.model, messages, temperature: 0.7, max_tokens: maxTokens }),
         }, remaining, signal);
 
+      if (!response.ok) {
+        cancelProviderResponse(response);
+        lastError = `${provider.id}: HTTP ${response.status}`;
+        console.error("HEY provider returned an error", provider.id, response.status);
+        continue;
+      }
+
       const parsedResponse = await readProviderJson(response, undefined, {
         signal,
         timeoutMs: Math.max(1, Math.min(18_000, deadline - Date.now())),
@@ -149,23 +156,19 @@ async function callProvider(
         continue;
       }
       const data = parsedResponse.data;
-      if (response.ok) {
+      if (signal?.aborted) {
+        throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
+      }
+      if (authorizeProvider) {
+        const stillAuthorized = await authorizeProvider(provider);
+        if (!stillAuthorized) {
+          throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
+        }
         if (signal?.aborted) {
           throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
         }
-        if (authorizeProvider) {
-          const stillAuthorized = await authorizeProvider(provider);
-          if (!stillAuthorized) {
-            throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
-          }
-          if (signal?.aborted) {
-            throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
-          }
-        }
-        return { data, providerId: provider.id, model: provider.model };
       }
-      lastError = `${provider.id}: HTTP ${response.status}`;
-      console.error("HEY provider returned an error", provider.id, response.status);
+      return { data, providerId: provider.id, model: provider.model };
     } catch (error) {
       if (signal?.aborted) throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
       if (error?.providerEntitlementDenied || error?.providerAuthorizationUnavailable || error?.providerRequestCancelled) throw error;
