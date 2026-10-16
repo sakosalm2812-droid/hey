@@ -335,7 +335,7 @@ Deno.serve(async (request) => {
       try {
         let response: Response;
         if (attempt.id === "gemini") {
-          response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${attempt.model}:generateContent`, {
+          response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(attempt.model)}:generateContent`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-goog-api-key": attempt.key },
             redirect: "error",

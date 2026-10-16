@@ -374,7 +374,7 @@ test("primary cannot forge checker provenance with its own verification claim", 
 test("Edge chat explains verification, time, cost, and provider-contract failures without leaking details", async () => {
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   assert.match(route, /models\/\$\{provider\.model\}:generateContent/);
-  assert.match(route, /models\/\$\{attempt\.model\}:generateContent/);
+  assert.match(route, /models\/\$\{encodeURIComponent\(attempt\.model\)\}:generateContent/);
   assert.match(route, /"x-goog-api-key": provider\.key/);
   assert.match(route, /"x-goog-api-key": attempt\.key/);
   assert.equal([...route.matchAll(/"x-goog-api-key": (?:provider|attempt)\.key[\s\S]{0,80}?redirect: "error"/g)].length, 2);
