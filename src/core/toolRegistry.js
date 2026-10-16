@@ -435,22 +435,31 @@ export function startToolLibraryEntry(name, input, context = {}) {
   const identity = resolveToolAccount(context);
   if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
   if (tool.metadata.lifecycle?.start !== true) {
+    if (identity) appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "unsupported", at: new Date().toISOString() });
     return { success: false, status: "unsupported", error: `Tool ${name} does not supply start behavior.` };
   }
   if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
 
-  const permission = tool.metadata.permission || tool.metadata.permissions?.[0];
+  const permissions = declaredToolPermissions(tool.metadata);
+  if (permissions.length > 1) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "unsupported_authorization", at: new Date().toISOString() });
+    return { success: false, status: "unsupported_authorization", error: "This tool requires multiple permissions, but the current canonical execution path can authorize only one." };
+  }
+  const permission = permissions[0] || null;
   if (!permission || !hasPermission(permission, "account", identity.accountId)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "denied", at: new Date().toISOString() });
     return { success: false, status: "denied", error: "Canonical account permission is required to start this tool." };
   }
   const catalogEntry = listToolCatalog({ platform: context.platform || "web", adapter: context.adapter || null }).find((entry) => entry.name === name);
   if (catalogEntry?.status !== CAPABILITY_STATUS.supported) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: catalogEntry?.status || CAPABILITY_STATUS.unsupported, at: new Date().toISOString() });
     return { success: false, status: catalogEntry?.status || CAPABILITY_STATUS.unsupported, error: `Tool ${name} is not supported on ${context.platform || "web"}.` };
   }
 
   const key = sessionKey(identity.accountId, name);
   const current = activeToolSessions.get(key);
   if (current && ["starting", "running", "stopping"].includes(current.status)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "conflict", at: new Date().toISOString() });
     return { success: false, status: "conflict", error: "This account already has an active run for this tool." };
   }
 
@@ -503,13 +512,18 @@ export function stopToolLibraryEntry(name, sessionId, context = {}) {
   const identity = resolveToolAccount(context);
   if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
   if (tool.metadata.lifecycle?.stop !== true) {
+    if (identity) appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "unsupported", at: new Date().toISOString() });
     return { success: false, status: "unsupported", error: `Tool ${name} does not supply stop behavior.` };
   }
   if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
   const key = sessionKey(identity.accountId, name);
   const session = activeToolSessions.get(key);
-  if (!session || session.id !== sessionId) return { success: false, status: "not_found", error: "Active tool run not found for this account." };
+  if (!session || session.id !== sessionId) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "not_found", at: new Date().toISOString() });
+    return { success: false, status: "not_found", error: "Active tool run not found for this account." };
+  }
   if (!["starting", "running"].includes(session.status)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: session.status, at: new Date().toISOString() });
     return { success: false, status: session.status, error: "Tool run is no longer stoppable." };
   }
   session.status = "stopping";

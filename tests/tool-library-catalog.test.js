@@ -434,10 +434,44 @@ test("lifecycle start is denied after permission revocation and never dispatches
     const revoked = startToolLibraryEntry(name, {}, { user: { id: "revoked-lifecycle-account", plan: "elite", entitlements: ["elite"] } });
     assert.equal(revoked.success, false);
     assert.equal(revoked.status, "denied");
+    const deniedActivity = getToolLifecycleContract(name, { user: { id: "revoked-lifecycle-account" } }).activity;
+    assert.deepEqual(deniedActivity.map(({ status }) => status), ["denied"], "permission failures remain visible in account-scoped activity");
+    const forged = startToolLibraryEntry(name, {}, { user: { id: "another-account", plan: "elite", entitlements: ["elite"] } });
+    assert.equal(forged.status, "denied");
+    assert.deepEqual(getToolLifecycleContract(name, { user: { id: "revoked-lifecycle-account" } }).activity.map(({ status }) => status), ["denied"], "a mismatched account cannot add lifecycle history");
     assert.equal(executions, 0);
   } finally {
     clearPermissions();
     unregisterTool(name);
+    setAccountScope(null);
+  }
+});
+
+test("unavailable runtime start is recorded as activity without invoking the tool", () => {
+  const name = "test.tool_library.unavailable_lifecycle";
+  const capability = "test.tool_library.unavailable_lifecycle_capability";
+  registerCapability({ id: capability, name: "Web-only lifecycle capability", supportedPlatforms: ["web"], platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("unavailable-lifecycle-account");
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], "unavailable-lifecycle-account");
+  let executions = 0;
+  try {
+    registerTool(name, async () => { executions += 1; return { success: true }; }, {
+      capabilities: [capability],
+      permission: "filesystem.read",
+      lifecycle: { start: true },
+    });
+    const context = { platform: "ios", user: { id: "unavailable-lifecycle-account" } };
+    const result = startToolLibraryEntry(name, {}, context);
+    assert.equal(result.success, false);
+    assert.equal(result.status, CAPABILITY_STATUS.unsupported);
+    assert.equal(executions, 0);
+    const status = getToolLifecycleContract(name, context);
+    assert.equal(status.status, "registered");
+    assert.equal(status.availability.available, false);
+    assert.deepEqual(status.activity.map(({ status: activityStatus }) => activityStatus), [CAPABILITY_STATUS.unsupported]);
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
     setAccountScope(null);
   }
 });
@@ -477,7 +511,7 @@ test("account-scoped lifecycle sessions resist concurrent reuse, cross-account s
     await new Promise((resolve) => setTimeout(resolve, 0));
     const completed = getToolLifecycleContract(name, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } });
     assert.equal(completed.status, "cancelled");
-    assert.deepEqual(completed.activity.map(({ status }) => status), ["cancelled", "stopping", "running", "starting"]);
+    assert.deepEqual(completed.activity.map(({ status }) => status), ["cancelled", "stopping", "conflict", "running", "starting"]);
     assert.equal(stopToolLibraryEntry(name, started.sessionId, { user: { id: "lifecycle-owner", plan: "elite", entitlements: ["elite"] } }).success, false);
   } finally {
     unregisterTool(name);
