@@ -53,6 +53,25 @@ function mergeResourceBudget(current, candidate) {
   return next;
 }
 
+function isPersistenceReceipt(receipt, candidate, context) {
+  if (!isRecord(receipt)) return false;
+  const fields = ["committed", "accountScope", "recordKey", "version", "sequence", "parentVersion"];
+  const keys = Reflect.ownKeys(receipt);
+  if (keys.length !== fields.length || keys.some((key) => typeof key !== "string" || !fields.includes(key))) return false;
+  const values = {};
+  for (const key of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(receipt, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return false;
+    values[key] = descriptor.value;
+  }
+  return values.committed === true
+    && values.accountScope === context.accountScope
+    && values.recordKey === context.recordKey
+    && values.version === candidate.version
+    && values.sequence === candidate.sequence
+    && values.parentVersion === candidate.parentVersion;
+}
+
 function isRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -176,6 +195,14 @@ export function resolveOfflineSyncConflict(input) {
       version: Math.max(local.version, remote.version) + 1,
       sequence: Math.max(local.sequence, remote.sequence) + 1,
       parentVersion: Math.max(local.version, remote.version),
+      expected: {
+        baseVersion,
+        baseSequence,
+        localVersion: local.version,
+        localSequence: local.sequence,
+        remoteVersion: remote.version,
+        remoteSequence: remote.sequence,
+      },
       value: Object.fromEntries(Object.keys(merged).sort().map((key) => [key, merged[key]])),
     };
   } catch {
@@ -519,6 +546,65 @@ class OfflineEngine {
     return resolveOfflineSyncConflict(input);
   }
 
+  /**
+   * Optionally delegates a resolved merge to an explicit caller-owned
+   * compare-and-set adapter. No persistence occurs without that adapter.
+   */
+  async resolveAndPersistSyncConflict(input, adapterOptions) {
+    const capture = this.captureScope();
+    try {
+      if (!isRecord(adapterOptions)
+        || Reflect.ownKeys(adapterOptions).some((key) => typeof key !== "string" || !["recordKey", "persist"].includes(key))) {
+        return { ok: false, code: "persistence_adapter_required" };
+      }
+      const recordKeyDescriptor = Object.getOwnPropertyDescriptor(adapterOptions, "recordKey");
+      const persistDescriptor = Object.getOwnPropertyDescriptor(adapterOptions, "persist");
+      if (!recordKeyDescriptor || !Object.hasOwn(recordKeyDescriptor, "value")
+        || !persistDescriptor || !Object.hasOwn(persistDescriptor, "value")
+        || typeof persistDescriptor.value !== "function") {
+        return { ok: false, code: "persistence_adapter_required" };
+      }
+      const recordKey = recordKeyDescriptor.value;
+      const hasControlCharacter = typeof recordKey === "string"
+        && Array.from(recordKey).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
+      if (typeof recordKey !== "string" || !recordKey.trim() || recordKey.length > 200 || hasControlCharacter) {
+        return { ok: false, code: "invalid_record_key" };
+      }
+
+      const merge = this.resolveSyncConflict(input);
+      if (!merge.ok) return merge;
+      if (!this.isCurrentScope(capture) || merge.accountScope !== capture.accountScope) {
+        return { ok: false, code: "account_scope_mismatch" };
+      }
+
+      const context = Object.freeze({
+        recordKey,
+        accountScope: capture.accountScope,
+        expectedBaseVersion: merge.expected.baseVersion,
+        expectedBaseSequence: merge.expected.baseSequence,
+        expectedLocalVersion: merge.expected.localVersion,
+        expectedLocalSequence: merge.expected.localSequence,
+        expectedRemoteVersion: merge.expected.remoteVersion,
+        expectedRemoteSequence: merge.expected.remoteSequence,
+      });
+      const candidate = Object.freeze({
+        ...merge,
+        expected: Object.freeze({ ...merge.expected }),
+        value: Object.freeze({ ...merge.value }),
+      });
+
+      const receipt = await persistDescriptor.value(candidate, context);
+      if (!this.isCurrentScope(capture)) return { ok: false, code: "account_changed" };
+      if (!isPersistenceReceipt(receipt, candidate, context)) {
+        return { ok: false, code: "persistence_not_confirmed" };
+      }
+      return { ...candidate, persisted: true };
+    } catch {
+      if (!this.isCurrentScope(capture)) return { ok: false, code: "account_changed" };
+      return { ok: false, code: "persistence_failed" };
+    }
+  }
+
   addToOutbox(input) {
     const outboxId = generateOutboxId();
     const item = {
@@ -695,6 +781,10 @@ export function processOutbox() {
 
 export function resolveSyncConflict(input) {
   return offlineEngine.resolveSyncConflict(input);
+}
+
+export function resolveAndPersistSyncConflict(input, adapterOptions) {
+  return offlineEngine.resolveAndPersistSyncConflict(input, adapterOptions);
 }
 
 export function enableLANCompute(enabled) {
