@@ -33,6 +33,13 @@ function cloneMetadata(metadata) {
   return cloneMetadataValue(metadata, new WeakSet());
 }
 
+function declaredToolPermissions(metadata) {
+  const values = [];
+  if (metadata.permission !== undefined) values.push(metadata.permission);
+  if (Array.isArray(metadata.permissions)) values.push(...metadata.permissions);
+  return [...new Set(values)];
+}
+
 function cloneMetadataValue(value, ancestors) {
   if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
   if (typeof value !== "object") throw new TypeError("Tool metadata must contain only plain data values.");
