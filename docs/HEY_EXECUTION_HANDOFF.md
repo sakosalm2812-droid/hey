@@ -1,6 +1,6 @@
-## Current execution checkpoint — 2026-10-16, integrated specialist wave 2
+## Current execution checkpoint — 2026-10-16, wave 3 integrated
 
-This checkpoint supersedes the older checkpoint below. Coordinator branch `codex/resume-emergency-2026-10-14` is at `a8f5b47f8b01e9e4772593ea11891614e1168281` before this documentation commit; latest pushed coordinator checkpoint is `8276bd0daab2cb0f9dfd7ba8514c21320302b8ca`. Eleven existing specialist chats were resumed concurrently using GPT-6 Luna where selectable; each implementation stayed in an isolated worktree and only reviewed commits were cherry-picked. Current coordinator tree preserves the untracked `docs/requirements/v3-agent-pack/` extraction because a path exceeds Windows Git limits; do not stage or delete it. User-supplied V3 source files/ZIP remain committed under `docs/requirements/v3-source/`.
+This checkpoint supersedes the older checkpoint below. Coordinator branch `codex/resume-emergency-2026-10-14` is at `7fd6c64bdd05459a9940d2aa7f06274aad5c5746` before this documentation commit; latest pushed coordinator checkpoint is `156999213a0e56a521e0acbd40be21c93b2f9e14`. Eleven existing specialist chats were resumed concurrently using GPT-6 Luna where selectable; each implementation stayed in an isolated worktree and only reviewed commits were cherry-picked. Current coordinator tree preserves the untracked `docs/requirements/v3-agent-pack/` extraction because a path exceeds Windows Git limits; do not stage or delete it. User-supplied V3 source files/ZIP remain committed under `docs/requirements/v3-source/`.
 
 ### Newly integrated implementations
 
@@ -17,9 +17,23 @@ This checkpoint supersedes the older checkpoint below. Coordinator branch `codex
 - `4d35757` fences Tool Library retries to the failed session ID.
 - `a8f5b47` adds a per-request accessible exact-model selector. It only sends provider/model pairs from the current entitled catalog using `providerSelection`; Automatic and Lower cost remain profile choices, stale selections block send, and Fusion stays separate.
 
+### Wave 3 additions
+
+- `5a16b90` wires account-scoped onboarding Space suggestions to accessible loading/empty/error/retry UI, reviewable private Space previews and explicit confirmation. `583d22b` adds `HEY.spaces.updateDetails` with account and expected-revision binding, strict field validation, shared per-record write locks, readback, and stale-edit recovery (storage contract v3 migration from v1/v2).
+- `6073f13` and `db2e002` preserve lifecycle activity when a tool is unregistered, describe unregister as a request rather than proof of stopping, and expose account-bound history via `HEY.tools.lifecycleActivity`.
+- `5969679` adds `Cache-Control: no-store` to device transport responses so one-time credentials are not cached; rotation failures remain sanitized.
+- `91afa7f` clears Gesture consent after active camera-track loss and suppresses late in-flight detections/actions; synthetic camera track only.
+- `680a9f7` bounds transcript expansion after dictation corrections, before corrected text reaches its caller.
+- `d690772` rejects over-depth/over-node VoiceOS previews without returning partial plans; no execution path added.
+- `114c376` keeps malformed/legacy private Teacher records on creator-only access paths; live RLS remains unverified.
+- `9b45745` snapshots provider attempts immutably and rejects duplicate/malformed/provider config at request time; no live inference.
+- `1fa879f` adds the 10,000-expert compact-index boundary test and reports packed posting bounds. Benchmark still passes exact parity for 60,000 calls per fixed selector; warmed p95 varied up to 1,353.5 μs in this run, so sub-millisecond is not claimed as stable.
+- `18081dd` cancels a late Fusion response body after abort and prevents fallback, partial answer or provider-text leakage.
+- `7fd6c64` preserves sparse-array adversarial coverage without violating the repository’s ESLint rule.
+
 ### Verification and actual app evidence
 
-- After these integrations, `npm test` **623/623 passed**; `npm run build` passed (2,767 modules); changed-file ESLint passed; `git diff --check` passed. Build still skips sitemap without `SITE_URL` and reports the pre-existing `src/core/contextManager.js` mixed-import warning. ESLint does not configure Edge `.ts`; Deno/Supabase CLI are unavailable.
+- After wave 3, `npm test` **641/641 passed**; `npm run build` passed (2,767 modules); changed-file ESLint passed; `git diff --check` passed. Build still skips sitemap without `SITE_URL` and reports the pre-existing `src/core/contextManager.js` mixed-import warning. ESLint does not configure Edge `.ts`; Deno/Supabase CLI are unavailable.
 - Browser opened the real local app at `http://127.0.0.1:5175/login`. It displays “Authentication is not configured in this local build. Sign-in and password reset need the HEY Supabase URL and public anon key”; Enter HEY is disabled. This proves local route/UI rendering only. Authenticated journeys, real DB/RLS, provider discovery/inference, microphone/camera permission, native runtime and production deployment remain **UNVERIFIED**. No production-readiness claim.
 - All 47 program steps remain In progress/Incomplete; none is production-certified complete.
 
@@ -41,25 +55,25 @@ This checkpoint supersedes the older checkpoint below. Coordinator branch `codex
 
 **Next:** commit and fast-forward push this handoff; resume the existing specialist chats concurrently on isolated worktrees from this checkpoint, assigning distinct missing user journeys from the V3 status map. Review every branch before cherry-picking, keep actual service/device gaps explicit, and run combined verification after each integration batch.
 
-### Active implementation wave — launched 2026-10-16 from `ff04069`
+### Wave 3 worker receipts — all 11 chats completed
 
-All 11 existing chats have been messaged concurrently with GPT-6 Luna requested and instructed to create fresh isolated worktrees based on `ff04069bbe57a9e2f331286bf77b5d395acbf65b`. The coordinator worktree remains on its own branch. Latest observed progress is noted; branches/SHA will be replaced with exact values when workers create and commit them.
+All existing chats were messaged concurrently with GPT-6 Luna requested where selectable and used separate worktrees from `ff04069bbe57a9e2f331286bf77b5d395acbf65b`. Every committed change below has been reviewed and integrated. Worker branches remain available locally.
 
-| # | Task reference | Assigned branch | Current work |
+| # | Task reference | Worker branch / SHA | Coordinator integration / result |
 |---:|---|---|---|
-| 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave-next-01-onboarding-ui` | Isolating correct repository/worktree path; then wire account-bound onboarding Space suggestions into explicit preview/confirm UI. |
-| 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave-next-02-space-details` | Add revision/account-bound Space name/description update API if missing; focused validation. |
-| 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave-next-03-tool-lifecycle` | New lifecycle/recovery issue; focused tests passing 18/18; isolated dependency install for lint. |
-| 04 | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave-next-04-edge-safety` | Reviewing Edge device auth, lease, receipt and retry for one remaining safety gap. |
-| 05 | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave-next-05-gesture-active-track` | Clear stale camera consent after active track loss; test in-flight frame cancellation/action suppression. |
-| 06 | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave-next-06-dictation-recovery` | Bound corrected transcript expansion after raw-size cap; test rejection/retry/account-switch late callbacks. |
-| 07 | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave-next-07-voice-preview` | Bound nested/large workflow previews; reject oversized plan without partial result or execution. |
-| 08 | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave-next-08-teacher-privacy` | Inspect for another legacy/private artifact access boundary and add author-only regression tests. |
-| 09 | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave-next-09-provider-reliability` | One exact-model catalog/selection failure boundary beyond integrated routing and entitlement recheck. |
-| 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave-next-10-selector-guard` | Add one bounded parity/resource invariant; linear selector remains oracle; separate setup/cold/warm evidence. |
-| 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave-next-11-fusion-recovery` | One new cancellation/fallback test/fix beyond best-effort response cancellation. |
+| 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave-next-01-onboarding-ui` `224affd` | Integrated `5a16b90`; 30 focused tests, ESLint and diff check passed. No signed-in browser journey. |
+| 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave-next-02-space-details` `d1bc194` | Integrated `583d22b`; 30 focused Space tests, ESLint/build passed. Browser/live service unverified. |
+| 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave-next-03-tool-lifecycle` `25adf25`, `23d290b` | Integrated `6073f13`, `db2e002`; focused lifecycle/public API 18/18, ESLint passed. |
+| 04 | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave-next-04-edge-safety` `d344167` | Integrated `5969679`; focused transport 21, worker full suite 624; ESLint passed. No Deno/deploy. |
+| 05 | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave-next-05-gesture-active-track` `8dfc35e` | Integrated `91afa7f`; focused Gesture 44, build/lint passed; no physical camera. |
+| 06 | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave-next-06-dictation-recovery` `2a4f5f7` | Integrated `680a9f7`; dictation suites 42, lint/diff passed; no live mic. |
+| 07 | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave-next-07-voice-preview` `101d6ec` | Integrated `d690772`; VoiceOS focused 11, worker full suite 624, build/lint passed; no native execution. |
+| 08 | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave-next-08-teacher-privacy` `9eb718e` | Integrated `114c376`; Teacher focused 39, build/lint passed; no live RLS. |
+| 09 | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave-next-09-provider-reliability` `95ffe6f` | Integrated `9b45745`; provider catalog 8, lint passed; no live inference. |
+| 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave-next-10-selector-guard` `27c61ca` | Integrated `1fa879f`; selector tests 13, exact parity benchmark; warm p95 varied, no cold p95/inference claim. |
+| 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave-next-11-fusion-recovery` `185f603` | Integrated `18081dd`; provider/Fusion tests 70, lint passed; no live inference. |
 
-No new Codex chats were created. Do not integrate uncommitted work. Preserve coordinator untracked V3 extraction. Next coordinator action: monitor all 11 tasks, inspect each exact diff/commit, integrate only safe completed changes, run full tests/build/lint, refresh both handoff/status documents, then commit and push.
+No new Codex chats were created. Preserve coordinator untracked V3 extraction. Next: choose and implement another missing vertical journey from the 47-step map, then refresh this handoff and status file before context handoff. Real Supabase, Edge deployment, account journey, live provider, microphone/camera, native runtime, and production remain blocked/unverified by missing credentials, tools, accounts, or devices.
 
 ---
 
