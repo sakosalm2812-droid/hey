@@ -1,17 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SupabaseDeviceCommandQueueStore } from "../../../src/core/supabaseDeviceCommandQueueStore.js";
 import { readBoundedJson } from "../hey/requestSafety.js";
-import { classifyDeviceTransportRequest, createDeviceTransportRequestScope, handleDeviceTransport, issueDeviceCredential, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "./dispatch.js";
+import { classifyDeviceTransportRequest, createDeviceTransportRequestScope, createDeviceTransportResponseHeaders, handleDeviceTransport, issueDeviceCredential, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "./dispatch.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 function corsHeaders(origin: string | null) {
-  return {
-    "Access-Control-Allow-Origin": resolveDeviceTransportCorsOrigin(origin, allowedOrigin) ?? allowedOrigin,
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json",
-    "Vary": "Origin",
-  };
+  return createDeviceTransportResponseHeaders(origin, allowedOrigin);
 }
 
 function json(status: number, body: Record<string, unknown>, origin: string | null = null) {

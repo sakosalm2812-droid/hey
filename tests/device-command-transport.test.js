@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { classifyDeviceTransportRequest, createDeviceTransportRequestScope, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
+import { classifyDeviceTransportRequest, createDeviceTransportRequestScope, createDeviceTransportResponseHeaders, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
 
 const accountId = "2e4a81a4-2da8-4ae0-bfd6-719484a37795";
 const otherAccountId = "10e7b9e4-765b-4e88-b5d4-5eafc0f39f40";
@@ -63,8 +63,12 @@ test("transport CORS accepts configured and verified Tauri origins but rejects o
   assert.equal(resolveDeviceTransportCorsOrigin("http://tauri.localhost", appOrigin), "http://tauri.localhost");
   assert.equal(resolveDeviceTransportCorsOrigin("tauri://localhost", appOrigin), "tauri://localhost");
   assert.equal(resolveDeviceTransportCorsOrigin("https://attacker.example", appOrigin), null);
+  const headers = createDeviceTransportResponseHeaders("tauri://localhost", appOrigin);
+  assert.equal(headers["Access-Control-Allow-Origin"], "tauri://localhost");
+  assert.equal(headers["Cache-Control"], "no-store");
   const source = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
-  assert.match(source, /resolveDeviceTransportCorsOrigin\(origin, allowedOrigin\)/);
+  assert.match(source, /createDeviceTransportResponseHeaders\(origin, allowedOrigin\)/);
+  assert.match(source, /headers: corsHeaders\(origin\)/);
   assert.match(source, /const reply = \(status: number, body: Record<string, unknown>\) => json\(status, body, origin\)/);
 });
 
@@ -121,6 +125,18 @@ test("credential rotation is owner-bound, one-time, random and persists only a d
     assert.equal(denied.ok, false);
   }
   assert.equal(saved.length, 2);
+});
+
+test("credential rotation store failures are sanitized and never return a credential", async () => {
+  const result = await issueDeviceCredential({
+    authenticatedAccountId: accountId,
+    deviceId,
+    loadDevice: async () => ({ id: deviceId, user_id: accountId, status: "online" }),
+    credentialStore: { async rotate() { throw new Error("private database credential-store detail"); } },
+  });
+  assert.deepEqual(result, { ok: false, reason: "Device credential service is unavailable." });
+  assert.equal(Object.hasOwn(result, "credential"), false);
+  assert.equal(JSON.stringify(result).includes("private database"), false);
 });
 
 test("transport binds claim, acknowledgement and failure to authenticated device identity", async () => {

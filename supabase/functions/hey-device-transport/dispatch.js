@@ -14,6 +14,17 @@ export function resolveDeviceTransportCorsOrigin(origin, configuredOrigin) {
   return origin === configuredOrigin || TAURI_DEVICE_ORIGINS.has(origin) ? origin : null;
 }
 
+export function createDeviceTransportResponseHeaders(origin, configuredOrigin) {
+  return {
+    "Access-Control-Allow-Origin": resolveDeviceTransportCorsOrigin(origin, configuredOrigin) ?? configuredOrigin,
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json",
+    "Vary": "Origin",
+  };
+}
+
 export function createDeviceTransportRequestScope({ signal: callerSignal, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
     throw new RangeError("Device transport request timeout must be between 100 ms and 60 seconds.");
