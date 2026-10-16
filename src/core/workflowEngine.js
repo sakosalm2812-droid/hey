@@ -277,9 +277,17 @@ export async function runWorkflow(workflow, handlers = {}, options = {}) {
     }
 
     if (typeof options.shouldCancel === "function") {
-      const shouldCancel = await options.shouldCancel(workflow, step, {
-        signal: abortController.signal,
-      });
+      let shouldCancel;
+      try {
+        shouldCancel = await options.shouldCancel(workflow, step, {
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        if (workflow.status === "cancelled") {
+          return workflow;
+        }
+        throw error;
+      }
 
       if (workflow.status === "cancelled") {
         return workflow;

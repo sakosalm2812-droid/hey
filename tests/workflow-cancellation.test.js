@@ -13,7 +13,6 @@ function deferred() {
 }
 
 test("cancellation while checking the next step prevents its first dispatch", async () => {
-  const cancellationCheck = deferred();
   const workflow = createWorkflow("Wait then act", [{ action: "first" }]);
   let handlerCalls = 0;
   let cancellationSignal;
@@ -23,13 +22,14 @@ test("cancellation while checking the next step prevents its first dispatch", as
   }, {
     shouldCancel: async (_workflow, _step, { signal }) => {
       cancellationSignal = signal;
-      return cancellationCheck.promise;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("cancellation check aborted")), { once: true });
+      });
     },
   });
 
   await new Promise((resolve) => setImmediate(resolve));
   cancelWorkflow(workflow, "User stopped before dispatch.");
-  cancellationCheck.resolve(false);
 
   const result = await running;
   assert.equal(cancellationSignal.aborted, true);
