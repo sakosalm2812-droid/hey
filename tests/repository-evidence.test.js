@@ -172,6 +172,7 @@ test("bounded JSON Schema comparison reports structural contract changes without
       additionalPropertiesChanges: 1,
       dependentRequiredChanges: 0,
       propertyBoundChanges: 0,
+      stringLengthBoundChanges: 0,
       itemsChanges: 0,
       enumChanges: 1,
       constChanges: 0,
@@ -289,6 +290,54 @@ test("property bounds reject malformed, negative, fractional, and imprecise valu
     assert.ok(report.entries.filter(({ path: itemPath }) => /a-(?:negative|fractional|string|unsafe)\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_schema_features"));
     assert.ok(report.entries.filter(({ path: itemPath }) => /z-(?:negative|fractional|string|unsafe)\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "supported_profile"));
     assert.ok(report.entries.filter(({ path: itemPath }) => itemPath.includes("unsupported-dialect")).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_format"));
+    assert.ok(report.contractSemanticComparisons.every(({ status }) => status === "unsupported_schema_profile"));
+    assert.doesNotMatch(JSON.stringify(report), /9007199254740992/);
+  });
+});
+
+test("minLength and maxLength compare non-negative safe integer bounds including zero", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    const base = { $schema: dialect, $id: "string-length-bounds", type: "string", maxLength: Number.MAX_SAFE_INTEGER };
+    writeJson(root, "contracts/a-length.schema.json", { ...base, minLength: 0 });
+    writeJson(root, "contracts/z-length.schema.json", { ...base, minLength: 1 });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-length.schema.json", "contracts/z-length.schema.json"],
+    });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantic_diff");
+    assert.equal(comparison.changes.stringLengthBoundChanges, 1);
+    assert.doesNotMatch(JSON.stringify(report), /string-length-bounds|9007199254740991/);
+  });
+});
+
+test("string length bounds reject malformed and imprecise values and unsupported dialects", () => {
+  withRoot((root) => {
+    const modern = "https://json-schema.org/draft/2020-12/schema";
+    for (const [id, key, value] of [
+      ["negative-length", "minLength", -1],
+      ["fractional-length", "maxLength", 1.5],
+      ["string-length", "minLength", "0"],
+      ["unsafe-length", "maxLength", Number.MAX_SAFE_INTEGER + 1],
+    ]) {
+      writeJson(root, `contracts/a-${id}.schema.json`, { $schema: modern, $id: id, [key]: value });
+      writeJson(root, `contracts/z-${id}.schema.json`, { $schema: modern, $id: id, minLength: 0 });
+    }
+    const unsupported = "http://json-schema.org/draft-03/schema#";
+    writeJson(root, "contracts/a-unsupported-length-dialect.schema.json", { $schema: unsupported, $id: "unsupported-length-dialect", minLength: 0 });
+    writeJson(root, "contracts/z-unsupported-length-dialect.schema.json", { $schema: unsupported, $id: "unsupported-length-dialect", maxLength: 10 });
+    const paths = [
+      "contracts/a-negative-length.schema.json", "contracts/z-negative-length.schema.json",
+      "contracts/a-fractional-length.schema.json", "contracts/z-fractional-length.schema.json",
+      "contracts/a-string-length.schema.json", "contracts/z-string-length.schema.json",
+      "contracts/a-unsafe-length.schema.json", "contracts/z-unsafe-length.schema.json",
+      "contracts/a-unsupported-length-dialect.schema.json", "contracts/z-unsupported-length-dialect.schema.json",
+    ];
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: paths });
+    assert.ok(report.entries.filter(({ path: itemPath }) => /a-(?:negative|fractional|string|unsafe)-length\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_schema_features"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => /z-(?:negative|fractional|string|unsafe)-length\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "supported_profile"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => itemPath.includes("unsupported-length-dialect")).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_format"));
     assert.ok(report.contractSemanticComparisons.every(({ status }) => status === "unsupported_schema_profile"));
     assert.doesNotMatch(JSON.stringify(report), /9007199254740992/);
   });

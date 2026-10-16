@@ -23,8 +23,9 @@ const SCHEMA_CONSTRAINT_KEYS = new Set([
   "uniqueItems",
 ]);
 const SCHEMA_PROPERTY_BOUND_KEYS = new Set(["minProperties", "maxProperties"]);
+const SCHEMA_LENGTH_BOUND_KEYS = new Set(["minLength", "maxLength"]);
 const SCHEMA_SUPPORTED_KEYS = new Set([
-  ...SCHEMA_METADATA_KEYS, ...SCHEMA_CONSTRAINT_KEYS, ...SCHEMA_PROPERTY_BOUND_KEYS,
+  ...SCHEMA_METADATA_KEYS, ...SCHEMA_CONSTRAINT_KEYS, ...SCHEMA_PROPERTY_BOUND_KEYS, ...SCHEMA_LENGTH_BOUND_KEYS,
   "type", "properties", "required", "dependentRequired", "additionalProperties", "items", "enum", "const",
 ]);
 
@@ -303,6 +304,14 @@ function validJsonSchemaNode(node, dialect, depth = 0, budget = { nodes: 0 }) {
     propertyBounds[key] = value;
   }
   if (Object.keys(propertyBounds).length) model.propertyBounds = propertyBounds;
+  const lengthBounds = {};
+  for (const key of SCHEMA_LENGTH_BOUND_KEYS) {
+    if (!Object.hasOwn(node, key)) continue;
+    const value = node[key];
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    lengthBounds[key] = value;
+  }
+  if (Object.keys(lengthBounds).length) model.lengthBounds = lengthBounds;
   const annotations = {};
   for (const key of ["deprecated", "readOnly", "writeOnly"]) {
     if (!Object.hasOwn(node, key)) continue;
@@ -327,6 +336,7 @@ function compareSchemaModels(left, right) {
     requiredAdded: 0, requiredRemoved: 0, additionalPropertiesChanges: 0,
     dependentRequiredChanges: 0,
     propertyBoundChanges: 0,
+    stringLengthBoundChanges: 0,
     itemsChanges: 0, enumChanges: 0, constChanges: 0, annotationChanges: 0,
     constraintChanges: 0, schemaShapeChanges: 0,
   };
@@ -349,6 +359,10 @@ function compareSchemaModels(left, right) {
     const afterBounds = b.propertyBounds || {};
     changes.propertyBoundChanges += [...new Set([...Object.keys(beforeBounds), ...Object.keys(afterBounds)])]
       .filter((key) => beforeBounds[key] !== afterBounds[key]).length;
+    const beforeLengthBounds = a.lengthBounds || {};
+    const afterLengthBounds = b.lengthBounds || {};
+    changes.stringLengthBoundChanges += [...new Set([...Object.keys(beforeLengthBounds), ...Object.keys(afterLengthBounds)])]
+      .filter((key) => beforeLengthBounds[key] !== afterLengthBounds[key]).length;
     if (canonicalJson(a.additionalProperties ?? null) !== canonicalJson(b.additionalProperties ?? null)) changes.additionalPropertiesChanges += 1;
     const beforeProperties = a.properties || {};
     const afterProperties = b.properties || {};
@@ -538,6 +552,6 @@ export function buildRepositoryEvidenceReport({ repositoryRoot, files = [], stat
     })),
     contractSemanticComparisons: compareJsonSchemaContracts(contractEntries),
     migrationTimestampCollisions,
-    conclusions: ["Classification is limited to recognized paths and allowlisted metadata.", "Migration files are hashed and classified by path only; SQL is not parsed or executed.", "Matching direct dependency declarations prove exact text equality only; they do not prove lockfile correctness or runtime compatibility.", "Semantic comparisons cover a bounded JSON Schema profile paired by identical $id and dialect; compared dimensions include types, property/required membership and cardinality bounds, dependentRequired rules, additionalProperties, items, enum/const, selected scalar constraints, and read/write/deprecation annotations. This is not full standards validation.", "dependentRequired is supported only for the 2019-09 and 2020-12 dialects; minProperties and maxProperties are supported as non-negative safe integers in the listed dialects.", "OpenAPI, AsyncAPI, YAML, references, and unsupported JSON Schema features are not semantically compared.", "Contract comparison paths are sorted lexically as left and right; that ordering does not imply version chronology.", "Unrecognized files and formats remain outside this report."],
+    conclusions: ["Classification is limited to recognized paths and allowlisted metadata.", "Migration files are hashed and classified by path only; SQL is not parsed or executed.", "Matching direct dependency declarations prove exact text equality only; they do not prove lockfile correctness or runtime compatibility.", "Semantic comparisons cover a bounded JSON Schema profile paired by identical $id and dialect; compared dimensions include types, property/required membership and cardinality bounds, dependentRequired rules, additionalProperties, items, enum/const, selected scalar constraints, and read/write/deprecation annotations. This is not full standards validation.", "dependentRequired is supported only for the 2019-09 and 2020-12 dialects; minProperties/maxProperties and minLength/maxLength are supported as non-negative safe integers in the listed dialects.", "OpenAPI, AsyncAPI, YAML, references, and unsupported JSON Schema features are not semantically compared.", "Contract comparison paths are sorted lexically as left and right; that ordering does not imply version chronology.", "Unrecognized files and formats remain outside this report."],
   };
 }
