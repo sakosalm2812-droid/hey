@@ -629,6 +629,12 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /conflictSummary:\s*\{\s*count: Math\.min\(fusion\.conflicts\.length, 16\),\s*truncated: fusion\.conflictsTruncated === true/);
 });
 
+test("OpenAI-compatible chat and vision requests reject redirects before sending credentials", async () => {
+  const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
+  const protectedBearerRequests = [...route.matchAll(/Authorization: `Bearer \$\{(?:provider|attempt)\.key\}`,[\s\S]{0,500}?redirect: "error"/g)];
+  assert.equal(protectedBearerRequests.length, 2, "chat and vision bearer-token dispatches must both set redirect:error");
+});
+
 test("Edge chat checks cancellation after verification and before persisting, and aborts an in-flight insert", async () => {
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   const hashPosition = route.indexOf("responseSha256: await sha256Hex(answer)");
