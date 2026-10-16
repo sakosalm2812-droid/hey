@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
-import { cancelVoiceCommandPreview, understandVoiceCommand, validateVoiceCommandPreview } from "../src/core/voiceCommandUnderstanding.js";
-import HEY, { understandVoiceCommand as publicUnderstandVoiceCommand, validateVoiceCommandPreview as publicValidateVoiceCommandPreview } from "../src/core/index.js";
+import { cancelVoiceCommandPreview, understandVoiceCommand, validateVoiceCommandPreview, reviewVoiceCommandPreview } from "../src/core/voiceCommandUnderstanding.js";
+import HEY, { understandVoiceCommand as publicUnderstandVoiceCommand, validateVoiceCommandPreview as publicValidateVoiceCommandPreview, reviewVoiceCommandPreview as publicReviewVoiceCommandPreview } from "../src/core/index.js";
 
 test("voice command understanding is exposed through the canonical HEY API without execution behavior", async () => {
   assert.equal(publicUnderstandVoiceCommand, understandVoiceCommand);
   assert.equal(HEY.voice.understandCommand, understandVoiceCommand);
   assert.equal(HEY.voice.cancelCommandPreview, cancelVoiceCommandPreview);
   assert.equal(HEY.voice.validateCommandPreview, validateVoiceCommandPreview);
+  assert.equal(HEY.voice.reviewCommandPreview, reviewVoiceCommandPreview);
   assert.equal(publicValidateVoiceCommandPreview, validateVoiceCommandPreview);
+  assert.equal(publicReviewVoiceCommandPreview, reviewVoiceCommandPreview);
   setAccountScope("voice-api-account");
   try {
     const preview = await HEY.voice.understandCommand("open notes");
@@ -20,6 +22,22 @@ test("voice command understanding is exposed through the canonical HEY API witho
     assert.match(preview.previewId, /^[0-9a-f-]{36}$/i);
     assert.equal(Date.parse(preview.expiresAt) - Date.now() <= 60_000, true);
     assert.deepEqual(HEY.voice.validateCommandPreview(preview), { success: true, status: "current", previewId: preview.previewId });
+  } finally {
+    setAccountScope(null);
+  }
+});
+
+test("review records one account-scoped acknowledgment without authorizing execution", async () => {
+  setAccountScope("voice-review-owner");
+  try {
+    const preview = await understandVoiceCommand("open notes");
+    const reviewed = reviewVoiceCommandPreview(preview);
+    assert.deepEqual(reviewed, { success: true, status: "reviewed", previewId: preview.previewId, executionAuthorized: false });
+    assert.deepEqual(reviewVoiceCommandPreview(preview), { success: false, status: "preview_unavailable" });
+
+    const switched = await understandVoiceCommand("open calculator");
+    setAccountScope("voice-review-other");
+    assert.deepEqual(reviewVoiceCommandPreview(switched), { success: false, status: "preview_unavailable" });
   } finally {
     setAccountScope(null);
   }

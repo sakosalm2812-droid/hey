@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Download,
@@ -28,6 +28,9 @@ import { useLocale } from "./i18n/LocaleContext.jsx";
 import ChatInput from "./components/chat/ChatInput";
 import ChatMessage from "./components/chat/ChatMessage";
 import { subscribe } from "./core/eventBus.js";
+import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
+import { cancelVoiceCommandPreview, reviewVoiceCommandPreview, understandVoiceCommand } from "./core/voiceCommandUnderstanding.js";
+import { describeSafeComputerActionPreview } from "./core/voiceOSPreview.js";
 import {
   createBrowserSpeechProvider,
   createBrowserSpeechSynthesisProvider,
@@ -71,7 +74,10 @@ function ChatWorkspace() {
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [copiedMessage, setCopiedMessage] = useState("");
   const [executionStatus, setExecutionStatus] = useState("");
-  const [pendingExecution, setPendingExecution] = useState(null);
+  const [pendingComputerPreview, setPendingComputerPreview] = useState(null);
+  const [previewChecking, setPreviewChecking] = useState(false);
+  const pendingComputerPreviewRef = useRef(null);
+  const previewRequestInFlightRef = useRef(false);
   const skipNextDraftPersistenceRef = useRef(false);
   const activeRequestControllerRef = useRef(null);
 
@@ -83,6 +89,7 @@ function ChatWorkspace() {
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [voiceResponse, setVoiceResponse] = useState("");
   const voiceSessionRef = useRef(null);
+  const askFromVoiceRef = useRef(null);
 
   useEffect(() => {
     if (skipNextDraftPersistenceRef.current) {
@@ -119,11 +126,20 @@ function ChatWorkspace() {
     return () => [started, stepStarted, permission, failed, completed].forEach((unsubscribe) => unsubscribe());
   }, []);
 
+  useEffect(() => subscribeAccountScope((_previousScope, nextScope) => {
+    const pending = pendingComputerPreviewRef.current;
+    if (!pending || pending.accountScope === nextScope) return;
+    if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
+    pendingComputerPreviewRef.current = null;
+    setPendingComputerPreview(null);
+    setExecutionStatus("The computer preview was cleared because the signed-in account changed. Nothing was run.");
+  }), []);
+
   useEffect(() => {
     voiceSessionRef.current = createVoiceSession({
       speechProvider: createBrowserSpeechProvider(window),
       synthesisProvider: createBrowserSpeechSynthesisProvider(window),
-      ask: askHEY,
+      ask: (...args) => askFromVoiceRef.current?.(...args),
       environment: window,
       onStateChange: ({ state, error, transcript: nextTranscript, answer, ttsUnavailable }) => {
         setVoiceState(state);
@@ -259,9 +275,74 @@ function ChatWorkspace() {
     setMessage((current) => current.trim() ? `${current.trim()} ${transcript}` : transcript);
   }
 
-  async function sendUserMessage(userMessage, { confirmed = false, displayUserMessage = true } = {}) {
+  const createSafeComputerPreview = useCallback(async (requestText, signal) => {
+    const preview = await understandVoiceCommand(requestText, signal ? { signal } : {});
+    const summary = describeSafeComputerActionPreview(preview);
+    if (!summary) {
+      if (preview.previewId) cancelVoiceCommandPreview(preview.previewId);
+      return null;
+    }
+    const expectedScope = user?.id ? `account:${user.id}` : null;
+    if (!expectedScope || preview.accountScope !== expectedScope || getAccountScope() !== expectedScope || signal?.aborted) {
+      cancelVoiceCommandPreview(preview.previewId);
+      return { blocked: true };
+    }
+    return {
+      preview,
+      summary,
+      message: requestText.trim(),
+      accountScope: expectedScope,
+      source: "text",
+      reviewed: false,
+    };
+  }, [user]);
+
+  const storeComputerPreview = useCallback((nextPreview) => {
+    pendingComputerPreviewRef.current = nextPreview;
+    setPendingComputerPreview(nextPreview);
+  }, []);
+
+  const askFromVoice = useCallback(async (text, { signal } = {}) => {
+    const nextPreview = await createSafeComputerPreview(text, signal);
+    if (signal?.aborted) return "Voice request cancelled. No computer action was run.";
+    if (nextPreview?.blocked) return "Sign in to the current account before reviewing a computer action. Nothing was run.";
+    if (nextPreview) {
+      storeComputerPreview({ ...nextPreview, source: "voice" });
+      setExecutionStatus("Preview only. Nothing has been sent to the device.");
+      return `I prepared a preview: ${nextPreview.summary.label}, ${nextPreview.summary.target}. Review it in the chat. Nothing was opened.`;
+    }
+    return askHEY(text, { signal });
+  }, [createSafeComputerPreview, storeComputerPreview]);
+
+  useEffect(() => {
+    askFromVoiceRef.current = askFromVoice;
+  }, [askFromVoice]);
+
+  async function sendUserMessage(userMessage) {
     const trimmedMessage = userMessage.trim();
     if (!trimmedMessage || isSending) return;
+    if (previewRequestInFlightRef.current) return;
+    previewRequestInFlightRef.current = true;
+    setPreviewChecking(true);
+    let nextPreview;
+    try {
+      nextPreview = await createSafeComputerPreview(trimmedMessage);
+    } finally {
+      previewRequestInFlightRef.current = false;
+      setPreviewChecking(false);
+    }
+    if (nextPreview?.blocked) {
+      setExecutionStatus("A current signed-in account is required to review this computer action. Nothing was sent or run.");
+      return;
+    }
+    if (nextPreview) {
+      const previous = pendingComputerPreviewRef.current;
+      if (previous && !previous.reviewed) cancelVoiceCommandPreview(previous.preview.previewId);
+      storeComputerPreview(nextPreview);
+      setMessage("");
+      setExecutionStatus("Preview only. Nothing has been sent to the device.");
+      return;
+    }
     const requestedFusion = fusionEnabled;
     const requestedProviderProfile = requestedFusion ? "automatic" : providerProfile;
     if (!requestedFusion && requestedProviderProfile !== "automatic") {
@@ -276,7 +357,7 @@ function ChatWorkspace() {
     }
     setFusionEnabled(false);
 
-    if (displayUserMessage) setMessages((current) => [...current, { role: "user", text: trimmedMessage }]);
+    setMessages((current) => [...current, { role: "user", text: trimmedMessage }]);
     setMessage("");
     setChatError("");
     setIsSending(true);
@@ -289,14 +370,18 @@ function ChatWorkspace() {
       const response = await askHEY(trimmedMessage, {
         conversationId,
         onConversationId: setConversationId,
-        confirmed,
         fusion: requestedFusion,
         providerProfile: requestedProviderProfile,
         signal: controller.signal,
         onFusionVerification: (verification) => { fusionVerification = verification; },
-        onExecutionResult: (execution, originalMessage) => {
-          if (execution.status === "permission_required") setPendingExecution({ message: originalMessage });
-          else setPendingExecution(null);
+        onExecutionResult: (execution) => {
+          if (execution.status === "permission_required") {
+            setExecutionStatus("HEY still requires permission. No device action was completed.");
+          } else if (execution.success === false) {
+            setExecutionStatus(execution.message || "The device action is unavailable. Nothing was changed.");
+          } else if (execution.success === true && execution.verified === true) {
+            setExecutionStatus("HEY verified the requested action.");
+          }
         },
       });
       if (controller.signal.aborted) return;
@@ -322,11 +407,71 @@ function ChatWorkspace() {
     }
   }
 
-  async function confirmPendingExecution() {
-    if (!pendingExecution) return;
-    const request = pendingExecution;
-    setPendingExecution(null);
-    await sendUserMessage(request.message, { confirmed: true, displayUserMessage: false });
+  function reviewComputerPreview() {
+    const pending = pendingComputerPreviewRef.current;
+    if (!pending || pending.reviewed) return;
+    if (pending.accountScope !== getAccountScope() || pending.accountScope !== `account:${user?.id || ""}`) {
+      cancelVoiceCommandPreview(pending.preview.previewId);
+      storeComputerPreview(null);
+      setExecutionStatus("This preview belongs to a different account. Nothing was run.");
+      return;
+    }
+    const reviewed = reviewVoiceCommandPreview(pending.preview);
+    if (!reviewed.success) {
+      storeComputerPreview(null);
+      setExecutionStatus("This preview expired or changed. Create a new preview before proceeding.");
+      return;
+    }
+    storeComputerPreview({ ...pending, reviewed: true, reviewStatus: reviewed.status });
+    setExecutionStatus("Review recorded. A Trust Kernel permit and verified device authorization are still required; nothing was run.");
+  }
+
+  function cancelComputerPreview() {
+    const pending = pendingComputerPreviewRef.current;
+    if (!pending) return;
+    if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
+    storeComputerPreview(null);
+    if (pending.source === "text") setMessage(pending.message);
+    setExecutionStatus("Computer preview cancelled. Nothing was sent or opened.");
+  }
+
+  function dismissComputerPreview() {
+    const pending = pendingComputerPreviewRef.current;
+    if (pending && !pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
+    storeComputerPreview(null);
+  }
+
+  function renderComputerPreview() {
+    if (previewChecking) {
+      return <p className="hey-chat-execution-status" role="status">Checking whether this request can be shown as a safe preview. Nothing has been sent or run.</p>;
+    }
+    if (!pendingComputerPreview) return null;
+    const { summary, reviewed } = pendingComputerPreview;
+    return (
+      <section className="hey-computer-preview" aria-label="Computer action preview" aria-live="polite">
+        <div className="hey-computer-preview-heading">
+          <strong>{reviewed ? "Preview review recorded" : "Review computer action"}</strong>
+          <span>{summary.risk} risk</span>
+        </div>
+        <dl>
+          <div><dt>Action</dt><dd>{summary.label}</dd></div>
+          <div><dt>Target</dt><dd>{summary.target}</dd></div>
+          <div><dt>Capability</dt><dd>{summary.capability}</dd></div>
+        </dl>
+        <p>Reviewing records your acknowledgment only. It does not authorize or run an action. A Trust Kernel permit and verified device authorization are still required.</p>
+        {reviewed ? (
+          <div className="hey-computer-preview-actions">
+            <p role="status">Review recorded. Nothing was run.</p>
+            <button type="button" onClick={dismissComputerPreview}>Dismiss</button>
+          </div>
+        ) : (
+          <div className="hey-computer-preview-actions">
+            <button type="button" className="hey-btn-primary" onClick={reviewComputerPreview}>I reviewed this preview</button>
+            <button type="button" onClick={cancelComputerPreview}>Cancel preview</button>
+          </div>
+        )}
+      </section>
+    );
   }
 
   async function pinMessage(text) {
@@ -541,6 +686,9 @@ function ChatWorkspace() {
               <p>Speech recognition is provided by your browser, whose audio processing and retention rules may vary. The resulting transcript is sent to HEY to generate a reply. Tap the microphone button while active to stop or interrupt.</p>
             </div>
 
+            {renderComputerPreview()}
+            {executionStatus && <p className="hey-chat-execution-status" role="status">{executionStatus}</p>}
+
             {(voiceTranscript || voiceResponse) && (
               <div className="hey-voice-transcript">
                 {voiceTranscript && <p className="hey-voice-question">“{voiceTranscript}”</p>}
@@ -585,11 +733,7 @@ function ChatWorkspace() {
                 ))}
               </div>
               {executionStatus && <p className="hey-chat-execution-status" aria-live="polite">{executionStatus}</p>}
-              {pendingExecution && (
-                <button type="button" className="hey-btn-primary" onClick={confirmPendingExecution} disabled={isSending}>
-                  Confirm desktop action
-                </button>
-              )}
+              {renderComputerPreview()}
               <ChatInput
                 value={message}
                 setValue={setMessage}

@@ -118,6 +118,28 @@
 .hey-chat-error { width: min(100%, 790px); margin: 0 auto 18px; padding: 11px 13px; border: 1px solid rgba(255,158,122,.3); border-radius: 12px; color: var(--coral); background: rgba(255,158,122,.08); font-size: 12px; }
 
 .hey-chat-composer-area { width: min(100%, 790px); margin: 0 auto; padding: 0 clamp(18px, 5vw, 76px) 18px; }
+.hey-computer-preview {
+  width: min(100%, 790px);
+  margin: 12px auto;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--glass-bg-strong);
+  color: var(--text-primary);
+}
+.hey-computer-preview-heading,
+.hey-computer-preview-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hey-computer-preview-heading span { color: var(--text-muted); font-size: .82rem; }
+.hey-computer-preview dl { display: grid; gap: 8px; margin: 14px 0; }
+.hey-computer-preview dl div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; }
+.hey-computer-preview dt { color: var(--text-muted); }
+.hey-computer-preview dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
+.hey-computer-preview > p,
+.hey-computer-preview-actions p { margin: 10px 0; color: var(--text-muted); font-size: .88rem; line-height: 1.5; }
+.hey-computer-preview-actions { justify-content: flex-start; flex-wrap: wrap; }
+.hey-computer-preview-actions button:not(.hey-btn-primary) { padding: 9px 13px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: inherit; cursor: pointer; }
+.hey-chat-execution-status { width: min(100%, 790px); margin: 8px auto; color: var(--text-muted); font-size: .88rem; }
+.hey-voice-duo .hey-computer-preview { grid-column: 1 / -1; }
 .hey-chat-suggestions { display: flex; gap: 7px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
 .hey-chat-suggestions::-webkit-scrollbar { display: none; }
 .hey-chat-suggestions button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--glass-bg); color: var(--text-secondary); font-size: 10px; cursor: pointer; }

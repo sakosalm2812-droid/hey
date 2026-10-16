@@ -149,6 +149,18 @@ export function validateVoiceCommandPreview(preview) {
   return deepFreeze({ success: true, status: "current", previewId });
 }
 
+/** Consume one exact preview after the user reviews it; this grants no execution authority. */
+export function reviewVoiceCommandPreview(preview) {
+  const validation = validateVoiceCommandPreview(preview);
+  if (validation.success !== true) return validation;
+  const pending = pendingCommandPreviews.get(validation.previewId);
+  if (!pending || pending.accountScope !== getAccountScope() || previewExpired(pending)) {
+    return deepFreeze({ success: false, status: "preview_unavailable" });
+  }
+  pendingCommandPreviews.delete(validation.previewId);
+  return deepFreeze({ success: true, status: "reviewed", previewId: validation.previewId, executionAuthorized: false });
+}
+
 function deepFreeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const key of Object.keys(value)) deepFreeze(value[key]);
@@ -269,4 +281,4 @@ export async function understandVoiceCommand(input, options = {}) {
   return registerCommandPreview(classifySnapshot(snapshot, scopeAtStart));
 }
 
-export default { understandVoiceCommand, cancelVoiceCommandPreview, validateVoiceCommandPreview };
+export default { understandVoiceCommand, cancelVoiceCommandPreview, validateVoiceCommandPreview, reviewVoiceCommandPreview };
