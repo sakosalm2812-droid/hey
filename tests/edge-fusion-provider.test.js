@@ -286,6 +286,46 @@ test("aborting while a provider body is streaming cancels its reader and withhol
   assert.equal(JSON.stringify(result).includes("PRIVATE VENDOR RESPONSE BODY"), false);
 });
 
+test("a late provider response after abort is cancelled without fallback or partial output", async () => {
+  const controller = new AbortController();
+  let cancelCount = 0;
+  let calls = 0;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    signal: controller.signal,
+    fetchImpl: (_url, init) => new Promise((resolve) => {
+      calls += 1;
+      markFetchStarted();
+      init.signal.addEventListener("abort", () => {
+        resolve(new Response(new ReadableStream({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode("PRIVATE LATE PROVIDER BODY"));
+          },
+          cancel() {
+            cancelCount += 1;
+          },
+        })));
+      }, { once: true });
+    }),
+  });
+  await fetchStarted;
+  controller.abort();
+
+  const result = await resultPromise;
+  assert.equal(result.status, "cancelled");
+  assert.equal(calls, 1);
+  assert.equal(cancelCount, 1);
+  assert.equal("answer" in result, false);
+  assert.equal(JSON.stringify(result).includes("PRIVATE LATE PROVIDER BODY"), false);
+});
+
 test("provider HTTP failure bodies are cancelled without parsing or exposing vendor diagnostics", async () => {
   let cancelCount = 0;
   let calls = 0;

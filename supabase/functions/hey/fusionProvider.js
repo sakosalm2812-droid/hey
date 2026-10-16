@@ -245,7 +245,10 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
       signal: controller.signal,
       redirect: "error",
     });
-    if (controller.signal.aborted) throw new Error("Provider request cancelled");
+    if (controller.signal.aborted) {
+      cancelStreamQuietly(response?.body);
+      throw new Error("Provider request cancelled");
+    }
     if (!response.ok) {
       cancelStreamQuietly(response.body);
       throw new Error("Provider request failed");
