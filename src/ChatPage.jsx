@@ -110,6 +110,11 @@ function ChatWorkspace() {
     const previewController = previewRequestControllerRef.current;
     previewRequestControllerRef.current = null;
     previewController?.abort();
+    const pendingPreview = pendingComputerPreviewRef.current;
+    pendingComputerPreviewRef.current = null;
+    if (pendingPreview && !pendingPreview.reviewed) {
+      cancelVoiceCommandPreview(pendingPreview.preview.previewId);
+    }
   }, []);
 
   const [mode, setMode] = useState("text");

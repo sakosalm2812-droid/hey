@@ -138,6 +138,20 @@ test("spoken or typed cancellation revokes a pending preview and aborts in-fligh
   assert.ok(cancelGuard >= 0 && previewGuard > cancelGuard, "cancellation is handled before the in-flight preview guard");
 });
 
+test("unmount aborts preview work and revokes an unreviewed pending token", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const cleanupStart = source.indexOf("useEffect(() => () => {");
+  const cleanupEnd = source.indexOf("const [mode, setMode]", cleanupStart);
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart);
+  const cleanup = source.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /previewController\?\.abort\(\)/);
+  assert.match(cleanup, /const pendingPreview = pendingComputerPreviewRef\.current/);
+  assert.match(cleanup, /pendingComputerPreviewRef\.current = null/);
+  assert.match(cleanup, /if \(pendingPreview && !pendingPreview\.reviewed\)/);
+  assert.match(cleanup, /cancelVoiceCommandPreview\(pendingPreview\.preview\.previewId\)/);
+  assert.doesNotMatch(cleanup, /sendUserMessage|askHEY|executeRequest|invoke\(/);
+});
+
 test("replacing a pending preview revokes its old capability for both typed and spoken requests", async () => {
   const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
   const replacementStart = source.indexOf("const replaceComputerPreview = useCallback(");
