@@ -247,6 +247,45 @@ test("oversized provider response streams are cancelled before the body is fully
   assert.equal("answer" in result, false);
 });
 
+test("declared oversized provider bodies are rejected before reading even when cancel never settles", async () => {
+  let cancelCount = 0;
+  let pullCount = 0;
+  let calls = 0;
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(new ReadableStream({
+        pull() {
+          pullCount += 1;
+        },
+        cancel() {
+          cancelCount += 1;
+          return new Promise(() => {});
+        },
+      }, { highWaterMark: 0 }), {
+        headers: { "Content-Length": "1000001" },
+      });
+    },
+  });
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => { timeoutId = setTimeout(() => resolve(null), 100); });
+  const result = await Promise.race([resultPromise, timeoutPromise]);
+  clearTimeout(timeoutId);
+
+  assert.notEqual(result, null, "oversized-body cleanup must not stall provider fallback");
+  assert.equal(calls, 2);
+  assert.equal(cancelCount, 2);
+  assert.equal(pullCount, 0);
+  assert.notEqual(result.status, "complete");
+  assert.equal("answer" in result, false);
+});
+
 test("aborting while a provider body is streaming cancels its reader and withholds partial vendor text", async () => {
   const controller = new AbortController();
   let cancelCount = 0;
