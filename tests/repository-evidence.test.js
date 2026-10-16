@@ -171,6 +171,7 @@ test("bounded JSON Schema comparison reports structural contract changes without
       requiredRemoved: 0,
       additionalPropertiesChanges: 1,
       dependentRequiredChanges: 0,
+      propertyBoundChanges: 0,
       itemsChanges: 0,
       enumChanges: 1,
       constChanges: 0,
@@ -233,6 +234,63 @@ test("dependentRequired fails closed for malformed relationships and dialects th
     assert.equal(report.entries.find(({ path: itemPath }) => itemPath.includes("a-legacy")).semanticAnalysisStatus, "unsupported_schema_features");
     assert.equal(report.entries.find(({ path: itemPath }) => itemPath.includes("b-legacy")).semanticAnalysisStatus, "supported_profile");
     assert.doesNotMatch(JSON.stringify(report), /invalid-dependent|legacy-dependent|must-be-an-array/);
+  });
+});
+
+test("minProperties and maxProperties compare non-negative safe integer bounds including zero", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    writeJson(root, "contracts/a-bounds.schema.json", {
+      $schema: dialect,
+      $id: "property-bounds",
+      minProperties: 0,
+      maxProperties: Number.MAX_SAFE_INTEGER,
+    });
+    writeJson(root, "contracts/z-bounds.schema.json", {
+      $schema: dialect,
+      $id: "property-bounds",
+      minProperties: 1,
+      maxProperties: Number.MAX_SAFE_INTEGER,
+    });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-bounds.schema.json", "contracts/z-bounds.schema.json"],
+    });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantic_diff");
+    assert.equal(comparison.changes.propertyBoundChanges, 1);
+    assert.doesNotMatch(JSON.stringify(report), /property-bounds|9007199254740991/);
+  });
+});
+
+test("property bounds reject malformed, negative, fractional, and imprecise values and unsupported schema dialects", () => {
+  withRoot((root) => {
+    const modern = "https://json-schema.org/draft/2020-12/schema";
+    for (const [id, key, value] of [
+      ["negative", "minProperties", -1],
+      ["fractional", "maxProperties", 1.5],
+      ["string", "minProperties", "0"],
+      ["unsafe", "maxProperties", Number.MAX_SAFE_INTEGER + 1],
+    ]) {
+      writeJson(root, `contracts/a-${id}.schema.json`, { $schema: modern, $id: id, [key]: value });
+      writeJson(root, `contracts/z-${id}.schema.json`, { $schema: modern, $id: id, minProperties: 0 });
+    }
+    const unsupported = "http://json-schema.org/draft-03/schema#";
+    writeJson(root, "contracts/a-unsupported-dialect.schema.json", { $schema: unsupported, $id: "unsupported-dialect", minProperties: 0 });
+    writeJson(root, "contracts/z-unsupported-dialect.schema.json", { $schema: unsupported, $id: "unsupported-dialect", maxProperties: 10 });
+    const paths = [
+      "contracts/a-negative.schema.json", "contracts/z-negative.schema.json",
+      "contracts/a-fractional.schema.json", "contracts/z-fractional.schema.json",
+      "contracts/a-string.schema.json", "contracts/z-string.schema.json",
+      "contracts/a-unsafe.schema.json", "contracts/z-unsafe.schema.json",
+      "contracts/a-unsupported-dialect.schema.json", "contracts/z-unsupported-dialect.schema.json",
+    ];
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: paths });
+    assert.ok(report.entries.filter(({ path: itemPath }) => /a-(?:negative|fractional|string|unsafe)\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_schema_features"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => /z-(?:negative|fractional|string|unsafe)\.schema\.json$/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "supported_profile"));
+    assert.ok(report.entries.filter(({ path: itemPath }) => itemPath.includes("unsupported-dialect")).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_format"));
+    assert.ok(report.contractSemanticComparisons.every(({ status }) => status === "unsupported_schema_profile"));
+    assert.doesNotMatch(JSON.stringify(report), /9007199254740992/);
   });
 });
 
