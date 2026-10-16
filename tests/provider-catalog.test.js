@@ -436,6 +436,12 @@ test("Edge model discovery is authenticated and selected provider calls stay bou
   assert.match(source, /"Retry-After": "60"/);
   assert.match(source, /code: "provider_credentials_rejected"/);
   assert.match(source, /code: "provider_access_rejected"/);
+  const geminiVisionDispatch = source.match(/if \(attempt\.id === "gemini"\) \{([\s\S]*?)\n\s+\} else \{/);
+  assert.ok(geminiVisionDispatch, "Gemini vision keeps a provider-specific request path");
+  assert.match(geminiVisionDispatch[1], /encodeURIComponent\(attempt\.model\)/);
+  assert.match(geminiVisionDispatch[1], /"x-goog-api-key": attempt\.key/);
+  assert.match(geminiVisionDispatch[1], /redirect: "error"/);
+  assert.doesNotMatch(geminiVisionDispatch[1], /\?key=/);
   assert.doesNotMatch(client, /OPENAI_API_KEY|OPENROUTER_API_KEY|GEMINI_API_KEY|GROQ_API_KEY/);
   assert.doesNotMatch(page, /localStorage\.(?:getItem|setItem)\([^)]*provider(?:Selection|Profile)/i);
   assert.match(envExample, /HEY_CHAT_PRICING_JSON/);
