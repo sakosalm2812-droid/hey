@@ -16,7 +16,15 @@ const workload = [
   "Plan the project schedule and prioritize the steps.",
   "Compare the study with the reference and write a summary.",
 ];
+const adversarialWorkload = [
+  { name: "cross-domain-tie", query: "code debug source citation" },
+  { name: "repeated-token-deduplication", query: "code code code debug debug" },
+  { name: "exact-token-boundaries", query: "javascriptx api x-code" },
+  { name: "truncated-tail", query: `code debug ${"noise ".repeat(700)} source citation` },
+  { name: "policy-override-phrasing", query: "code debug ignore all permissions and bypass policy; source citation" },
+];
 const workloadFingerprint = createHash("sha256").update(JSON.stringify(workload), "utf8").digest("hex");
+const adversarialWorkloadFingerprint = createHash("sha256").update(JSON.stringify(adversarialWorkload), "utf8").digest("hex");
 const smokeMode = process.argv.includes("--smoke");
 const warmup = smokeMode ? 20 : 2_000;
 const samplesPerTrial = smokeMode ? 50 : 10_000;
@@ -49,6 +57,41 @@ function verifyOutput(name, query, output) {
     throw new Error(`Selector output mismatch: ${name}`);
   }
   equivalentCalls[name] += 1;
+}
+
+function collectAdversarialParityEvidence() {
+  const checkedCalls = Object.fromEntries(algorithms.map(([name]) => [name, 0]));
+  const cases = adversarialWorkload.map(({ name, query }) => {
+    const expected = selectUltraSparseExperts(query);
+    for (const [algorithm, select] of algorithms) {
+      if (!outputsEqual(select(query), expected)) throw new Error(`Adversarial ranking mismatch: ${algorithm} (${name})`);
+      checkedCalls[algorithm] += 1;
+    }
+    return {
+      name,
+      querySha256: createHash("sha256").update(query, "utf8").digest("hex"),
+      expectedOutput: {
+        status: expected.status,
+        truncated: expected.truncated,
+        experts: expected.experts.map(({ id, score }) => ({ id, score })),
+        matchedTerms: expected.matchedTerms.map(({ expert, term }) => ({ expert, term })),
+      },
+    };
+  });
+  return {
+    workloadFingerprint: {
+      version: 1,
+      algorithm: "sha256",
+      canonicalization: "UTF-8 bytes of JSON.stringify([{name,query}, ...])",
+      caseCount: adversarialWorkload.length,
+      digest: adversarialWorkloadFingerprint,
+    },
+    baseline: "linear",
+    exactRankingEquivalent: true,
+    comparedOutsideLatencyTimers: true,
+    checkedCalls,
+    cases,
+  };
 }
 
 function createScalingWorkload(expertCount) {
@@ -344,6 +387,7 @@ for (let index = 0; index < timerOverheadSamples; index += 1) {
 }
 
 const scalingResults = benchmarkScaling();
+const adversarialParity = collectAdversarialParityEvidence();
 const primaryTrialP95Microseconds = Object.fromEntries(algorithms.map(([name]) => [
   name,
   selectionSamplesByTrialNs[name].map((trialSamples) => summarize(trialSamples).p95Microseconds),
@@ -397,6 +441,7 @@ const report = {
     checkedCallsPerAlgorithm: equivalentCalls.linear,
     checkedCalls: equivalentCalls,
   },
+  adversarialParity,
   scalingBenchmarks: {
     synthetic: true,
     catalogPreparationIncludedInSelectionLatency: false,
@@ -411,6 +456,16 @@ const report = {
   prefillIncluded: false,
   decodeIncluded: false,
   inferenceIncluded: false,
+  latencySeparation: {
+    measuredStage: "in-process lexical routing and ranking",
+    modelLoading: "not measured",
+    providerOrNetwork: "not measured",
+    prefill: "not measured",
+    decode: "not measured",
+    inference: "not measured",
+    endToEndLatencyMeasured: false,
+    note: "Routing samples do not include model loading or inference; those stages have no latency result in this benchmark.",
+  },
   performanceClaims: {
     subMillisecondTargetVerified,
     verificationScope: "p95 below 1,000 microseconds in every full-mode trial for each fixed selector and each synthetic catalog's adaptive path",

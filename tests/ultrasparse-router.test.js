@@ -347,6 +347,7 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
     digest: report.workloadSha256,
   });
   assert.deepEqual(repeatedReport.workloadFingerprint, report.workloadFingerprint);
+  assert.deepEqual(repeatedReport.adversarialParity, report.adversarialParity);
   assert.deepEqual(repeatedReport.executionEnvironment, report.executionEnvironment);
   assert.equal(report.executionEnvironment.runtime.name, "node");
   assert.equal(report.executionEnvironment.runtime.version, process.version);
@@ -363,6 +364,16 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   assert.equal(report.prefillIncluded, false);
   assert.equal(report.decodeIncluded, false);
   assert.equal(report.inferenceIncluded, false);
+  assert.deepEqual(report.latencySeparation, {
+    measuredStage: "in-process lexical routing and ranking",
+    modelLoading: "not measured",
+    providerOrNetwork: "not measured",
+    prefill: "not measured",
+    decode: "not measured",
+    inference: "not measured",
+    endToEndLatencyMeasured: false,
+    note: "Routing samples do not include model loading or inference; those stages have no latency result in this benchmark.",
+  });
   assert.equal(report.performanceClaims.subMillisecondTargetVerified, false);
   assert.equal(report.performanceClaims.endToEndSubMillisecondTargetVerified, false);
   assert.deepEqual(report.performanceClaims.linearReferenceCatalogCountsOver1ms, []);
@@ -376,6 +387,39 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
   assert.equal(report.correctness.comparedAfterTimer, true);
   assert.equal(report.correctness.checkedCallsPerAlgorithm, 70);
   assert.deepEqual(report.correctness.checkedCalls, { linear: 70, indexed: 70, masked: 70 });
+  assert.deepEqual(report.adversarialParity.workloadFingerprint, {
+    version: 1,
+    algorithm: "sha256",
+    canonicalization: "UTF-8 bytes of JSON.stringify([{name,query}, ...])",
+    caseCount: 5,
+    digest: "a0b8e5dc9ce417c7fa6b23f734f7dd99a1e788cccf7c7d108279e084bf49338e",
+  });
+  assert.match(report.adversarialParity.workloadFingerprint.digest, /^[a-f0-9]{64}$/);
+  assert.equal(report.adversarialParity.baseline, "linear");
+  assert.equal(report.adversarialParity.exactRankingEquivalent, true);
+  assert.equal(report.adversarialParity.comparedOutsideLatencyTimers, true);
+  assert.deepEqual(report.adversarialParity.checkedCalls, { linear: 5, indexed: 5, masked: 5 });
+  assert.deepEqual(report.adversarialParity.cases.map(({ name }) => name), [
+    "cross-domain-tie",
+    "repeated-token-deduplication",
+    "exact-token-boundaries",
+    "truncated-tail",
+    "policy-override-phrasing",
+  ]);
+  const tieEvidence = report.adversarialParity.cases[0].expectedOutput;
+  assert.deepEqual(tieEvidence.experts, [{ id: "coding", score: 2 }, { id: "research", score: 2 }]);
+  assert.deepEqual(report.adversarialParity.cases.map(({ expectedOutput }) => expectedOutput.experts), [
+    [{ id: "coding", score: 2 }, { id: "research", score: 2 }],
+    [{ id: "coding", score: 2 }],
+    [{ id: "coding", score: 2 }],
+    [{ id: "coding", score: 2 }],
+    [{ id: "coding", score: 2 }, { id: "research", score: 2 }],
+  ]);
+  assert.deepEqual(report.adversarialParity.cases[2].expectedOutput.matchedTerms, [
+    { expert: "coding", term: "code" },
+    { expert: "coding", term: "api" },
+  ]);
+  assert.equal(report.adversarialParity.cases[3].expectedOutput.truncated, true);
   assert.equal(report.emptyTimerPairLatency.samples, 50);
   for (const key of ["p50Microseconds", "p95Microseconds", "p99Microseconds"]) {
     assert.ok(Number.isFinite(report.algorithms.linear.perOperationSelectionLatency[key]));
