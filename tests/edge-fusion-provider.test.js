@@ -247,6 +247,45 @@ test("oversized provider response streams are cancelled before the body is fully
   assert.equal("answer" in result, false);
 });
 
+test("aborting while a provider body is streaming cancels its reader and withholds partial vendor text", async () => {
+  const controller = new AbortController();
+  let cancelCount = 0;
+  let calls = 0;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    signal: controller.signal,
+    fetchImpl: async () => {
+      calls += 1;
+      markFetchStarted();
+      return new Response(new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode("PRIVATE VENDOR RESPONSE BODY"));
+        },
+        cancel() {
+          cancelCount += 1;
+        },
+      }));
+    },
+  });
+  await fetchStarted;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+
+  const result = await resultPromise;
+  assert.equal(result.status, "cancelled");
+  assert.equal(calls, 1);
+  assert.equal(cancelCount, 1);
+  assert.equal("answer" in result, false);
+  assert.equal(JSON.stringify(result).includes("PRIVATE VENDOR RESPONSE BODY"), false);
+});
+
 test("fusion disagreement returns no answer and stale account scope cancels before any provider HTTP call", async (t) => {
   await t.test("providers disagree", async () => {
     const { calls, fetchImpl } = mockProviderFetch((providerId) => [providerId === "openai" ? "42" : "43", 0.9]);
