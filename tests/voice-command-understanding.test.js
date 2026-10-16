@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
-import { understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
+import { cancelVoiceCommandPreview, understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
 import HEY, { understandVoiceCommand as publicUnderstandVoiceCommand } from "../src/core/index.js";
 
 test("voice command understanding is exposed through the canonical HEY API without execution behavior", async () => {
   assert.equal(publicUnderstandVoiceCommand, understandVoiceCommand);
   assert.equal(HEY.voice.understandCommand, understandVoiceCommand);
+  assert.equal(HEY.voice.cancelCommandPreview, cancelVoiceCommandPreview);
   setAccountScope("voice-api-account");
   try {
     const preview = await HEY.voice.understandCommand("open notes");
@@ -14,6 +15,47 @@ test("voice command understanding is exposed through the canonical HEY API witho
     assert.equal(preview.status, "preview_required");
     assert.equal(preview.success, undefined);
     assert.equal(preview.verified, undefined);
+    assert.match(preview.previewId, /^[0-9a-f-]{36}$/i);
+    assert.equal(Date.parse(preview.expiresAt) - Date.now() <= 60_000, true);
+  } finally {
+    setAccountScope(null);
+  }
+});
+
+test("a command preview expires and its cancellation fence is one-use", async () => {
+  const originalNow = Date.now;
+  let now = 1_800_000_000_000;
+  Date.now = () => now;
+  setAccountScope("voice-preview-lifecycle-account");
+  try {
+    const preview = await understandVoiceCommand("open https://example.com");
+    const cancelled = HEY.voice.cancelCommandPreview(preview.previewId);
+    assert.deepEqual(cancelled, { success: true, status: "cancelled", previewId: preview.previewId });
+    assert.deepEqual(HEY.voice.cancelCommandPreview(preview.previewId), { success: false, status: "preview_unavailable" });
+
+    const expiring = await understandVoiceCommand("open notes");
+    now = Date.parse(expiring.expiresAt);
+    assert.deepEqual(HEY.voice.cancelCommandPreview(expiring.previewId), { success: false, status: "preview_expired" });
+    assert.deepEqual(HEY.voice.cancelCommandPreview(expiring.previewId), { success: false, status: "preview_unavailable" });
+  } finally {
+    Date.now = originalNow;
+    setAccountScope(null);
+  }
+});
+
+test("preview cancellation is fenced to the account that received it and rejects hostile IDs", async () => {
+  setAccountScope("voice-preview-owner");
+  try {
+    const preview = await understandVoiceCommand("open notes");
+    setAccountScope("voice-preview-other-account");
+    assert.deepEqual(HEY.voice.cancelCommandPreview(preview.previewId), { success: false, status: "preview_unavailable" });
+
+    let getterCalls = 0;
+    const hostileId = Object.defineProperty({}, "toString", {
+      get() { getterCalls += 1; throw new Error("id coercion must not run"); },
+    });
+    assert.deepEqual(HEY.voice.cancelCommandPreview(hostileId), { success: false, status: "invalid_preview_id" });
+    assert.equal(getterCalls, 0);
   } finally {
     setAccountScope(null);
   }

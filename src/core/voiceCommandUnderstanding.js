@@ -1,4 +1,4 @@
-import { getAccountScope } from "./accountScope.js";
+import { getAccountScope, subscribeAccountScope } from "./accountScope.js";
 import { parseNaturalCommand } from "./commandParser.js";
 
 const MAX_TEXT_LENGTH = 4096;
@@ -6,6 +6,11 @@ const MIN_CONFIDENCE = 0.55;
 const ACTION_VERBS = /^(?:open|go to|navigate to|search(?: for)?|look up|read|summarize|inspect|save|remember|create|add|make|run|execute|edit|close|quit|restart|shutdown|shut down|organize|find|take)\b/i;
 const SENSITIVE_TERMS = /\b(?:delete|erase|remove|send|submit|purchase|buy|pay|transfer|share|publish|install|uninstall|format|shutdown|shut down|run|execute|terminal|password|passcode|secret|medical|health|financial|bank|credit card|social security)\b/i;
 const CANCEL_TERMS = /^(?:cancel|never mind|nevermind|stop|don't do that|do not do that|no,? cancel)[.!\s]*$/i;
+const COMMAND_PREVIEW_LIFETIME_MS = 60_000;
+const MAX_PENDING_COMMAND_PREVIEWS = 128;
+const pendingCommandPreviews = new Map();
+
+subscribeAccountScope(() => pendingCommandPreviews.clear());
 
 function readDataObject(value, name) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${name} must be a plain data object.`);
@@ -50,6 +55,42 @@ function cancelledPreview(scope, confidence = 0) {
     requiresConfirmation: false,
     accountScope: scope,
   });
+}
+
+function registerCommandPreview(result) {
+  if (result.type !== "Command" || result.requiresConfirmation !== true) return result;
+  const now = Date.now();
+  for (const [previewId, pending] of pendingCommandPreviews) {
+    if (pending.expiresAt <= now) pendingCommandPreviews.delete(previewId);
+  }
+  while (pendingCommandPreviews.size >= MAX_PENDING_COMMAND_PREVIEWS) {
+    pendingCommandPreviews.delete(pendingCommandPreviews.keys().next().value);
+  }
+  const previewId = crypto.randomUUID();
+  const expiresAt = now + COMMAND_PREVIEW_LIFETIME_MS;
+  const proposal = deepFreeze({
+    ...result,
+    previewId,
+    expiresAt: new Date(expiresAt).toISOString(),
+  });
+  pendingCommandPreviews.set(previewId, {
+    accountScope: result.accountScope,
+    expiresAt,
+  });
+  return proposal;
+}
+
+/** Cancel one exact, unexpired, account-scoped voice command preview once. */
+export function cancelVoiceCommandPreview(previewId) {
+  if (typeof previewId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(previewId)) {
+    return deepFreeze({ success: false, status: "invalid_preview_id" });
+  }
+  const pending = pendingCommandPreviews.get(previewId);
+  if (!pending) return deepFreeze({ success: false, status: "preview_unavailable" });
+  pendingCommandPreviews.delete(previewId);
+  if (pending.accountScope !== getAccountScope()) return deepFreeze({ success: false, status: "stale_account_scope" });
+  if (pending.expiresAt <= Date.now()) return deepFreeze({ success: false, status: "preview_expired" });
+  return deepFreeze({ success: true, status: "cancelled", previewId });
 }
 
 function deepFreeze(value) {
@@ -155,7 +196,7 @@ export async function understandVoiceCommand(input, options = {}) {
   if (getAccountScope() !== scopeAtStart) {
     return deepFreeze({ type: "Ask", confidence: snapshot.confidence, status: "denied", reason: "stale_account_scope", preview: null, requiresPreview: true, requiresConfirmation: true, accountScope: scopeAtStart });
   }
-  return classifySnapshot(snapshot, scopeAtStart);
+  return registerCommandPreview(classifySnapshot(snapshot, scopeAtStart));
 }
 
-export default { understandVoiceCommand };
+export default { understandVoiceCommand, cancelVoiceCommandPreview };
