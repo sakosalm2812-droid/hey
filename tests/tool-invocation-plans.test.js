@@ -179,6 +179,10 @@ test("hostile handler output accessors are rejected before Tool Library can insp
         enumerable: true,
         get() { getterCalls += 1; return true; },
       });
+      Object.defineProperty(output, "success", {
+        enumerable: true,
+        get() { getterCalls += 1; return true; },
+      });
       return output;
     }, { capabilities: [capability], permission: "filesystem.read", inputSchema: objectSchema({}) });
 

@@ -859,8 +859,15 @@ async function runWithRetries(tool, input, context) {
       }
       const onLifecycleStart = context[LIFECYCLE_START_CALLBACK];
       if (typeof onLifecycleStart === "function") onLifecycleStart();
-      const result = await tool.handler(input, context);
+      const handlerResult = await tool.handler(input, context);
       if (tools.get(tool.name) !== tool) return { success: false, result: null, error: "Tool registration changed during execution.", status: "stale_registration", metadata: { requestId: context.requestId, source: "tool_registry" } };
+      let result;
+      try {
+        result = snapshotToolData(handlerResult, `Output from ${tool.name}`);
+      } catch {
+        recordAudit({ action: "tool.rejected", tool: tool.name, status: "invalid_output", requestId: context.requestId, metadata: { reason: "unsafe_output" } });
+        return { success: false, result: null, error: "Tool output could not be safely displayed.", status: "invalid_output", metadata: { requestId: context.requestId, attempts: attempt + 1, source: tool.metadata.source || "tool_registry", confidence: 0 } };
+      }
       if (result?.success === false) {
         const retryable = isTransientFailure(result);
         recordAudit({ action: "tool.failed", tool: tool.name, status: "failed", requestId: context.requestId, metadata: { attempt, error: result.error || "Tool reported failure.", verified: Boolean(result.verified), retryable } });
@@ -873,14 +880,8 @@ async function runWithRetries(tool, input, context) {
         };
       }
       if (tool.metadata.outputSchema) {
-        let output;
-        let outputError;
-        try {
-          output = snapshotToolData(result, `Output from ${tool.name}`);
-          outputError = validateToolValue(output, tool.metadata.outputSchema, `Output from ${tool.name}`);
-        } catch (error) {
-          outputError = error instanceof Error ? error.message : "Tool output is invalid.";
-        }
+        const output = result;
+        const outputError = validateToolValue(output, tool.metadata.outputSchema, `Output from ${tool.name}`);
         if (outputError) {
           recordAudit({ action: "tool.rejected", tool: tool.name, status: "failed", requestId: context.requestId, metadata: { reason: "output_contract" } });
           return { success: false, result: null, error: "Tool output did not match its declared schema.", status: "invalid_output", metadata: { requestId: context.requestId, attempts: attempt + 1, source: tool.metadata.source || "tool_registry", confidence: 0 } };
