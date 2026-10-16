@@ -11,6 +11,9 @@ test("onboarding Space suggestions load through the account-scoped Spaces API", 
   assert.match(page, /suggestion\.previewRequest\?\.accountScope === `account:\$\{requestedAccountId\}`/);
   assert.match(page, /suggestion\.permissionsChanged === false/);
   assert.match(page, /suggestion\.requiresConfirmation === true/);
+  assert.match(page, /tutorial\.accountScope === `account:\$\{requestedAccountId\}`/);
+  assert.match(page, /tutorial\.accountScope !== `account:\$\{accountId\}`/);
+  assert.match(page, /HEY\.onboarding\.startTutorial\(tutorial\.capabilityId\)/);
   assert.match(page, /accountRef\.current !== requestedAccountId \|\| getAccountScope\(\) !== `account:\$\{requestedAccountId\}`/);
   assert.match(page, /\[accountId, loadOnboardingSuggestions, loadToolCatalog, refreshSpaces\]/);
 });
@@ -32,6 +35,8 @@ test("suggestions use their API preview request and retain explicit confirmation
   assert.match(page, /createPreviewFromRequest\(suggestion\.previewRequest\)/);
   assert.match(page, /HEY\.spaces\.confirmNaturalLanguageCreation\(\{ previewId: pending\.previewId, confirm: true \}\)/);
   assert.match(page, /Confirm and create/);
+  assert.match(page, /Custom goal text is not interpreted/);
+  assert.match(page, /Suggested getting-started tutorials/);
   assert.match(page, /permissionsChanged !== false/);
   assert.match(page, /Permissions<\/dt><dd>Unchanged<\/dd>/);
 });

@@ -281,6 +281,44 @@ test("onboarding motivation suggestions connect to private Space previews for th
   } finally { setAccountScope(previousScope); }
 }));
 
+test("saved purposes drive account-bound Space and tutorial recommendations without duplicating preferences", () => withStorage(() => {
+  const previousScope = "spaces-purpose-previous";
+  const previousPermissions = listPermissions();
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("spaces-purpose-owner-a");
+    HEY.onboarding.setMotivations(["organize_work"]);
+    assert.deepEqual(HEY.onboarding.savePurposeSetup(["teaching_learning", "custom"], "Help me prepare lessons"), {
+      complete: true,
+      selections: ["teaching_learning", "custom"],
+      customGoal: "Help me prepare lessons",
+    });
+    const personalized = spacesApi.getOnboardingSuggestions();
+    assert.equal(personalized.accountScope, "account:spaces-purpose-owner-a");
+    assert.equal(personalized.recommendationSource, "purposes");
+    assert.deepEqual(personalized.purposeSelections, ["teaching_learning", "custom"]);
+    assert.deepEqual(personalized.motivationSelections, ["organize_work"]);
+    assert.deepEqual(personalized.suggestions.map(({ id }) => id), ["learning", "personal", "work"]);
+    assert.deepEqual(personalized.tutorialRecommendations.map(({ capabilityId }) => capabilityId), ["memory", "chat"]);
+    assert.equal(personalized.tutorialRecommendations[0].title, "Memory & the Cosmos");
+    assert.equal(personalized.tutorialRecommendations.every(({ accountScope }) => accountScope === personalized.accountScope), true);
+    assert.equal(JSON.stringify(personalized).includes("Help me prepare lessons"), false);
+    assert.deepEqual(spacesApi.getPrivateSpaces(), []);
+    assert.deepEqual(listPermissions(), previousPermissions);
+
+    setAccountScope("spaces-purpose-owner-b");
+    const otherAccount = spacesApi.getOnboardingSuggestions();
+    assert.equal(otherAccount.accountScope, "account:spaces-purpose-owner-b");
+    assert.equal(otherAccount.recommendationSource, "default");
+    assert.deepEqual(otherAccount.purposeSelections, []);
+    assert.deepEqual(otherAccount.suggestions.map(({ id }) => id), ["personal", "work", "learning"]);
+    assert.deepEqual(otherAccount.tutorialRecommendations.map(({ capabilityId }) => capabilityId), ["chat", "voice"]);
+
+    setAccountScope("spaces-purpose-owner-a");
+    assert.deepEqual(spacesApi.getOnboardingSuggestions().purposeSelections, ["teaching_learning", "custom"]);
+  } finally { setAccountScope(previousScope); }
+}));
+
 test("onboarding template persists through edit, archive, failed restore recovery, and account isolation", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);

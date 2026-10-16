@@ -644,6 +644,8 @@ export default function SpacesPage() {
   const [toolCatalogAccountId, setToolCatalogAccountId] = useState("");
   const [toolCatalogStatus, setToolCatalogStatus] = useState("loading");
   const [suggestions, setSuggestions] = useState([]);
+  const [tutorialSuggestions, setTutorialSuggestions] = useState([]);
+  const [suggestionSource, setSuggestionSource] = useState("default");
   const [suggestionsAccountId, setSuggestionsAccountId] = useState("");
   const [suggestionsStatus, setSuggestionsStatus] = useState("loading");
   const [suggestionsError, setSuggestionsError] = useState("");
@@ -689,6 +691,8 @@ export default function SpacesPage() {
     const requestedAccountId = accountId;
     setSuggestionsStatus("loading");
     setSuggestions([]);
+    setTutorialSuggestions([]);
+    setSuggestionSource("default");
     setSuggestionsAccountId("");
     setSuggestionsError("");
     await Promise.resolve();
@@ -713,7 +717,15 @@ export default function SpacesPage() {
         && suggestion.previewRequest?.accountScope === `account:${requestedAccountId}`
         && typeof suggestion.previewRequest?.prompt === "string"
       );
+      const safeTutorialSuggestions = Array.isArray(result.tutorialRecommendations)
+        ? result.tutorialRecommendations.filter((tutorial) => tutorial
+          && typeof tutorial.capabilityId === "string"
+          && typeof tutorial.title === "string"
+          && tutorial.accountScope === `account:${requestedAccountId}`)
+        : [];
       setSuggestions(safeSuggestions);
+      setTutorialSuggestions(safeTutorialSuggestions);
+      setSuggestionSource(["purposes", "interests", "default"].includes(result.recommendationSource) ? result.recommendationSource : "default");
       setSuggestionsAccountId(requestedAccountId);
       setSuggestionsStatus("ready");
     } catch {
@@ -974,6 +986,14 @@ export default function SpacesPage() {
     return createPreviewFromRequest(suggestion.previewRequest);
   };
 
+  const startSuggestedTutorial = (tutorial) => {
+    if (suggestionsAccountId !== accountId || !accountIsCurrent || !tutorialSuggestions.includes(tutorial)
+      || tutorial.accountScope !== `account:${accountId}` || getAccountScope() !== `account:${accountId}`) return;
+    const result = HEY.onboarding.startTutorial(tutorial.capabilityId);
+    if (accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
+    if (result?.error) setSuggestionsError("The tutorial could not be started. Try again.");
+  };
+
   const confirmPreview = async () => {
     if (!spacePreviewMatchesAccount(preview, accountId, accountRef.current) || creating) return;
     const pending = preview;
@@ -1136,7 +1156,7 @@ export default function SpacesPage() {
             <RotateCw size={14} aria-hidden="true" /> Refresh suggestions
           </button>
         </div>
-        <p className="spaces-page__hint">Suggestions use your onboarding interests. They never change permissions or create a Space until you review and confirm.</p>
+        <p className="spaces-page__hint">{suggestionsAccountId !== accountId || !accountIsCurrent ? "Onboarding recommendations are private to the signed-in account." : suggestionSource === "purposes" ? "Suggestions are based on the selected areas saved for this account." : suggestionSource === "interests" ? "Suggestions are based on this account’s saved onboarding interests." : "These are general starter suggestions."} Custom goal text is not interpreted. Starting a tutorial is optional; a Space is only created after you review and confirm, and permissions stay unchanged.</p>
         {suggestionsStatus === "loading" && <p className="spaces-page__status" role="status" aria-live="polite"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading Space suggestions…</p>}
         {suggestionsStatus === "error" && suggestionsAccountId === accountId && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{suggestionsError}</p><button type="button" className="spaces-page__secondary" onClick={loadOnboardingSuggestions} disabled={!accountIsCurrent}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
         {suggestionsStatus === "ready" && suggestionsAccountId === accountId && suggestions.length === 0 && <p className="spaces-page__empty-suggestions" role="status">No onboarding suggestions yet. Add interests during onboarding, or describe a Space above.</p>}
@@ -1148,6 +1168,15 @@ export default function SpacesPage() {
             </button>
           </li>
         ))}</ul>}
+        {suggestionsStatus === "ready" && suggestionsAccountId === accountId && tutorialSuggestions.length > 0 && <div className="spaces-page__tutorial-recommendations" aria-labelledby="space-tutorial-recommendations-title">
+          <h3 id="space-tutorial-recommendations-title">Suggested getting-started tutorials</h3>
+          <ul>{tutorialSuggestions.map((tutorial) => <li key={tutorial.capabilityId}>
+            <span>{tutorial.title}</span>
+            <button type="button" className="spaces-page__secondary" onClick={() => startSuggestedTutorial(tutorial)} disabled={!accountIsCurrent}>
+              Start tutorial
+            </button>
+          </li>)}</ul>
+        </div>}
       </section>
 
       {creating && <p className="spaces-page__status" role="status" aria-live="polite">{creationPhase === "confirm" ? "Creating your private Space…" : "Preparing your preview…"}</p>}

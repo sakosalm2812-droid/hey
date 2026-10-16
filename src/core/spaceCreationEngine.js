@@ -3,7 +3,7 @@ import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { safeStorage } from "../lib/safeStorage.js";
 import { getTool } from "./toolRegistry.js";
-import { getOnboardingMotivations, rankOnboardingStarterSuggestions } from "./onboardingEngine.js";
+import { getOnboardingMotivations, getOnboardingPurposeSetup, getPurposeTutorialRecommendations, getTutorial, onboardingEngine, rankOnboardingStarterSuggestions, rankOnboardingStarterSuggestionsForPurposes } from "./onboardingEngine.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
 export const SPACE_STORAGE_CONTRACT_VERSION = 5;
@@ -794,10 +794,26 @@ export class SpaceCreationEngine {
   getOnboardingSuggestions() {
     const scope = this.accountScope;
     if (scope === "anonymous" || getAccountScope() !== scope) return { error: "An active account is required for Space suggestions" };
+    const purposeSetup = getOnboardingPurposeSetup();
+    if (getAccountScope() !== scope || onboardingEngine.accountScope !== scope) return { error: "Account scope changed; reload before retrying suggestions" };
+    const hasPurposes = purposeSetup.complete && purposeSetup.selections.length > 0;
+    const hasSkippedPurposeSetup = purposeSetup.complete && purposeSetup.selections.length === 0;
+    const motivationSelections = getOnboardingMotivations();
+    const rankedSuggestions = hasPurposes
+      ? rankOnboardingStarterSuggestionsForPurposes(purposeSetup.selections)
+      : hasSkippedPurposeSetup ? rankOnboardingStarterSuggestions([]) : rankOnboardingStarterSuggestions();
+    const tutorialRecommendations = getPurposeTutorialRecommendations(purposeSetup.selections.length ? purposeSetup.selections : []);
+    if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying suggestions" };
     return {
       accountScope: scope,
-      motivationSelections: getOnboardingMotivations(),
-      suggestions: rankOnboardingStarterSuggestions().map(({ id, label, score }) => {
+      motivationSelections,
+      purposeSelections: hasPurposes ? [...purposeSetup.selections] : [],
+      recommendationSource: hasPurposes ? "purposes" : hasSkippedPurposeSetup || motivationSelections.length === 0 ? "default" : "interests",
+      tutorialRecommendations: tutorialRecommendations.map((capabilityId) => {
+        const tutorial = getTutorial(capabilityId);
+        return { capabilityId, accountScope: scope, title: tutorial?.title || capabilityId };
+      }),
+      suggestions: rankedSuggestions.map(({ id, label, score }) => {
         const starter = ONBOARDING_SPACE_STARTERS[id];
         return {
           id,

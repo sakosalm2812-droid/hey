@@ -44,6 +44,10 @@
 .spaces-page__suggestion { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 14px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 14px; background: rgba(0, 0, 0, .1); }
 .spaces-page__suggestion h3 { margin: 0; font-size: 14px; }
 .spaces-page__suggestion p { margin: 5px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 11px; }
+.spaces-page__tutorial-recommendations { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, .08); }
+.spaces-page__tutorial-recommendations h3 { margin: 0 0 10px; font-size: 13px; }
+.spaces-page__tutorial-recommendations ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.spaces-page__tutorial-recommendations li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 12px; color: var(--text-primary, #f5f2ec); font-size: 12px; }
 .spaces-page__empty-suggestions { margin: 14px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 13px; }
 .spaces-page__create label { display: block; margin-bottom: 7px; font-size: 16px; font-weight: 600; }
 .spaces-page__hint,

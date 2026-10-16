@@ -134,6 +134,24 @@ const MOTIVATION_STARTER_WEIGHTS = Object.freeze({
   accessibility: Object.freeze({ personal: 1, work: 1, learning: 1 }),
   privacy: Object.freeze({ personal: 1, work: 1, learning: 1 }),
 });
+const PURPOSE_STARTER_MOTIVATIONS = Object.freeze({
+  ai_assistant: Object.freeze(["save_time"]),
+  ai_models: Object.freeze(["learn", "create"]),
+  control_automation: Object.freeze(["organize_work", "save_time"]),
+  create_build: Object.freeze(["create"]),
+  teaching_learning: Object.freeze(["learn"]),
+  life_work: Object.freeze(["organize_work", "manage_personal"]),
+  custom: Object.freeze([]),
+});
+const PURPOSE_TUTORIALS = Object.freeze({
+  ai_assistant: Object.freeze(["chat"]),
+  ai_models: Object.freeze(["chat"]),
+  control_automation: Object.freeze(["forge"]),
+  create_build: Object.freeze(["forge", "studio"]),
+  teaching_learning: Object.freeze(["memory"]),
+  life_work: Object.freeze(["chat", "memory"]),
+  custom: Object.freeze(["chat"]),
+});
 
 const VALID_ONBOARDING_STAGES = new Set([...Object.values(ONBOARDING_STAGES)]);
 const VALID_PRACTICE_TASK_IDS = new Set(PRACTICE_TASKS.map(({ id }) => id));
@@ -536,6 +554,22 @@ export class OnboardingEngine {
       .map(({ suggestion, score }) => ({ ...suggestion, score }));
   }
 
+  rankStarterSuggestionsForPurposes(purposeIds = this.progress.purposeSelections) {
+    const normalized = normalizePurposeSelections(purposeIds);
+    if (!normalized || normalized.length === 0) return this.rankStarterSuggestions([]);
+    const derivedMotivations = [...new Set(normalized.flatMap((purposeId) => PURPOSE_STARTER_MOTIVATIONS[purposeId]))];
+    return this.rankStarterSuggestions(derivedMotivations);
+  }
+
+  getPurposeTutorialRecommendations(purposeIds = this.progress.purposeSelections) {
+    const normalized = normalizePurposeSelections(purposeIds);
+    if (!normalized) return [];
+    const recommendations = normalized.length === 0
+      ? ["chat", "voice"]
+      : [...new Set(normalized.flatMap((purposeId) => PURPOSE_TUTORIALS[purposeId]))];
+    return recommendations.slice(0, 3);
+  }
+
   selectPracticeTask(taskId) {
     const task = PRACTICE_TASKS.find(t => t.id === taskId);
     if (!task) return { error: "Invalid practice task" };
@@ -758,6 +792,14 @@ export function skipOnboardingPurposeSetup() {
 
 export function rankOnboardingStarterSuggestions(motivationIds) {
   return onboardingEngine.rankStarterSuggestions(motivationIds);
+}
+
+export function rankOnboardingStarterSuggestionsForPurposes(purposeIds) {
+  return onboardingEngine.rankStarterSuggestionsForPurposes(purposeIds);
+}
+
+export function getPurposeTutorialRecommendations(purposeIds) {
+  return onboardingEngine.getPurposeTutorialRecommendations(purposeIds);
 }
 
 export function selectPracticeTask(taskId) {
