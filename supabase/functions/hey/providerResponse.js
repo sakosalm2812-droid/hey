@@ -5,20 +5,34 @@ function cancelBody(reader) {
 }
 
 /** Read provider JSON with a hard byte cap; malformed and oversized bodies fail closed. */
-export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONSE_BYTES) {
-  if (!response || !Number.isSafeInteger(maxBytes) || maxBytes < 1) return { status: "invalid" };
+export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONSE_BYTES, { signal, timeoutMs = 10_000 } = {}) {
+  if (!response || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return { status: "invalid" };
   const declaredLength = response.headers?.get?.("content-length");
   if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
-    try { await response.body?.cancel?.(); } catch { /* Best-effort upstream cleanup. */ }
+    try { void Promise.resolve(response.body?.cancel?.()).catch(() => {}); } catch { /* Best-effort upstream cleanup. */ }
     return { status: "too_large" };
   }
   const reader = response.body?.getReader?.();
   if (!reader) return { status: "invalid" };
   const chunks = [];
   let totalBytes = 0;
+  let interrupt;
+  const interrupted = new Promise((resolve) => { interrupt = resolve; });
+  const onAbort = () => interrupt({ status: "aborted" });
+  const timer = setTimeout(() => interrupt({ status: "timeout" }), timeoutMs);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const outcome = await Promise.race([
+        reader.read().then((result) => ({ result }), () => ({ status: "invalid" })),
+        interrupted,
+      ]);
+      if (outcome.status) {
+        cancelBody(reader);
+        return { status: outcome.status };
+      }
+      const { done, value } = outcome.result;
       if (done) break;
       if (!(value instanceof Uint8Array)) {
         cancelBody(reader);
@@ -26,7 +40,7 @@ export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONS
       }
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
-        try { await reader.cancel(); } catch { /* Best-effort upstream cleanup. */ }
+        cancelBody(reader);
         return { status: "too_large" };
       }
       chunks.push(value);
@@ -35,6 +49,8 @@ export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONS
     cancelBody(reader);
     return { status: "invalid" };
   } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
     try { reader.releaseLock(); } catch { /* A failed stream may retain its lock. */ }
   }
 

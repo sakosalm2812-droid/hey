@@ -31,6 +31,34 @@ test("oversized streamed provider errors are cancelled instead of fully buffered
   assert.equal(cancelled, true);
 });
 
+test("a stalled provider body times out promptly even when upstream cancellation never settles", async () => {
+  let cancelRequested = false;
+  const body = new ReadableStream({
+    start() {},
+    cancel() {
+      cancelRequested = true;
+      return new Promise(() => {});
+    },
+  });
+  const startedAt = Date.now();
+  assert.deepEqual(await readProviderJson(new Response(body), undefined, { timeoutMs: 20 }), { status: "timeout" });
+  assert.equal(Date.now() - startedAt < 500, true);
+  assert.equal(cancelRequested, true);
+});
+
+test("aborting a stalled provider body returns promptly and marks it as aborted", async () => {
+  let cancelRequested = false;
+  const controller = new AbortController();
+  const body = new ReadableStream({
+    start() {},
+    cancel() { cancelRequested = true; return new Promise(() => {}); },
+  });
+  const reading = readProviderJson(new Response(body), undefined, { signal: controller.signal, timeoutMs: 5_000 });
+  controller.abort();
+  assert.deepEqual(await reading, { status: "aborted" });
+  assert.equal(cancelRequested, true);
+});
+
 test("grant revocation during a provider response read invalidates the old exact-model snapshot", async () => {
   let finishBody;
   const body = new ReadableStream({
@@ -49,10 +77,14 @@ test("grant revocation during a provider response read invalidates the old exact
 test("chat handles bad provider bodies as recoverable failures while exact selection stays a singleton", async () => {
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   const providerCall = route.slice(route.indexOf("async function callProvider"), route.indexOf("function shouldSearch"));
-  assert.match(route, /readProviderJson\(response\)/);
+  assert.match(route, /readProviderJson\(response, undefined, \{/);
   assert.match(route, /parsedResponse\.status !== "ok"[\s\S]*?continue;/);
+  assert.match(route, /readProviderJson\(response, undefined, \{[\s\S]*?signal,[\s\S]*?timeoutMs: Math\.max/);
+  assert.match(route, /callProvider\(messages, 1200, chatProviderAttempts, authorizeChatProvider, request\.signal\)/);
+  assert.match(route, /parsedResponse\.status === "aborted"[\s\S]*?providerRequestCancelled/);
+  assert.match(route, /request\.signal\.aborted\) return jsonResponse\(\{ error: "The provider request was cancelled"/);
   assert.match(route, /chatProviderAttempts = \[selection\.attempt\]/);
   assert.match(route, /if \(authorizeProvider && !await authorizeProvider\(provider\)\)[\s\S]*?const response = provider\.id/);
-  assert.match(route, /if \(response\.ok\) \{\s+if \(authorizeProvider && !await authorizeProvider\(provider\)\)/);
+  assert.match(route, /if \(response\.ok\) \{[\s\S]*?const stillAuthorized = await authorizeProvider\(provider\)/);
   assert.doesNotMatch(providerCall, /data\?\.error\?\.message/);
 });

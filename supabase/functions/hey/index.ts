@@ -106,11 +106,13 @@ async function callProvider(
   maxTokens: number,
   orderedAttempts = getProviderAttempts(),
   authorizeProvider?: (provider: ProviderAttempt) => Promise<boolean>,
+  signal?: AbortSignal,
 ) {
   let lastError = "No AI provider is configured";
 
   const deadline = Date.now() + 35_000;
   for (const provider of orderedAttempts) {
+    if (signal?.aborted) throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
     if (Date.now() >= deadline) break;
     const remaining = Math.max(500, Math.min(18_000, deadline - Date.now()));
     try {
@@ -123,7 +125,7 @@ async function callProvider(
           headers: { "Content-Type": "application/json", "x-goog-api-key": provider.key },
           redirect: "error",
           body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: messages.map((message) => `${message.role}: ${message.content}`).join("\n\n") }] }], generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 } }),
-        }, remaining)
+        }, remaining, signal)
         : await fetchWithTimeout(provider.id === "openai" ? "https://api.openai.com/v1/chat/completions" : provider.id === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -132,9 +134,15 @@ async function callProvider(
             ...(provider.id === "openrouter" ? { "HTTP-Referer": Deno.env.get("APP_URL") || "http://localhost:5173", "X-Title": "HEY" } : {}),
           },
           body: JSON.stringify({ model: provider.model, messages, temperature: 0.7, max_tokens: maxTokens }),
-        }, remaining);
+        }, remaining, signal);
 
-      const parsedResponse = await readProviderJson(response);
+      const parsedResponse = await readProviderJson(response, undefined, {
+        signal,
+        timeoutMs: Math.max(1, Math.min(18_000, deadline - Date.now())),
+      });
+      if (parsedResponse.status === "aborted") {
+        throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
+      }
       if (parsedResponse.status !== "ok") {
         lastError = `${provider.id}: ${parsedResponse.status === "too_large" ? "response too large" : "invalid response"}`;
         console.error("HEY provider response rejected", provider.id, parsedResponse.status);
@@ -142,15 +150,25 @@ async function callProvider(
       }
       const data = parsedResponse.data;
       if (response.ok) {
-        if (authorizeProvider && !await authorizeProvider(provider)) {
-          throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
+        if (signal?.aborted) {
+          throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
+        }
+        if (authorizeProvider) {
+          const stillAuthorized = await authorizeProvider(provider);
+          if (!stillAuthorized) {
+            throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
+          }
+          if (signal?.aborted) {
+            throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
+          }
         }
         return { data, providerId: provider.id, model: provider.model };
       }
       lastError = `${provider.id}: HTTP ${response.status}`;
       console.error("HEY provider returned an error", provider.id, response.status);
     } catch (error) {
-      if (error?.providerEntitlementDenied || error?.providerAuthorizationUnavailable) throw error;
+      if (signal?.aborted) throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
+      if (error?.providerEntitlementDenied || error?.providerAuthorizationUnavailable || error?.providerRequestCancelled) throw error;
       lastError = `${provider.id}: request failed`;
       console.error("HEY provider request failed", provider.id);
     }
@@ -832,7 +850,7 @@ Deno.serve(async (request) => {
         (requestedProvider.status !== "selected" || (provider.id === requestedProvider.providerId && provider.model === requestedProvider.modelId));
     };
     try {
-      providerResult = await callProvider(messages, 1200, chatProviderAttempts, authorizeChatProvider);
+      providerResult = await callProvider(messages, 1200, chatProviderAttempts, authorizeChatProvider, request.signal);
     } catch (error) {
       if (error?.providerEntitlementDenied) {
         return jsonResponse({ error: "Your account is not permitted to use this provider", code: "provider_entitlement_required" }, 403);
@@ -840,9 +858,13 @@ Deno.serve(async (request) => {
       if (error?.providerAuthorizationUnavailable) {
         return jsonResponse({ error: "Your account permissions could not be verified", code: "account_permissions_unavailable" }, 503);
       }
+      if (error?.providerRequestCancelled) {
+        return jsonResponse({ error: "The provider request was cancelled", code: "provider_request_cancelled" }, 499);
+      }
       console.error("HEY provider error", error);
       return jsonResponse({ error: "HEY could not reach an AI provider" }, 502);
     }
+    if (request.signal.aborted) return jsonResponse({ error: "The provider request was cancelled", code: "provider_request_cancelled" }, 499);
     response = extractProviderText(providerResult.data);
     if (!response) return jsonResponse({ error: "HEY received an empty response" }, 502);
     providerMetadata = { model: providerResult.model, provider: providerResult.providerId };
@@ -851,6 +873,10 @@ Deno.serve(async (request) => {
   const answer = sources.length
     ? `${response}\n\nSources:\n${sources.map((source) => `- ${source.title}: ${source.url}`).join("\n")}`
     : response;
+
+  if (!fusionRequested && request.signal.aborted) {
+    return jsonResponse({ error: "The provider request was cancelled", code: "provider_request_cancelled" }, 499);
+  }
 
   if (fusionRequested) {
     const fusionMetadata = providerMetadata.fusion as Record<string, unknown>;
