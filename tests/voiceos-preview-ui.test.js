@@ -63,6 +63,7 @@ test("VoiceOS preview labels and status copy are accessible and translated for e
     "highRisk", "mediumRisk", "openApp", "navigateBrowser", "openWebsite", "noAuthority",
     "reviewedStatus", "dismiss", "reviewedAction", "cancelAction", "accountChanged",
     "accountRequiredVoice", "accountRequired", "differentAccount", "expired",
+    "expiredRefresh", "expiredNotice", "refreshPreview", "previewRefreshFailed", "previewFreshReady",
     "reviewNeedsAuthorization", "cancelled", "previewOnly", "voicePrepared",
     "capabilityAppOpen", "capabilityBrowserNavigate", "capabilityBrowserOpenUrl",
   ];
@@ -84,4 +85,18 @@ test("VoiceOS preview labels and status copy are accessible and translated for e
   for (const key of ["noAuthority", "risk", "target", "cancelAction", "accountChanged", "differentAccount", "expired", "reviewNeedsAuthorization"]) {
     assert.match(source, new RegExp(`chat\\.voiceOS\\.${key}`), `${key} uses the translation API`);
   }
+});
+
+test("expired previews offer only a fresh preview and keep the original request recoverable", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  assert.match(source, /This preview expired\. Refresh it to review a new preview; nothing was run\./);
+  assert.match(source, /Refresh preview/);
+  const refreshStart = source.indexOf("async function refreshComputerPreview()");
+  const refreshEnd = source.indexOf("function cancelComputerPreview()", refreshStart);
+  assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
+  const refreshHandler = source.slice(refreshStart, refreshEnd);
+  assert.match(refreshHandler, /createSafeComputerPreview\(pending\.message\)/);
+  assert.match(refreshHandler, /storeComputerPreview\(\{ \.\.\.nextPreview, source: pending\.source \}\)/);
+  assert.match(refreshHandler, /setMessage\(pending\.message\)/);
+  assert.doesNotMatch(refreshHandler, /sendUserMessage|askHEY|executeRequest|invoke\(/);
 });

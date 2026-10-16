@@ -327,6 +327,25 @@ function ChatWorkspace() {
     setPendingComputerPreview(nextPreview);
   }, []);
 
+  useEffect(() => {
+    const pending = pendingComputerPreview;
+    if (!pending || pending.reviewed || pending.expired) return undefined;
+    const expiresAt = Date.parse(pending.preview.expiresAt);
+    if (!Number.isFinite(expiresAt)) return undefined;
+    const timeout = window.setTimeout(() => {
+      const current = pendingComputerPreviewRef.current;
+      if (!current || current.preview.previewId !== pending.preview.previewId || current.reviewed) return;
+      if (current.accountScope !== getAccountScope()) {
+        storeComputerPreview(null);
+        return;
+      }
+      cancelVoiceCommandPreview(current.preview.previewId);
+      storeComputerPreview({ ...current, expired: true });
+      setExecutionStatus(t("chat.voiceOS.expiredRefresh", "This preview expired. Refresh it to review a new preview; nothing was run."));
+    }, Math.max(0, expiresAt - Date.now()));
+    return () => window.clearTimeout(timeout);
+  }, [pendingComputerPreview, storeComputerPreview, t]);
+
   const askFromVoice = useCallback(async (text, { signal, conversationId: activeConversationId, onConversationId } = {}) => {
     const nextPreview = await createSafeComputerPreview(text, signal);
     if (signal?.aborted) return t("chat.voiceOS.cancelled", "Computer preview cancelled. Nothing was sent or opened.");
@@ -437,7 +456,7 @@ function ChatWorkspace() {
 
   function reviewComputerPreview() {
     const pending = pendingComputerPreviewRef.current;
-    if (!pending || pending.reviewed) return;
+    if (!pending || pending.reviewed || pending.expired) return;
     if (pending.accountScope !== getAccountScope() || pending.accountScope !== `account:${user?.id || ""}`) {
       cancelVoiceCommandPreview(pending.preview.previewId);
       storeComputerPreview(null);
@@ -446,12 +465,57 @@ function ChatWorkspace() {
     }
     const reviewed = reviewVoiceCommandPreview(pending.preview);
     if (!reviewed.success) {
+      if (reviewed.status === "preview_expired") {
+        storeComputerPreview({ ...pending, expired: true });
+        setExecutionStatus(t("chat.voiceOS.expiredRefresh", "This preview expired. Refresh it to review a new preview; nothing was run."));
+        return;
+      }
       storeComputerPreview(null);
       setExecutionStatus(t("chat.voiceOS.expired", "This preview expired or changed. Create a new preview before proceeding."));
       return;
     }
     storeComputerPreview({ ...pending, reviewed: true, reviewStatus: reviewed.status });
     setExecutionStatus(t("chat.voiceOS.reviewNeedsAuthorization", "Review recorded. A Trust Kernel permit and verified device authorization are still required; nothing was run."));
+  }
+
+  async function refreshComputerPreview() {
+    const pending = pendingComputerPreviewRef.current;
+    if (!pending?.expired || previewRequestInFlightRef.current) return;
+    if (pending.accountScope !== getAccountScope() || pending.accountScope !== `account:${user?.id || ""}`) {
+      storeComputerPreview(null);
+      setExecutionStatus(t("chat.voiceOS.differentAccount", "This preview belongs to a different account. Nothing was run."));
+      return;
+    }
+    previewRequestInFlightRef.current = true;
+    setPreviewChecking(true);
+    let nextPreview;
+    try {
+      nextPreview = await createSafeComputerPreview(pending.message);
+    } catch {
+      const current = pendingComputerPreviewRef.current;
+      if (current?.preview.previewId === pending.preview.previewId) {
+        storeComputerPreview(null);
+        setMessage(pending.message);
+        setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. Your request was restored so you can try again."));
+      }
+      return;
+    } finally {
+      previewRequestInFlightRef.current = false;
+      setPreviewChecking(false);
+    }
+    const current = pendingComputerPreviewRef.current;
+    if (!current || current.preview.previewId !== pending.preview.previewId || current.accountScope !== getAccountScope()) {
+      if (nextPreview?.preview?.previewId) cancelVoiceCommandPreview(nextPreview.preview.previewId);
+      return;
+    }
+    if (!nextPreview || nextPreview.blocked) {
+      storeComputerPreview(null);
+      setMessage(pending.message);
+      setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. Your request was restored so you can try again."));
+      return;
+    }
+    storeComputerPreview({ ...nextPreview, source: pending.source });
+    setExecutionStatus(t("chat.voiceOS.previewFreshReady", "A fresh preview is ready. Review it before proceeding; nothing was run."));
   }
 
   function cancelComputerPreview() {
@@ -474,7 +538,7 @@ function ChatWorkspace() {
       return <p className="hey-chat-execution-status" role="status">{t("chat.voiceOS.checking", "Checking whether this request can be shown as a safe preview. Nothing has been sent or run.")}</p>;
     }
     if (!pendingComputerPreview) return null;
-    const { summary, reviewed } = pendingComputerPreview;
+    const { summary, reviewed, expired } = pendingComputerPreview;
     const actionLabel = translatedPreviewAction(summary.label, t);
     const riskLabel = summary.risk === "High"
       ? t("chat.voiceOS.highRisk", "High")
@@ -495,6 +559,12 @@ function ChatWorkspace() {
           <div className="hey-computer-preview-actions">
             <p role="status">{t("chat.voiceOS.reviewedStatus", "Review recorded. Nothing was run.")}</p>
             <button type="button" onClick={dismissComputerPreview}>{t("chat.voiceOS.dismiss", "Dismiss")}</button>
+          </div>
+        ) : expired ? (
+          <div className="hey-computer-preview-actions">
+            <p role="status">{t("chat.voiceOS.expiredNotice", "This preview expired. A fresh preview must be reviewed separately.")}</p>
+            <button type="button" className="hey-btn-primary" onClick={refreshComputerPreview}>{t("chat.voiceOS.refreshPreview", "Refresh preview")}</button>
+            <button type="button" onClick={cancelComputerPreview}>Cancel preview</button>
           </div>
         ) : (
           <div className="hey-computer-preview-actions">
