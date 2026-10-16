@@ -9,6 +9,7 @@ import { canGrantPermission } from "./lib/permissionPolicy.js";
 import { resolveAccountPlan } from "./lib/accountRecords.js";
 import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryRecord } from "./lib/toolLibraryReceipts.js";
 import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolLibrarySearch.js";
+import { getDictationReadiness } from "./lib/dictationReadiness.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
@@ -125,7 +126,6 @@ function ToolCard({
   const capabilityErrors = tool.capabilities
     .filter((capability) => capability.error)
     .map((capability) => capability.error);
-
   const setReceipt = useCallback((next) => {
     setReceiptState((current) => {
       const value = typeof next === "function" ? next(isToolLibraryRecordVisible(current, accountId, getAccountScope()) ? current : null) : next;
@@ -490,6 +490,20 @@ export default function ToolLibraryPage() {
     return searchToolLibraryCatalog(tools, query);
   }, [query, tools]);
   const dictationDiscovery = isDictationDiscoveryQuery(query);
+  const [dictationReadiness, setDictationReadiness] = useState({ status: "idle", supported: null, permission: "unknown" });
+
+  useEffect(() => {
+    if (!dictationDiscovery) {
+      setDictationReadiness({ status: "idle", supported: null, permission: "unknown" });
+      return undefined;
+    }
+    let current = true;
+    setDictationReadiness({ status: "checking", supported: null, permission: "unknown" });
+    void getDictationReadiness(window).then((readiness) => {
+      if (current) setDictationReadiness({ status: "ready", ...readiness });
+    });
+    return () => { current = false; };
+  }, [dictationDiscovery]);
 
   const visibleTools = !preferenceReady || activeView === "all"
     ? filteredTools
@@ -578,7 +592,17 @@ export default function ToolLibraryPage() {
       {dictationDiscovery && <section className="tool-library__intent-suggestion" aria-labelledby="tool-library-dictation-title">
         <div>
           <h2 id="tool-library-dictation-title">Dictation in Chat</h2>
-          <p>Open Chat to check browser speech recognition support. HEY asks for consent and microphone permission before capturing speech. Cross app text insertion is not available in this web app.</p>
+          <p role="status" aria-live="polite">{dictationReadiness.status !== "ready"
+            ? "Checking browser speech recognition and microphone permission status…"
+            : dictationReadiness.supported === false
+              ? "Speech recognition is not available in this browser. Cross app text insertion is not available in this web app."
+              : dictationReadiness.permission === "granted"
+                ? "Speech recognition is available and microphone permission is already granted. HEY still asks for consent before capture. Cross app text insertion is not available in this web app."
+                : dictationReadiness.permission === "prompt"
+                  ? "Speech recognition is available. Microphone permission will be requested after you review and consent in Chat. Cross app text insertion is not available in this web app."
+                  : dictationReadiness.permission === "denied"
+                    ? "Speech recognition is available, but browser microphone permission is denied. Change the site permission before using dictation. Cross app text insertion is not available in this web app."
+                    : "Speech recognition is available, but this browser does not report microphone permission status. Chat checks permission after you review and consent."}</p>
         </div>
         <Link className="tool-library__retry" to="/chat">Open Chat dictation</Link>
       </section>}

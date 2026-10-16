@@ -52,4 +52,9 @@ test("Tool Library maps the V3 natural language dictation request to a truthful 
   assert.match(pageSource, /Dictation in Chat/);
   assert.match(pageSource, /Cross app text insertion is not available in this web app/);
   assert.match(pageSource, /to="\/chat">Open Chat dictation/);
+  assert.match(pageSource, /getDictationReadiness\(window\)/);
+  assert.match(pageSource, /dictationReadiness\.status !== "ready"/);
+  assert.match(pageSource, /dictationReadiness\.permission === "denied"/);
+  assert.match(pageSource, /dictationReadiness\.permission === "prompt"/);
+  assert.match(pageSource, /<p role="status" aria-live="polite">\{dictationReadiness/);
 });
