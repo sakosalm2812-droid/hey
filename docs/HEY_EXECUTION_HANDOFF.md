@@ -1,4 +1,4 @@
-## Latest integration checkpoint — 2026-10-16 20:43 Asia/Baghdad
+## Latest integration checkpoint — 2026-10-16 20:45 Asia/Baghdad
 
 Coordinator branch `codex/resume-emergency-2026-10-14` integrates through `2cd6cdf` (`Bind voice edits to the active conversation`); this verified batch is ready to push with this handoff. Previous pushed coordinator checkpoint: `772aef6`. Eleven specialist commits from the 20:35 continuation wave were independently reviewed and integrated:
 
@@ -18,7 +18,7 @@ Coordinator branch `codex/resume-emergency-2026-10-14` integrates through `2cd6c
 
 Verification on the integrated coordinator: **900/900** full Node tests pass; full `npm run lint` passes; `npm run build` passes (**2,786 modules**); `npm run smoke:spa` passes for `/login`, `/download`, and `/assets/index-B06UiJq3.js` at `http://127.0.0.1:4173`; `git diff --check` passes. Browser at `http://127.0.0.1:5175/download` verifies public route rendering only. Supabase URL/key, Docker, Supabase CLI and PostgreSQL are absent; authentication, database/RLS/limiter SQL, live providers, native builds/devices, physical camera/microphone and production deployment remain **UNVERIFIED**. All 47 steps remain In progress or Incomplete.
 
-Previous follow-up commits are now integrated. After pushing this checkpoint, continue all eleven existing specialist tasks concurrently from this new base, preserve the source branches, obtain exact new branch/commit receipts, and integrate only distinct verified slices. The 47-step evidence map stays conservative. Preserve untracked `docs/requirements/v3-agent-pack/` unstaged.
+All eleven existing specialist conversations have now received a third continuation prompt concurrently, using GPT-6 Luna at medium reasoning and pushed base `1d5d210`. Each was asked to keep prior branches intact, create a separate branch from this base, implement a distinct nonduplicative gap and return exact checks/commit. Teacher was asked to bring forward the preserved multi-question branch `4d895e07143b95f401776eed9682208a94f05b41` without replacing the differentiated pack or RLS security. New branch names and SHAs are pending; the current known source branch/commit for each task is recorded in the table above. Preserve untracked `docs/requirements/v3-agent-pack/` unstaged.
 
 ---
 ## Previous integration checkpoint — 2026-10-16 20:35 Asia/Baghdad
@@ -42,7 +42,7 @@ Verification on the combined source: **886/886** full Node tests passed; full `n
 
 Teacher Experience remains active (`01a14074-2bb4-7b73-af09-a38e11a10c3d`, branch `codex/teacher-reference-materials-ccd21c`) implementing a differentiated printable pack from existing saved worksheets; exact commit and verification receipt are pending. Frontend Director and Edge & Everywhere have returned commits `c43f6ef` and `ed681d1`, now integrated above. A second continuation prompt was sent concurrently on this checkpoint to the other ten existing tasks: `01a14073-33bf-7403-940b-871cd0de9ebc`, `01a14073-9827-7f42-bf35-4eb2faee522d`, `01a14073-ae0b-7fa2-a145-2d4b3283f087`, `01a14073-c424-70e2-9773-630d488b24ae`, `01a14073-de07-7a90-b8bb-08faadea17bc`, `01a14073-f7e7-7601-8957-8d8cdfafa1d0`, `01a14074-1024-7e32-a5c1-c134d8e204a7`, `01a14074-4bdf-7f33-bf83-bb7e1dff5097`, `01a14074-6e4f-79e2-805f-30ce26dab60e`, and `01a14074-9f63-7672-9965-154a8394ffca`. GPT-6 Luna with medium reasoning was requested; each prompt targets an isolated branch from pushed `5148f3c`. New branch names and SHAs are pending worker acknowledgements; the latest known source branches/commits are recorded in the previous checkpoint table below. Do not reset or overwrite those source branches.
 
-Next actions: collect new branch/commit receipts from the ten concurrent follow-ups and Teacher’s differentiated-pack receipt; review and integrate nonduplicative work; run full tests/lint/build/smoke after each batch; keep the 47-step map In progress or Incomplete until real end-to-end proof exists; obtain live Supabase/Postgres configuration before claiming database integration. Preserve untracked `docs/requirements/v3-agent-pack/` unstaged.
+Next actions: collect new branch/commit receipts from the third concurrent wave; review and integrate nonduplicative work; run full tests/lint/build/smoke after each batch; keep the 47-step map In progress or Incomplete until real end-to-end proof exists; obtain live Supabase/Postgres configuration before claiming database integration. Preserve untracked `docs/requirements/v3-agent-pack/` unstaged.
 
 ---
 ## Earlier execution checkpoint — 2026-10-16 20:22 Asia/Baghdad
