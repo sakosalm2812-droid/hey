@@ -6,7 +6,7 @@ import { getTool } from "./toolRegistry.js";
 import { getOnboardingMotivations, rankOnboardingStarterSuggestions } from "./onboardingEngine.js";
 
 export const SPACE_CREATION_CONTRACT_VERSION = 1;
-export const SPACE_STORAGE_CONTRACT_VERSION = 4;
+export const SPACE_STORAGE_CONTRACT_VERSION = 5;
 export const SPACE_LAYOUT_PREFERENCES_CONTRACT_VERSION = 1;
 export const SPACE_CREATION_LIMITS = Object.freeze({
   maxPromptLength: 500,
@@ -21,7 +21,7 @@ export const SPACE_CREATION_LIMITS = Object.freeze({
 });
 
 const STORAGE_KEY = "hey_spaces";
-const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, 2, 3, SPACE_STORAGE_CONTRACT_VERSION]);
+const SUPPORTED_SPACE_STORAGE_VERSIONS = new Set([1, 2, 3, 4, SPACE_STORAGE_CONTRACT_VERSION]);
 const SPACE_LIFECYCLE_STATUSES = new Set(["active", "archived"]);
 const SPACE_LAYOUT_PREFERENCE_FIELDS = Object.freeze(["favoriteToolIds", "widgetIds", "shortcutIds", "toolIds"]);
 const SPACE_LAYOUT_PREFERENCE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
@@ -87,6 +87,8 @@ function cleanStoredSpace(id, value, scope) {
     const space = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
     if (space.id !== id || space.accountScope !== scope || typeof space.name !== "string" || !SPACE_NAME.test(space.name)) return null;
     if (space.visibility !== "private" || space.sharing !== "off") return null;
+    const templateId = space.templateId === undefined ? "custom" : space.templateId;
+    if (typeof templateId !== "string" || !Object.hasOwn(SPACE_STARTERS, templateId)) return null;
     const detailsRevision = space.detailsRevision === undefined ? 0 : space.detailsRevision;
     if (!Number.isSafeInteger(detailsRevision) || detailsRevision < 0) return null;
     const status = space.status === undefined ? "active" : space.status;
@@ -101,6 +103,7 @@ function cleanStoredSpace(id, value, scope) {
       accountScope: scope,
       name: space.name,
       description: typeof space.description === "string" ? space.description.slice(0, 240) : "",
+      templateId,
       detailsRevision,
       status,
       lifecycleRevision,

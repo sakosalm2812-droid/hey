@@ -65,7 +65,7 @@ test("multi-select starter choices remain onboarding preferences and never creat
 
 test("HEY exposes versioned saved Space layout preference operations to consumers", () => {
   assert.equal(spacesApi.layoutPreferencesContractVersion, 1);
-  assert.equal(spacesApi.storageContractVersion, 4);
+  assert.equal(spacesApi.storageContractVersion, 5);
   assert.equal(typeof spacesApi.getLayoutPreferences, "function");
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
   assert.equal(typeof spacesApi.updateDetails, "function");
@@ -179,7 +179,7 @@ test("private Space archive and restore require preview confirmation and preserv
     assert.equal(archivedSpace.visibility, "private");
     assert.equal(archivedSpace.sharing, "off");
     assert.deepEqual(listPermissions(), grantsBefore);
-    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).contractVersion, 4);
+    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).contractVersion, 5);
 
     const restorePreview = engine.previewRestoreSpace({ ...request, expectedLifecycleRevision: 1 });
     assert.equal(restorePreview.action, "restore_private_space");
@@ -273,6 +273,69 @@ test("onboarding motivation suggestions connect to private Space previews for th
   } finally { setAccountScope(previousScope); }
 }));
 
+test("onboarding template persists through edit, archive, failed restore recovery, and account isolation", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  clearPermissions();
+  try {
+    setAccountScope("space-template-path-owner-a");
+    seedPermissions([{ permission: "permission.space.template-path", status: "granted" }], "space-template-path-owner-a");
+    const grantsBefore = listPermissions();
+    HEY.onboarding.setMotivations(["organize_work", "learn"]);
+    const suggestion = spacesApi.getOnboardingSuggestions().suggestions.find(({ id }) => id === "work");
+    const preview = spacesApi.previewNaturalLanguageCreation(suggestion.previewRequest);
+    assert.equal(preview.space.templateId, "planning");
+    const created = spacesApi.confirmNaturalLanguageCreation({ previewId: preview.previewId, confirm: true });
+    assert.equal(created.success, true);
+    assert.equal(created.permissionsChanged, false);
+    assert.equal(new SpaceCreationEngine().getSpaces()[0].templateId, "planning");
+
+    const edited = spacesApi.updateDetails({
+      accountScope: created.space.accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      name: "Weekly planning",
+      description: "Keep work and learning in one private Space.",
+    });
+    assert.equal(edited.success, true);
+    assert.equal(edited.revision, 1);
+
+    const archivedPreview = spacesApi.previewArchive({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedLifecycleRevision: 0 });
+    assert.equal(archivedPreview.requiresConfirmation, true);
+    const archived = spacesApi.confirmArchive({ previewId: archivedPreview.previewId, confirm: true });
+    assert.equal(archived.status, "archived");
+    const archivedAfterReload = new SpaceCreationEngine().getSpaces()[0];
+    assert.equal(archivedAfterReload.templateId, "planning");
+    assert.equal(archivedAfterReload.name, "Weekly planning");
+    assert.equal(archivedAfterReload.description, "Keep work and learning in one private Space.");
+
+    const staleAccountPreview = spacesApi.previewRestore({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedLifecycleRevision: 1 });
+    setAccountScope("space-template-path-owner-b");
+    assert.match(spacesApi.confirmRestore({ previewId: staleAccountPreview.previewId, confirm: true }).error, /not found or already used|Account scope changed/);
+    assert.deepEqual(spacesApi.getPrivateSpaces(), []);
+    assert.equal(storage.getItem(getAccountStorageKey("hey_spaces")), null);
+
+    setAccountScope("space-template-path-owner-a");
+    storage.failWrites = true;
+    const failedRestorePreview = spacesApi.previewRestore({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedLifecycleRevision: 1 });
+    const failedRestore = spacesApi.confirmRestore({ previewId: failedRestorePreview.previewId, confirm: true });
+    assert.equal(failedRestore.code, "write_failed");
+    assert.equal(spacesApi.getPrivateSpaces()[0].status, "archived");
+
+    storage.failWrites = false;
+    const retryPreview = spacesApi.previewRestore({ accountScope: created.space.accountScope, spaceId: created.space.id, expectedLifecycleRevision: 1 });
+    const restored = spacesApi.confirmRestore({ previewId: retryPreview.previewId, confirm: true });
+    assert.equal(restored.success, true);
+    const restoredAfterReload = new SpaceCreationEngine().getSpaces()[0];
+    assert.equal(restoredAfterReload.status, "active");
+    assert.equal(restoredAfterReload.templateId, "planning");
+    assert.equal(restoredAfterReload.detailsRevision, 1);
+    assert.equal(restoredAfterReload.lifecycleRevision, 2);
+    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).contractVersion, 5);
+    assert.deepEqual(listPermissions(), grantsBefore);
+  } finally { clearPermissions(); setAccountScope(previousScope); }
+}));
+
 test("saved Space layout preferences persist by account, merge partial edits, and keep onboarding starters as suggestions", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);
@@ -298,7 +361,7 @@ test("saved Space layout preferences persist by account, merge partial edits, an
     assert.equal(saved.revision, 1);
     assert.deepEqual(saved.favoriteToolIds, ["tool.search", "tool.notes"]);
     assert.deepEqual(saved.shortcutIds, []);
-    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).contractVersion, 4);
+    assert.equal(JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces"))).contractVersion, 5);
 
     // Onboarding suggestions remain their own contract and cannot reset a user's explicit layout.
     onboarding.setStarterSpaceSelections(["learning"]);
@@ -369,7 +432,7 @@ test("private Space details update with an account-scoped expected revision and 
     assert.equal(result.description, "A private planning space");
     assert.equal(engine.getLayoutPreferences(created.id).revision, 0);
     const stored = JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces")));
-    assert.equal(stored.contractVersion, 4);
+    assert.equal(stored.contractVersion, 5);
     assert.equal(stored.spaces[created.id].detailsRevision, 1);
     const reloaded = new SpaceCreationEngine().getSpaces()[0];
     assert.equal(reloaded.name, "Updated title");
@@ -456,7 +519,7 @@ test("private Space details reject stale and foreign accounts and recover only f
   } finally { setAccountScope(previousScope); }
 }));
 
-test("Space details migrate v2 records to storage v4 with details revision zero", () => withStorage((storage) => {
+test("Space details migrate v2 records to storage v5 with details revision zero", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);
   try {
@@ -471,12 +534,12 @@ test("Space details migrate v2 records to storage v4 with details revision zero"
     assert.equal(engine.getSpaces()[0].detailsRevision, 0);
     const result = engine.updateDetails({ accountScope: "account:space-details-v2-owner", spaceId: "legacy", expectedRevision: 0, description: "Migrated on save" });
     assert.equal(result.success, true);
-    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 4);
+    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 5);
     assert.equal(JSON.parse(storage.getItem(key)).spaces.legacy.detailsRevision, 1);
   } finally { setAccountScope(previousScope); }
 }));
 
-test("Space storage v3 records migrate to v4 with active lifecycle defaults", () => withStorage((storage) => {
+test("Space storage v3 records migrate to v5 with active lifecycle defaults", () => withStorage((storage) => {
   const previousScope = "spaces-preview-previous";
   setAccountScope(previousScope);
   try {
@@ -495,10 +558,40 @@ test("Space storage v3 records migrate to v4 with active lifecycle defaults", ()
     const preview = engine.previewArchiveSpace({ accountScope: loaded.accountScope, spaceId: loaded.id, expectedLifecycleRevision: 0 });
     assert.equal(engine.confirmArchiveSpace({ previewId: preview.previewId, confirm: true }).success, true);
     const stored = JSON.parse(storage.getItem(key));
-    assert.equal(stored.contractVersion, 4);
+    assert.equal(stored.contractVersion, 5);
     assert.equal(stored.spaces.legacy.status, "archived");
     assert.equal(stored.spaces.legacy.lifecycleRevision, 1);
+    assert.equal(stored.spaces.legacy.templateId, "custom");
     assert.deepEqual(stored.spaces.legacy.layoutPreferences.favoriteToolIds, ["tool.notes"]);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("Space storage v4 preserves template provenance and labels older custom records on v5 save", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-template-v4-owner");
+    const key = getAccountStorageKey("hey_spaces");
+    const accountScope = "account:space-template-v4-owner";
+    const layoutPreferences = { contractVersion: 1, revision: 0, favoriteToolIds: [], widgetIds: [], shortcutIds: [], toolIds: [] };
+    storage.setItem(key, JSON.stringify({
+      contractVersion: 4,
+      accountScope,
+      spaces: {
+        research: { id: "research", accountScope, name: "Research", templateId: "research", visibility: "private", sharing: "off", layoutPreferences },
+        legacy: { id: "legacy", accountScope, name: "Legacy", visibility: "private", sharing: "off", layoutPreferences },
+      },
+    }));
+    const engine = new SpaceCreationEngine();
+    assert.equal(engine.getSpaces().find(({ id }) => id === "research").templateId, "research");
+    assert.equal(engine.getSpaces().find(({ id }) => id === "legacy").templateId, "custom");
+
+    const saved = engine.updateDetails({ accountScope, spaceId: "research", expectedRevision: 0, description: "Kept through migration" });
+    assert.equal(saved.success, true);
+    const migrated = JSON.parse(storage.getItem(key));
+    assert.equal(migrated.contractVersion, 5);
+    assert.equal(migrated.spaces.research.templateId, "research");
+    assert.equal(migrated.spaces.legacy.templateId, "custom");
   } finally { setAccountScope(previousScope); }
 }));
 
@@ -690,7 +783,7 @@ test("version 1 Space records load with empty preferences and are upgraded only 
 
     const saved = engine.updateLayoutPreferences({ accountScope: "account:space-layout-legacy-owner", spaceId: "legacy", expectedRevision: 0, preferences: { widgetIds: ["notes"] } });
     assert.equal(saved.success, true);
-    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 4);
+    assert.equal(JSON.parse(storage.getItem(key)).contractVersion, 5);
     assert.deepEqual(new SpaceCreationEngine().getLayoutPreferences("legacy").widgetIds, ["notes"]);
   } finally { setAccountScope(previousScope); }
 }));
