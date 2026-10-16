@@ -45,6 +45,20 @@ test("Teacher route and navigation reach a fresh server-claim guarded workflow",
   assert.doesNotMatch(page, /name="role"|Select role|Choose your role/i);
 });
 
+test("Teacher entrypoint explains denied access and exposes truthful readiness and Forge states", () => {
+  assert.match(page, /access\.status === "checking"[^\n]*role="status"/);
+  assert.match(page, /access\.status === "ready"[^\n]*role="status"/);
+  assert.match(page, /access\.status === "denied" \|\| access\.status === "error" \|\| access\.status === "service-unavailable"[^\n]*role="alert"/);
+  assert.match(page, /Teacher role and class assignments come from verified school access/);
+  assert.match(page, /Contact your school administrator/);
+  assert.match(page, /HEY cannot grant access from this page/);
+  assert.match(page, /Retry readiness check/);
+  assert.match(page, /Saving the three-artifact batch in one Forge transaction/);
+  assert.match(page, /Save all three to Forge/);
+  assert.match(page, /teacherJourneyPersistenceMatches\(journey, journeyContext\)/);
+  assert.match(page, /status === "saved" && persistenceConfirmed/);
+});
+
 test("Forge output appears only after three matching persistence receipts and complete audience exports", () => {
   const context = { accountScope: "account:teacher", workspaceId: "project-id", classId: "class-a" };
   assert.equal(teacherJourneyPersistenceMatches(persistedJourney(), context), true);
