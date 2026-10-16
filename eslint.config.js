@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'src-tauri/target/**', 'src-tauri/gen/**', 'src/components/ui/Motion*.jsx', 'src/components/ui/motion-index.js', 'src/components/ui/PageTransition.jsx', 'src/components/ui/PerformanceTierProvider.jsx', 'src/pages/MotionDemoPage.jsx']),
+  globalIgnores(['dist', 'work/**', 'public/mediapipe/vision/wasm/**', 'src-tauri/target/**', 'src-tauri/gen/**', 'src/components/ui/Motion*.jsx', 'src/components/ui/motion-index.js', 'src/components/ui/PageTransition.jsx', 'src/components/ui/PerformanceTierProvider.jsx', 'src/pages/MotionDemoPage.jsx']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
