@@ -126,6 +126,7 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
     value.cost.reservedUsd > value.cost.requestCapUsd ||
     !Number.isSafeInteger(value.cost.callsDispatched) || value.cost.callsDispatched < 0 || value.cost.callsDispatched > 4 ||
     !Number.isSafeInteger(value.cost.callsMetered) || value.cost.callsMetered < 0 || value.cost.callsMetered > value.cost.callsDispatched ||
+    (value.cost.fusionElapsedMs !== undefined && (!Number.isSafeInteger(value.cost.fusionElapsedMs) || value.cost.fusionElapsedMs < 0 || value.cost.fusionElapsedMs > 40_000)) ||
     !isPlainDataRecord(value.provenance) || value.provenance.status !== "verified" ||
     value.provenance.requestId !== requestId || typeof value.provenance.requestSha256 !== "string" ||
     !/^[0-9a-f]{64}$/i.test(value.provenance.requestSha256) || typeof value.provenance.answerSha256 !== "string" ||
@@ -155,6 +156,7 @@ async function parseFusionVerificationMetadataUnsafe(value, { answer, requestId,
       requestCapUsd: value.cost.requestCapUsd,
       callsDispatched: value.cost.callsDispatched,
       callsMetered: value.cost.callsMetered,
+      ...(value.cost.fusionElapsedMs !== undefined ? { fusionElapsedMs: value.cost.fusionElapsedMs } : {}),
     }),
     primary: Object.freeze({ role: "primary", providerId: primary.providerId, modelId: primary.modelId }),
     checker: Object.freeze({ role: "checker", providerId: checker.providerId, modelId: checker.modelId }),
@@ -193,9 +195,12 @@ function getFusionFailureCostSummary(details) {
     const attemptSummary = attempts
       ? ` Provider attempts: ${attempts.map((attempt) => `${FUSION_PROVIDER_LABELS[attempt.providerId]} ${attempt.modelId} (${attempt.role}; usage ${attempt.usageStatus})`).join("; ")}.`
       : "";
+    const elapsed = Number.isSafeInteger(cost.fusionElapsedMs) && cost.fusionElapsedMs >= 0 && cost.fusionElapsedMs <= 40_000
+      ? ` Server-side Fusion elapsed: ${(cost.fusionElapsedMs / 1000).toFixed(2)} s.`
+      : "";
     return unknownCalls > 0
-      ? `${usage}${reserve}${failureSummary}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
-      : `${usage}${reserve}${failureSummary}${attemptSummary} Final provider billing may differ.`;
+      ? `${usage}${reserve}${elapsed}${failureSummary}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
+      : `${usage}${reserve}${elapsed}${failureSummary}${attemptSummary} Final provider billing may differ.`;
   } catch {
     return "";
   }

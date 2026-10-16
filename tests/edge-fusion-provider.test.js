@@ -462,7 +462,10 @@ test("fusion disagreement returns no answer and stale account scope cancels befo
       callsDispatched: 0,
       callsMetered: 0,
       providerAttempts: [],
+      fusionElapsedMs: result.costReceipt.fusionElapsedMs,
     });
+    assert.ok(Number.isSafeInteger(result.costReceipt.fusionElapsedMs));
+    assert.ok(result.costReceipt.fusionElapsedMs >= 0 && result.costReceipt.fusionElapsedMs <= 40_000);
   });
 });
 
@@ -622,6 +625,7 @@ test("Edge chat explains verification, time, cost, and provider-contract failure
   assert.match(route, /fusion\.provenance\?\.status !== "verified"[\s\S]*?No answer was delivered/i);
   assert.match(route, /provenance: fusion\.provenance/);
   assert.match(route, /providerReportedUsd: fusion\.costReceipt\.providerReportedUsd/);
+  assert.match(route, /fusionElapsedMs: fusion\.costReceipt\.fusionElapsedMs/);
   assert.match(route, /reservedUsd: fusion\.costReceipt\.reservedUsd/);
   assert.match(route, /requestCapUsd: fusion\.requestCapUsd/);
   assert.match(route, /cost: fusion\.costReceipt/);
@@ -683,6 +687,8 @@ test("a failed checker returns a bounded cost receipt with unknown usage marked 
     { providerId: "gemini", modelId: "fixture-gemini", role: "primary", usageStatus: "unknown" },
     { providerId: "openai", modelId: "fixture-openai", role: "fallback", usageStatus: "reported" },
   ]);
+  assert.ok(Number.isSafeInteger(result.costReceipt.fusionElapsedMs));
+  assert.ok(result.costReceipt.fusionElapsedMs >= 0 && result.costReceipt.fusionElapsedMs <= 40_000);
   assert.deepEqual(result.partialProviderFailure, {
     policy: "require_independent_confirmation",
     disposition: "answer_withheld",
@@ -713,6 +719,8 @@ test("verified fusion receipts carry the exact server request cap and provider-r
   assert.ok(result.costUsd >= 0);
   assert.ok(result.reservedCostUsd >= result.costUsd);
   assert.ok(result.reservedCostUsd <= result.requestCapUsd);
+  assert.ok(Number.isSafeInteger(result.costReceipt.fusionElapsedMs));
+  assert.ok(result.costReceipt.fusionElapsedMs >= 0 && result.costReceipt.fusionElapsedMs <= 40_000);
 });
 
 test("parallel account requests use immutable request-local provider snapshots", async () => {
@@ -794,6 +802,8 @@ test("cancelling during the checker keeps the measured receipt and withholds the
   assert.equal(result.costReceipt.callsDispatched, 2);
   assert.equal(result.costReceipt.callsMetered, 1);
   assert.equal(result.costReceipt.providerReportedUsd, 0.00009);
+  assert.ok(Number.isSafeInteger(result.costReceipt.fusionElapsedMs));
+  assert.ok(result.costReceipt.fusionElapsedMs >= 0 && result.costReceipt.fusionElapsedMs <= 40_000);
 });
 
 test("provider grants are revalidated after provider work before a fused answer can be returned", async (t) => {
@@ -869,8 +879,10 @@ test("provider grants are revalidated after provider work before a fused answer 
       reason: "authorization_revalidation_failed",
       calls: 0,
       reservedCostUsd: 0,
-      costReceipt: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricing.budgetUsd, callsDispatched: 0, callsMetered: 0, providerAttempts: [] },
+      costReceipt: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricing.budgetUsd, callsDispatched: 0, callsMetered: 0, providerAttempts: [], fusionElapsedMs: result.costReceipt.fusionElapsedMs },
     });
+    assert.ok(Number.isSafeInteger(result.costReceipt.fusionElapsedMs));
+    assert.ok(result.costReceipt.fusionElapsedMs >= 0 && result.costReceipt.fusionElapsedMs <= 40_000);
     assert.equal(calls, 0);
   });
 });

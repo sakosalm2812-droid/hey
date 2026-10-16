@@ -924,6 +924,7 @@ Deno.serve(async (request) => {
           requestCapUsd: fusion.requestCapUsd,
           callsDispatched: fusion.costReceipt.callsDispatched,
           callsMetered: fusion.costReceipt.callsMetered,
+          fusionElapsedMs: fusion.costReceipt.fusionElapsedMs,
         },
         provenance: fusion.provenance,
       },

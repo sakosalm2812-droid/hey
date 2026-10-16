@@ -27,11 +27,17 @@ test("Fusion permission, configuration, and disagreement responses stay visible 
         successfulResponses: 1,
         failedResponses: 1,
       },
-      cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1 },
+      cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1, fusionElapsedMs: 1240 },
     },
   }, true);
   assert.match(partialFailure, /One provider returned a response, but the other failed/i);
   assert.match(partialFailure, /withheld because independent confirmation is required/i);
+  assert.match(partialFailure, /Server-side Fusion elapsed: 1\.24 s/);
+  const hostileElapsed = getHEYChatError({ status: 409 }, {
+    error: "The independent provider check failed.",
+    fusion: { cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1, fusionElapsedMs: 40_001 } },
+  }, true);
+  assert.doesNotMatch(hostileElapsed, /Server-side Fusion elapsed/);
   const disagreement = getHEYChatError({ status: 409 }, {
     error: "The providers did not independently confirm a safe answer.",
     fusion: { status: "conflict", conflictSummary: { count: 3, truncated: true } },
@@ -111,7 +117,7 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
     independentlyChecked: true,
     confidence: 0.91,
     responseSha256: answerSha256,
-    cost: { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 2 },
+    cost: { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 2, fusionElapsedMs: 1234 },
     provenance: {
       status: "verified",
       requestId,
@@ -127,11 +133,18 @@ test("the chat client accepts only request- and answer-bound primary/checker pro
   assert.equal(parsed.requestSha256, requestSha256);
   assert.equal(parsed.primary.providerId, "openai");
   assert.equal(parsed.checker.providerId, "gemini");
-  assert.deepEqual(parsed.cost, { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 2 });
+  assert.deepEqual(parsed.cost, { providerReportedUsd: 0.021, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 2, fusionElapsedMs: 1234 });
+  const metadataWithPrivateText = await parseFusionVerificationMetadata({
+    ...verified,
+    cost: { ...verified.cost, privatePrompt: "PRIVATE_FUSION_PROMPT" },
+  }, { answer, requestId, requestText });
+  assert.equal(metadataWithPrivateText.cost.privatePrompt, undefined);
+  assert.doesNotMatch(JSON.stringify(metadataWithPrivateText), /PRIVATE_FUSION_PROMPT/);
   assert.equal(Object.isFrozen(parsed), true);
   assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, confirmed: false } } }, { answer, requestId, requestText }), null);
   assert.equal(await parseFusionVerificationMetadata({ ...verified, provenance: { ...verified.provenance, checker: { ...verified.provenance.checker, providerId: "openai" } } }, { answer, requestId, requestText }), null);
   assert.equal(await parseFusionVerificationMetadata(verified, { answer: "A replayed answer.", requestId, requestText }), null);
+  assert.equal(await parseFusionVerificationMetadata({ ...verified, cost: { ...verified.cost, fusionElapsedMs: 40_001 } }, { answer, requestId, requestText }), null);
   assert.equal(await parseFusionVerificationMetadata(verified, { answer, requestId: "123e4567-e89b-42d3-a456-426614174001", requestText }), null);
   assert.equal(await parseFusionVerificationMetadata(verified, { answer, requestId, requestText: "A different prompt using the same request ID." }), null);
   const hostile = {};
@@ -177,6 +190,7 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
   assert.match(message, /primary\.modelId/);
   assert.match(message, /checker\.modelId/);
   assert.match(message, /Provider-reported usage:/);
+  assert.match(message, /Server-side Fusion elapsed/);
   assert.match(message, /interrupted or unmetered call/);
   assert.match(message, /Final provider billing may differ/);
   assert.match(message, /role="status"/);

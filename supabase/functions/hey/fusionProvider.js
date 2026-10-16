@@ -390,6 +390,7 @@ export async function runFusionChatRequest({
   let providerReportedUsd = 0;
   let reservedUsd = 0;
   const providerAttempts = [];
+  const fusionStartedAt = performance.now();
   const result = await runProviderFusion({
     prompt: "Authenticated server-side HEY chat fusion request.",
     intent: "conversation",
@@ -491,6 +492,7 @@ export async function runFusionChatRequest({
       }
     },
   });
+  const fusionElapsedMs = Math.min(40_000, Math.max(0, Math.round(performance.now() - fusionStartedAt)));
   const costReceipt = Object.freeze({
     providerReportedUsd,
     reservedUsd,
@@ -498,6 +500,7 @@ export async function runFusionChatRequest({
     callsDispatched,
     callsMetered,
     providerAttempts: Object.freeze(providerAttempts.map((attempt) => Object.freeze({ ...attempt }))),
+    fusionElapsedMs,
   });
   if (result.status !== "complete") return { ...result, costReceipt };
   if (getCurrentEntitlements !== undefined) {

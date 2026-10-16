@@ -35,6 +35,7 @@ export default function ChatMessage({
             <div>This records provider-reported agreement for this prompt and answer. It is not a check against independent sources or a guarantee of factual accuracy.</div>
             <div>This receipt is scoped to the signed-in account session that sent the request.</div>
             {verification.cost && <div>Provider-reported usage: ${verification.cost.providerReportedUsd.toFixed(4)} across {verification.cost.callsMetered} metered call(s) · ${verification.cost.reservedUsd.toFixed(4)} reserved of the ${verification.cost.requestCapUsd.toFixed(2)} request cap. {verification.cost.callsMetered < verification.cost.callsDispatched ? `Usage for ${verification.cost.callsDispatched - verification.cost.callsMetered} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.` : "Final provider billing may differ."}</div>}
+            {verification.cost?.fusionElapsedMs !== undefined && <div>Server-side Fusion elapsed: {(verification.cost.fusionElapsedMs / 1000).toFixed(2)} s.</div>}
           </div>
         )}
         {!isUser && providerExecutionReceipt?.status === "provider_response_received" && (
