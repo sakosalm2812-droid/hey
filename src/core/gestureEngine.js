@@ -824,13 +824,29 @@ export class GestureEngine {
         stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
       }
+      const videoTrack = stream.getVideoTracks?.()[0];
+      if (!videoTrack) throw new Error("Camera track is unavailable.");
       this.mediaStream = stream;
+      if (videoTrack.readyState === "ended") {
+        this.stopRecognition("camera_track_ended");
+        return { success: false, error: "The camera feed ended before recognition could start.", code: "camera_track_ended" };
+      }
+      let cameraTrackEnded = false;
+      videoTrack.addEventListener?.("ended", () => {
+        if (generation === this.recognitionGeneration) {
+          cameraTrackEnded = true;
+          this.stopRecognition("camera_track_ended");
+        }
+      }, { once: true });
       this.videoElement = globalThis.document.createElement("video");
       const video = this.videoElement;
       video.srcObject = stream;
       video.muted = true;
       video.playsInline = true;
       await video.play();
+      if (cameraTrackEnded) {
+        return { success: false, error: "The camera feed ended before recognition could start.", code: "camera_track_ended" };
+      }
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
         stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
         video.pause?.();
@@ -840,11 +856,6 @@ export class GestureEngine {
         return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
       }
 
-      const videoTrack = stream.getVideoTracks?.()[0];
-      if (!videoTrack || videoTrack.readyState === "ended") throw new Error("Camera track is unavailable.");
-      videoTrack.addEventListener?.("ended", () => {
-        if (generation === this.recognitionGeneration) this.stopRecognition("camera_track_ended");
-      }, { once: true });
 
       const permissionAllowed = await this.watchCameraPermission(generation);
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {

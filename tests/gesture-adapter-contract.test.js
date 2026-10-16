@@ -564,6 +564,56 @@ test("browser camera journey requires consent, rejects a stale paused frame, the
   assert.equal(engine.cameraCapabilityStatus, "supported");
 });
 
+test("camera track ending during preview startup is observed and reported before recognition starts", async () => {
+  const { engine, profile } = makeEngine();
+  let resolvePlay;
+  let signalPlayStarted;
+  const playStarted = new Promise((resolve) => { signalPlayStarted = resolve; });
+  const video = {
+    readyState: 1,
+    srcObject: null,
+    play() {
+      signalPlayStarted();
+      return new Promise((resolve) => { resolvePlay = resolve; });
+    },
+    pause() {},
+  };
+  const listeners = new Map();
+  let cameraStops = 0;
+  const track = {
+    readyState: "live",
+    stop() { cameraStops += 1; this.readyState = "ended"; },
+    addEventListener(name, listener) { listeners.set(name, listener); },
+  };
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  installCamera();
+  globalThis.document = { createElement: () => video };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() { return stream; } } },
+  });
+  const states = [];
+  engine.subscribe((event, payload) => {
+    if (event === "recognition_state_changed") states.push(payload);
+  });
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+
+  const starting = engine.startRecognition(profile.id, { consent: true, mode: "test" });
+  await playStarted;
+  assert.equal(typeof listeners.get("ended"), "function");
+  track.readyState = "ended";
+  listeners.get("ended")();
+  resolvePlay();
+  const result = await starting;
+
+  assert.equal(result.code, "camera_track_ended");
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.cameraCapabilityStatus, "supported");
+  assert.equal(cameraStops, 1);
+  assert.equal(adapterStops, 1);
+  assert.equal(states.at(-1)?.reason, "camera_track_ended");
+});
 test("browser detector errors release camera resources and report a stale-safe adapter error", async () => {
   const { engine, profile } = makeEngine();
   const camera = installCamera();
