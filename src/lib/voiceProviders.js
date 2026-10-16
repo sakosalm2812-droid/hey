@@ -573,7 +573,10 @@ export function createDictationSession({ speechProvider, environment = globalThi
             rejectRecognitionResult("correction_expansion_rejected", "A dictation correction made the result too long. It was discarded; start again to retry.");
             return;
           }
-          onTranscript?.(corrected);
+          try { onTranscript?.(corrected); }
+          catch {
+            rejectRecognitionResult("transcript_consumer_failed", "Dictation could not safely deliver its result. Start again to retry.");
+          }
         },
         onError: (error) => {
           if (currentGeneration === generation && !destroyed) {

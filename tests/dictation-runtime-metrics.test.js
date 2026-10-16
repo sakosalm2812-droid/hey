@@ -145,6 +145,44 @@ test("recognition errors and throwing metrics consumers cannot disrupt or leak d
   session.destroy();
 });
 
+test("a throwing transcript consumer stops capture, fences late callbacks, and permits a fresh consented retry", async () => {
+  const callbacks = [];
+  const states = [];
+  const metrics = [];
+  const deliveries = [];
+  let stops = 0;
+  const session = createDictationSession({
+    speechProvider: { start(options) { callbacks.push(options); return { attempt: callbacks.length }; }, stop() { stops += 1; } },
+    environment: environmentWithPermission(),
+    onTranscript(value) {
+      deliveries.push(value);
+      if (deliveries.length === 1) throw new Error("private callback diagnostic");
+    },
+    onStateChange: (event) => states.push(event),
+    onMetrics: (event) => metrics.push(event),
+  });
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  assert.doesNotThrow(() => callbacks[0].onTranscript("private text rejected by consumer"));
+  assert.equal(stops, 1);
+  assert.equal(session.snapshot().state, "error");
+  assert.equal(metrics.at(-1).status, "transcript_consumer_failed");
+  assert.equal(JSON.stringify(states).includes("private callback diagnostic"), false);
+  assert.equal(JSON.stringify(metrics).includes("private text rejected"), false);
+
+  callbacks[0].onTranscript("late private callback");
+  callbacks[0].onEnd();
+  assert.equal(session.snapshot().state, "error");
+  assert.equal(deliveries.length, 1);
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks[1].onTranscript("retry transcript");
+  assert.deepEqual(deliveries, ["private text rejected by consumer", "retry transcript"]);
+  assert.equal(session.snapshot().state, "listening");
+  session.destroy();
+  assert.equal(stops, 2);
+});
+
 test("provider startup failures use a stable status and never return provider diagnostics", async () => {
   const reports = [];
   const session = createDictationSession({
