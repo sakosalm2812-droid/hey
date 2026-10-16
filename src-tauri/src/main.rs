@@ -24,6 +24,13 @@ fn failure(capability: &str, error: impl Into<String>) -> NativeResult {
     NativeResult { success: false, capability: capability.into(), verified: false, data: None, error: Some(error.into()) }
 }
 
+// No native-verifiable authorization issuer/key is configured yet. A renderer
+// flag, command payload, or capability-list check is not an authorization proof.
+// Keep local effects disabled until the signed, scoped permit verifier is wired.
+fn native_authorization_configured() -> bool {
+    false
+}
+
 fn string_input(input: &Value, key: &str) -> Result<String, String> {
     input.get(key).and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).map(String::from)
         .ok_or_else(|| format!("Missing required input: {key}"))
@@ -240,11 +247,14 @@ fn execute_terminal(capability: &str, input: &Value) -> NativeResult {
 
 #[tauri::command]
 fn native_capabilities() -> Value {
-    serde_json::json!(["system.info", "browser.open_url", "app.open", "browser.navigate", "filesystem.read", "filesystem.write", "filesystem.create_directory", "filesystem.list", "filesystem.delete", "terminal.execute"])
+    serde_json::json!([])
 }
 
 #[tauri::command]
 fn native_execute(capability: String, input: Value) -> NativeResult {
+    if !native_authorization_configured() {
+        return failure(&capability, "Native command authorization is not configured. Local commands are disabled.");
+    }
     match capability.as_str() {
         "system.info" => {
             let mut system = System::new_all();
@@ -264,6 +274,49 @@ fn native_execute(capability: String, input: Value) -> NativeResult {
         "filesystem.read" | "filesystem.write" | "filesystem.create_directory" | "filesystem.list" | "filesystem.delete" => execute_filesystem(&capability, &input),
         "terminal.execute" => execute_terminal(&capability, &input),
         _ => failure(&capability, "This native capability is unavailable in the installed HEY adapter."),
+    }
+}
+
+#[cfg(test)]
+mod native_authorization_tests {
+    use super::{native_capabilities, native_execute};
+    use serde_json::json;
+
+    const PRIVILEGED_CAPABILITIES: &[&str] = &[
+        "browser.open_url", "app.open", "browser.navigate", "filesystem.read",
+        "filesystem.write", "filesystem.create_directory", "filesystem.list",
+        "filesystem.delete", "terminal.execute",
+    ];
+    const DENIAL: &str = "Native command authorization is not configured. Local commands are disabled.";
+
+    #[test]
+    fn direct_ipc_calls_fail_closed_for_every_privileged_capability() {
+        for capability in PRIVILEGED_CAPABILITIES {
+            let result = native_execute((*capability).into(), json!({}));
+            assert!(!result.success, "direct IPC unexpectedly authorized {capability}");
+            assert!(!result.verified, "denied IPC must never report verification");
+            assert_eq!(result.error.as_deref(), Some(DENIAL), "{capability} must fail at authorization before input dispatch");
+        }
+    }
+
+    #[test]
+    fn forged_replayed_expired_and_scope_mismatched_renderer_permits_stay_denied() {
+        let cases = [
+            json!({"url":"https://example.invalid","permit":{"signature":"renderer-forged","nonce":"n1","expiresAt":9999999999}}),
+            json!({"url":"https://example.invalid","permit":{"signature":"replayed","nonce":"already-used","expiresAt":9999999999}}),
+            json!({"url":"https://example.invalid","permit":{"signature":"expired","nonce":"n2","expiresAt":0}}),
+            json!({"url":"https://example.invalid","permit":{"signature":"scope-mismatch","accountId":"other","deviceId":"other","capability":"terminal.execute","inputDigest":"wrong","epoch":0}}),
+        ];
+        for input in cases {
+            let result = native_execute("browser.open_url".into(), input);
+            assert!(!result.success, "renderer-supplied permit data must not authorize native IPC");
+            assert_eq!(result.error.as_deref(), Some(DENIAL), "permit-shaped renderer data must not bypass the native gate");
+        }
+    }
+
+    #[test]
+    fn native_capability_discovery_does_not_advertise_unverified_execution() {
+        assert_eq!(native_capabilities(), json!([]));
     }
 }
 
