@@ -1,3 +1,61 @@
+## Latest execution checkpoint — 2026-10-16 (Asia/Baghdad)
+
+Coordinator branch `codex/resume-emergency-2026-10-14` is integrated through `fdfcd99d3e11b435b03431839474e78537f44c7f` (`Prioritize private answers in handout RLS`), parent `a37a3ca` (`Add reviewed activity handout export`). This source checkpoint is not yet pushed; after this documentation commit the coordinator will push the verified branch. Latest remote before the batch: `44c5ef80c4cdc8223d0b12b1ce7c25ca3da1ebcf`. Preserve the intentionally untracked `docs/requirements/v3-agent-pack/` extraction; do not stage it.
+
+### Newly integrated behavior
+
+| Area | Worker checkpoint → coordinator integration | Evidence and limit |
+|---|---|---|
+| Space recovery | `014fae9` → `1e83914` | Keeps valid recovery snapshot intact when the primary record is missing; explicit preview/confirmation required; corrupt and failed-write paths fail closed. Existing purpose-based recommendations preserved. |
+| Tool Library lifecycle | `48d7fb0` → `c62f076` | Account-scoped start/stop controls recheck canonical lifecycle, platform readiness, permission, and confirmation; hostile lifecycle accessors are not invoked. |
+| UltraSparse near-tie abstention | `9ed7962` → `5fbb4c7` | Narrow lead score with margin under two suppresses capability hint; ordinary planner is retained. Heuristic is not calibrated against real labeled tasks. |
+| VoiceOS preview replacement | `6667a22` → `6c64a7b` | Typed and spoken replacement revoke the previous unreviewed preview before storing the replacement; real OS execution remains disabled/unverified. |
+| Pending microphone cancellation | `62e0e47` → `e0abb78` | Voice startup settles promptly on cancel while microphone permission is pending; late streams are released and cannot start recognition. Live microphone remains unverified. |
+| Fusion disagreement feedback | `a0299a6` → `62011ad` | Edge returns capped conflict count/truncation flag; chat explains withheld answer without exposing provider claim text. Mock providers only. |
+| Normal chat provider receipt | `7fd5477` → `9cdf79b` | Content-free per-request record shows configured/reported model IDs, response ID when safe, Edge round trip, and provider-reported token counts. No cost or model-quality inference. |
+| Honest native capability advertisement | `d249203` → `45d4055` | Renderer mirrors Rust’s empty native capability list and returns unsupported before IPC; no signed native permit verifier exists. |
+| Abort running tool after permission revocation | `ea4b309` → `7d12738` | Verified revoke event aborts matching active lifecycle sessions; forged notices do not override authoritative permission state; handlers remain stopping until settlement. |
+| Purpose-based Tool Library pins | `e668fd8` → `1427eb0` | Suggestions derive from current account’s selected purposes and canonical catalog; adding a shortcut is explicit, never grants permission; custom goal text is ignored. |
+| Gesture calibration conditions | `de3db5b` → `be04095` | Bundled adapter estimates bounded image lighting, apparent hand distance and framing; custom calibration capture stays disabled until conditions pass. Synthetic frames only; physical camera thresholds uncalibrated. |
+| Teacher handout export and RLS | `36be647` + security follow-up `6668f46` → `a37a3ca` + `fdfcd99` | Teacher-reviewed Markdown handout export and student-class read path added. SQL now makes nested/private answer-key evidence owner-teacher-only before student-facing allowance. Contract/fixture tests pass; migration not applied to live Supabase. |
+
+### Verification on the integrated coordinator
+
+- Latest full Node suite: **871/871 passed** at `fdfcd99`.
+- Full `npm run lint`: passed.
+- `npm run build`: passed, **2,782 modules**; sitemap generation skipped without `SITE_URL`; known `contextManager.js` mixed-import warning remains.
+- Built-SPA smoke passed at `http://127.0.0.1:4173/` for `/login`, `/download`, and entry bundle `/assets/index-Bgyw7tUE.js`. This is route-delivery proof only.
+- Focused post-integration evidence: Space/Tool lifecycle 48/48 before current batch; UltraSparse 18/18; VoiceOS 30/30; dictation 30/30; Fusion/Edge 48/48; provider/Fusion receipt 53/53; native capabilities 40/40; Tool Library permission/lifecycle/UI 31/31; purpose pins/preferences/UI 14/14; Gesture 62/62; Teacher RLS/experience/page 56/56. Full suite supersedes counts for integrated source. No live database, provider or physical-device evidence is implied.
+- `git diff --check` passed. Current checkout has no tracked uncommitted changes. Only preserved untracked extraction remains.
+
+### Active specialist work (exact task references and current source checkpoints)
+
+| Specialist | Codex task | Branch / latest source commit | Current state / next action |
+|---|---|---|---|
+| Frontend Director | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/frontend-purpose-pins-44c5ef8` / `e668fd8` | Purpose-based pin suggestions integrated; task idle after successful receipt. Resume on a fresh branch from latest pushed coordinator and select a separate UI integration gap. |
+| Onboarding & Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-backend-contract-gap` / `dcef0e8` | Private account backup client/UI and owner-derived CAS RPC migration committed; coordinator requested parity validation for raw RPC callers. Active; do not integrate until SQL name/preference validation and adversarial tests land. Live DB remains unavailable. |
+| Universal Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-permission-revoke-1016` / `ea4b309` | Permission-revocation cancellation integrated; task idle after receipt. Resume on a fresh branch from coordinator with a separate lifecycle reliability gap. |
+| Edge & Everywhere | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-native-capabilities-c62f076` / `d249203` | Honest empty native capability advertisement integrated; task idle. Native Rust verifier/runtime remains unimplemented; do not advertise device execution. |
+| Gesture Control | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-selected-camera-recovery` / `de3db5b` | Local heuristic calibration gate integrated; task idle. Next validation requires a real camera and labelled framing/lighting observations; synthetic test evidence only. |
+| Flow & Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-dictation-current-c62f076` / `62e0e47` | Pending-permission cancellation integrated; task idle. Real microphone/provider flow remains unverified. |
+| VoiceOS & Computer Control | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/voiceos-next-c62f076` / `6667a22` | Superseded preview revocation integrated; task idle. Real OS dispatch stays disabled without native authorization. |
+| Teacher Experience | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-handout-export-c62f076` / `6668f46` (includes `36be647`) | Export plus private answer-key RLS precedence integrated; task active after security follow-up. Contract tests only; live migration pending. |
+| HEY One Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-provider-execution-receipt-44c5ef8` / `7fd5477` | Normal chat execution telemetry integrated; task idle. No live inference or benchmark evidence. |
+| UltraSparse Research | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-margin-abstention` / `9ed7962` | Near-tie abstention integrated; task idle. Threshold is heuristic; held-out labeled evaluation is pending. |
+| Fusion Multi-Model | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-partial-failure` / `a0299a6` | Bounded disagreement feedback integrated; task idle. Providers and billing not live-tested. |
+
+### Actual app proof and blockers
+
+The local frontend remains at `http://127.0.0.1:5175`; launch from this checkout with `npm run dev -- --host 127.0.0.1 --port 5175`. Browser inspection confirms the real `/download` page shows web source verified, desktop native builds required, and iOS/Android native projects required. The login screen disables sign-in because `VITE_SUPABASE_URL` and the public Supabase anon key are absent. Authenticated feature behavior, real Supabase/Forge persistence, migrations/RLS, providers, browser microphone/camera grants, physical devices, native builds, and production deployment are **UNVERIFIED**.
+
+### Immediate next actions
+
+1. Integrate Spaces account backup only after the worker's raw-RPC SQL validation patch is reviewed and the service/migration tests pass; run migration on a live disposable Supabase/PostgreSQL project when credentials/services are provided.
+2. Resume idle specialist tasks concurrently from a fresh branch on the pushed coordinator, preserving their source branches and avoiding duplicate features; collect exact commit/test receipts.
+3. Run full tests, lint, build, SPA route smoke, and diff check for every integration batch; push clean verified checkpoints.
+4. Update the 47-step evidence map without promoting steps to complete absent working authenticated product journeys and required real service/hardware proof.
+
+---
 ## Active coordinator checkpoint — 2026-10-16 (Asia/Baghdad)
 
 Coordinator branch: `codex/resume-emergency-2026-10-14`. Integrated HEAD before this handoff update: `c62f076dec595a52a50c2adc09a8f88c4e24331d` (includes `1e83914` Space recovery and `c62f076` Tool Library lifecycle controls). Remote coordinator checkpoint before this batch: `2f7e0c889506a8c1be75384ff7cbfd2a91b29acb`. Ten commits ahead of remote; docs checkpoint will be committed and pushed after this update. Preserve untracked `docs/requirements/v3-agent-pack/` untouched.

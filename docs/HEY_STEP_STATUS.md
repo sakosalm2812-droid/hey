@@ -1,3 +1,16 @@
+## Integrated execution delta — 2026-10-16, coordinator `fdfcd99`
+
+The current coordinator added verified local implementation slices across Steps 03, 07, 09–11, 16–17, 21, and 29. Latest full test evidence is **871/871**, full lint passes, production build passes (**2,782 modules**), and built-SPA route delivery passes for `/login`, `/download`, and the hashed entry bundle. These are development checks; no step is marked complete by this checkpoint.
+
+- **Step 03 / onboarding:** private Space recovery handles a missing primary record without overwriting a valid snapshot. Purpose-based Tool Library suggestions are derived from account-scoped selections and require explicit user pinning.
+- **Steps 07–08 / Tool Library:** lifecycle start/stop controls are tied to canonical supported state, account permission, and confirmation. A verified permission revocation aborts active sessions; the handler is not reported stopped until it settles. Purpose suggestions never grant capability or permission.
+- **Steps 09–11 / native and action safety:** Tauri renderer now advertises the same empty native capability set as Rust and refuses IPC dispatch while no native signed permit verifier exists.
+- **Step 16 / voice:** cancelling during an unresolved microphone prompt settles the voice startup and releases any late stream. Real microphone/provider behavior remains unverified.
+- **Step 17 / Gesture:** bundled camera frames estimate light level, apparent hand size, and framing; calibration capture is blocked until the conditions pass. These thresholds are heuristic and only synthetically tested.
+- **Step 21 / UltraSparse:** near-tied lexical routes abstain and leave planning to the ordinary provider planner. Margin threshold is not calibrated on a held-out labelled set; no live inference or quality claim is made.
+- **Step 29 / Teacher:** a teacher-reviewed activity handout can be exported as Markdown. RLS makes nested answer-key data private ahead of student-facing markers. RLS source-contract tests pass; migration and authenticated class reads are not verified against live Supabase.
+
+The running local application is `http://127.0.0.1:5175`. `/download` is browser-verified. `/login` remains disabled because Supabase URL and public key are not configured, so signed-in journeys and real database/provider/device integrations remain **UNVERIFIED**. All 47 steps remain `In progress` or `Incomplete`; none is production-certified complete.
 ## Latest integrated evidence — 2026-10-16, coordinator integration `035ce28`
 
 Current additions extend that work with array-cardinality bounds, bounded `patternProperties`, outbox retry behavior and independent release-key role separation. The dev server now excludes nested worker worktrees after an observed watcher crash. These remain narrow slices: synthetic backup is not production recovery, CAS still requires a caller's atomic backend implementation, outbox delivery still needs a dispatcher, and Schema `$ref` remains unsupported. None certifies a full workstream.
