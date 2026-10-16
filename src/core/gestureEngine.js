@@ -834,7 +834,7 @@ export class GestureEngine {
       const videoTrack = stream.getVideoTracks?.()[0];
       if (!videoTrack || videoTrack.readyState === "ended") throw new Error("Camera track is unavailable.");
       videoTrack.addEventListener?.("ended", () => {
-        if (generation === this.recognitionGeneration) this.stopRecognition("permission_revoked");
+        if (generation === this.recognitionGeneration) this.stopRecognition("camera_track_ended");
       }, { once: true });
 
       const permissionAllowed = await this.watchCameraPermission(generation);

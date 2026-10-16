@@ -425,14 +425,14 @@ test("supported adapter lifecycle is visible, pausable, revocable, and stopped w
   assert.throws(() => engine.updateProfile(profile.id, { sensitivity: 0.4 }), /Stop gesture recognition/u);
   assert.equal(engine.pauseRecognition(), true);
   assert.equal(engine.resumeRecognition(), true);
-  camera.listeners.get("ended")(); // Camera permission/device revocation.
+  camera.listeners.get("ended")(); // The capture track ended while the permission state remained unknown.
 
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
   assert.equal(camera.stopped, 1);
   assert.equal(adapterStops, 1);
   assert.equal(detectCalls, 0); // Test camera never supplied a ready frame.
   assert(states.some((state) => state.camera === "active" && state.visible === true));
-  assert(states.some((state) => state.reason === "permission_revoked"));
+  assert(states.some((state) => state.reason === "camera_track_ended"));
 });
 
 test("browser camera journey requires consent, rejects a stale paused frame, then executes one authorized UI action", async () => {
@@ -803,6 +803,28 @@ test("browser camera permission revocation stops the session and unregisters its
   assert.equal(adapterStops, 1);
   assert.equal(listeners.size, 0);
   assert.equal(engine.gestureCooldowns.size, 0);
+});
+
+test("an ended camera track stops recognition without misreporting permission revocation", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  const states = [];
+  const off = engine.subscribe((event, payload) => {
+    if (event === "recognition_state_changed") states.push(payload);
+  });
+  engine.setRecognitionAdapter({ async detect() { return null; } });
+
+  assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+  const ended = camera.listeners.get("ended");
+  assert.equal(typeof ended, "function");
+  camera.videoTrack.readyState = "ended";
+  ended();
+
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.cameraCapabilityStatus, "supported");
+  assert.equal(camera.stopped, 1);
+  assert.equal(states.at(-1)?.reason, "camera_track_ended");
+  off();
 });
 
 test("gesture bindings cannot publish an action outside their active consented session", () => {

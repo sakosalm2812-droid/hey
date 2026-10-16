@@ -42,6 +42,11 @@ test("Gesture Studio offers camera permission recovery for denied and revoked ac
   assert.match(studioSource, /getRecognitionCapability\(\)\.then\(setCapability\)/);
 });
 
+test("Gesture Studio explains camera track loss separately from permission revocation", () => {
+  assert.match(studioSource, /reason === "camera_track_ended"\) setError\("The camera feed ended\./);
+  assert.match(studioSource, /reason === "permission_revoked"\) setError\("Camera access was revoked\./);
+});
+
 test("Gesture actions have a route handler and completion is recorded after navigation", () => {
   assert.match(bridgeSource, /request\?\.action\?\.action !== "summon"/);
   assert.match(bridgeSource, /navigate\("\/dashboard"\)/);
