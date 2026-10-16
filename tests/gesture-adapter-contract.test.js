@@ -789,6 +789,96 @@ test("browser camera journey requires consent, rejects a stale paused frame, the
   assert.equal(engine.cameraCapabilityStatus, "supported");
 });
 
+test("a frozen camera frame resets gesture hold and stops capture for fresh consent", async () => {
+  const { engine, profile } = makeEngine();
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const scheduledFrames = [];
+  const trackListeners = new Map();
+  let cameraStops = 0;
+  let detectorStops = 0;
+  let detectorCalls = 0;
+  let now = 1_000;
+  const originalNow = Date.now;
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousDocument = globalThis.document;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
+  const previousOffscreenCanvas = globalThis.OffscreenCanvas;
+  const video = {
+    readyState: 2,
+    currentTime: 12,
+    srcObject: null,
+    async play() {},
+    pause() {},
+  };
+  const track = {
+    readyState: "live",
+    stop() { cameraStops += 1; this.readyState = "ended"; },
+    addEventListener(name, listener) { trackListeners.set(name, listener); },
+  };
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  const canvas = {
+    getContext() {
+      return {
+        drawImage() {},
+        getImageData() { return { width: 640, height: 480, data: new Uint8ClampedArray(4) }; },
+      };
+    },
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { async getUserMedia() { return stream; } } },
+  });
+  globalThis.document = { createElement(kind) { return kind === "video" ? video : canvas; } };
+  globalThis.requestAnimationFrame = (callback) => { scheduledFrames.push(callback); return scheduledFrames.length; };
+  globalThis.OffscreenCanvas = class {
+    getContext() { return { drawImage() {}, getImageData() { return { width: 640, height: 480, data: new Uint8ClampedArray(4) }; } }; }
+  };
+  engine.setRecognitionAdapter({
+    kind: "synthetic-stall-detector",
+    async detect() { detectorCalls += 1; return { id: "G01", confidence: 0.99 }; },
+    stop() { detectorStops += 1; },
+  });
+  const actions = [];
+  const states = [];
+  const offAction = subscribe("gesture.action_requested", (event) => actions.push(event));
+  const offState = engine.subscribe((event, payload) => { if (event === "recognition_state_changed") states.push(payload); });
+
+  try {
+    Date.now = () => now;
+    assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "active" })).success, true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(detectorCalls, 1);
+
+    now = 1_100;
+    scheduledFrames.shift()();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(detectorCalls, 1); // An unchanged media timestamp is never treated as another gesture frame.
+    assert.deepEqual(actions, []);
+
+    now = 2_600;
+    scheduledFrames.shift()();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(cameraStops, 1);
+    assert.equal(detectorStops, 1);
+    assert.equal(detectorCalls, 1);
+    assert.deepEqual(actions, []);
+    assert(states.some((state) => state.reason === "camera_frame_stalled"));
+  } finally {
+    Date.now = originalNow;
+    offAction(); offState();
+    if (engine.getRecognitionState() !== GESTURE_STATES.INACTIVE) engine.stopRecognition("test_cleanup");
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete globalThis.navigator;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousAnimationFrame;
+    if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
+});
+
 test("camera track ending during preview startup is observed and reported before recognition starts", async () => {
   const { engine, profile } = makeEngine();
   let resolvePlay;

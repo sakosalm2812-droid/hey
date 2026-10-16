@@ -45,6 +45,7 @@ const SCOPES = Object.freeze({
 
 const GESTURE_COOLDOWN_MIN_MS = 200;
 const GESTURE_COOLDOWN_MAX_MS = 2000;
+const MAX_CAMERA_FRAME_STALL_MS = 1500;
 const GESTURE_PROFILE_STORE_VERSION = 1;
 const GESTURE_PROFILE_STORE_KEY = "hey_gesture_profiles";
 const MAX_GESTURE_PROFILE_STORE_LENGTH = 128_000;
@@ -1026,13 +1027,44 @@ export class GestureEngine {
     const generation = this.recognitionGeneration;
     const signal = this.recognitionAbortController?.signal;
     if (!profile || !signal || typeof globalThis.requestAnimationFrame !== "function") return;
+    let lastVideoTime = null;
+    let lastDetectedVideoTime = null;
+    let lastVideoProgressAt = Date.now();
 
     const detect = async () => {
       if (generation !== this.recognitionGeneration || signal.aborted) return;
 
       const now = Date.now();
-      if (this.recognitionState === GESTURE_STATES.ACTIVE && this.videoElement && this.videoElement.readyState >= 2 && now - this.lastFrameAt >= 100) {
+      let videoTime = null;
+      try {
+        const currentTime = this.videoElement?.currentTime;
+        if (Number.isFinite(currentTime)) videoTime = currentTime;
+      } catch { /* Older or restricted video elements may not expose media time. */ }
+      if (videoTime !== null && this.recognitionState === GESTURE_STATES.PAUSED) {
+        lastVideoTime = videoTime;
+        lastDetectedVideoTime = videoTime;
+        lastVideoProgressAt = now;
+      } else if (videoTime !== null && this.recognitionState === GESTURE_STATES.ACTIVE) {
+        if (lastVideoTime === null || videoTime > lastVideoTime) {
+          lastVideoTime = videoTime;
+          lastVideoProgressAt = now;
+        } else if (videoTime < lastVideoTime) {
+          lastVideoTime = videoTime;
+          lastDetectedVideoTime = null;
+          lastVideoProgressAt = now;
+        }
+        if (now - lastVideoProgressAt >= MAX_CAMERA_FRAME_STALL_MS) {
+          this.pendingGesture = null;
+          this.stopRecognition("camera_frame_stalled");
+          return;
+        }
+        if (lastDetectedVideoTime !== null && videoTime <= lastDetectedVideoTime) this.pendingGesture = null;
+      }
+      const hasFreshVideoFrame = videoTime === null || lastDetectedVideoTime === null || videoTime > lastDetectedVideoTime;
+      if (this.recognitionState === GESTURE_STATES.ACTIVE && this.videoElement && this.videoElement.readyState >= 2
+        && hasFreshVideoFrame && now - this.lastFrameAt >= 100) {
         this.lastFrameAt = now;
+        if (videoTime !== null) lastDetectedVideoTime = videoTime;
         const detectionEpoch = this.detectionEpoch;
         try {
           const gesture = await this.detectGesture(this.videoElement, profile, signal);
