@@ -1,6 +1,6 @@
 ## Latest coordinator checkpoint — 2026-10-16, wave 6 integration
 
-Coordinator source branch `codex/resume-emergency-2026-10-14` is at `9e50fc4`; the last pushed checkpoint is `8a8ebf3`, so the Teacher receipt hardening is pending push. Preserve untracked `docs/requirements/v3-agent-pack/`. Never reset or overwrite the specialist worktrees.
+Coordinator source branch `codex/resume-emergency-2026-10-14` is at `6efb67b`; it is two commits ahead of the last pushed checkpoint `a6fa230`. Spaces private recovery is integrated. Preserve untracked `docs/requirements/v3-agent-pack/`. Never reset or overwrite the specialist worktrees.
 
 ### Integrated work since the last push
 
@@ -13,30 +13,32 @@ Coordinator source branch `codex/resume-emergency-2026-10-14` is at `9e50fc4`; t
 - `cb1062a`: worker 05's detector now rejects unknown handedness for explicit left/right profiles before pose calibration; `both` continues to accept unknown labels. Gesture tests and `fbf9f1e` source suite **49/49**.
 - `8ff8ac3`: worker 11 checks cancellation after Fusion verification and immediately before persistence, passes the request AbortSignal to the Supabase insert, and maps aborts to the cancellation response. Fusion/Edge worker suite **93/93**; combined Gesture/Fusion/Edge focused suite **50/50**. Cancellation that arrives after a database commit cannot undo that commit.
 - `9e50fc4`: worker 08 hardens Forge batch cache admission: every row must confirm the expected draft status, version 1, no parent version, and main branch before caching. Per-field mismatch regressions added; Teacher-focused worker suite **57/57**, scoped ESLint and build passed. Live Supabase behavior remains unverified.
+- `e9121ba`: worker 07 adds abort fences before/after target binding and mandate verification; a cancelled preview is terminal and its action ID cannot replay. Focused computer-control/VoiceOS suites **42/42**; worker's broader platform suite **62/62**; changed-file ESLint and build pass. This is JavaScript-boundary hardening and does not establish native Trust Kernel enforcement.
+- `6efb67b`: worker 02 adds account-scoped last-known-good Space recovery with an explicit preview/restore path, snapshot validation, and stale/account-switch fencing. Space-focused tests **33/33** after integration.
 
-Current root verification after all source integrations: **702/702** tests pass; production build succeeds, transforming 2,771 modules; changed-file ESLint passes for supported JS/JSX sources and tests. Deno type-checking for the Edge TypeScript and Rust compilation remain unavailable. The earlier combined lint invocation named a nonexistent placeholder path; a corrected changed-file lint run passed. Build emits the known mixed-import warning for `contextManager.js`; sitemap generation skips without `SITE_URL`. Do not interpret mocked/local checks as live backend evidence.
+Current root verification after all source integrations: **709/709** tests pass; production build succeeds, transforming 2,771 modules; Space changed-file ESLint and `git diff --check` pass. Deno type-checking for the Edge TypeScript and Rust compilation remain unavailable. Build emits the known mixed-import warning for `contextManager.js`; sitemap generation skips without `SITE_URL`. Do not interpret mocked/local checks as live backend evidence.
 
 The live UI remains available at `http://127.0.0.1:5175/login`; browser shows sign-in disabled because `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are absent. Authenticated journeys, live database/provider, physical camera/microphone, native Rust compile/device, and production deployment remain **UNVERIFIED**.
 
 ### Active workers and exact next actions
 
-App snapshot after dispatch: tasks 02 and 07 are Active; tasks 05, 08 and 11 completed their current-head ports and are idle. Tasks 01, 04 and 06 completed their current-head ports and are idle:
+App snapshot on 2026-10-16: all 11 specialist chats are idle after their current scoped ports; task 02 is integrated and done for that task. No specialist worker is active at this checkpoint. The coordinator is continuing implementation from the root branch:
 
 | Worker | Existing task reference | Port branch / commit | Status / next action |
 |---:|---|---|---|
 | 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/teacher-account-route-fix-62649` / `2cccbac9c1bd0bdfb7451ef04d5f3209e5ace002`; integrated `1dd5136` | Done for current task; authenticated browser/Forge still unverified. |
-| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-lifecycle-recovery-port` / base `4df8d77`, dirty current worktree at `C:\Users\DELL\Documents\Codex\2026-10-15\hey-local-chat-02-onboarding-spaces\work\space-lifecycle-recovery-port` | Active; account-scoped last-known-good Space recovery with explicit preview/restore, tests in progress. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-lifecycle-recovery-port` / `22d942db66cce70c2cebb906f8608e1ae9c6e9e7`; integrated `6efb67b` | Done for this scoped task; recovery remains local snapshot behavior and live authenticated database restore is unverified. |
 | 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | port source `6c4c57ae47ea920e7a6cc72119564ab359ff5802`; integrated `355798b`, `62649e5`, `be71e03` | Done for current task; leave source worktree intact. |
 | 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/native-ipc-fail-closed-ea48` / `789b45ac42b10df1d0ed28abe25a09d453b40093`; integrated `e88628a` | Done; Rust compile remains blocked by missing toolchain. |
 | 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-runtime-calibration-4df8d77` / `fbf9f1eb3562dc5157346869eff6a0a78a8f6287`; integrated `cb1062a` | Done for current task. |
 | 06 Flow | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-selected-edit-coordinator-62649` / `d517abb7a454cfc2451b03fb7a565eb3c9ba1c84`; integrated `013e17a` | Done for current task; real provider/auth journey remains unverified. |
-| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-current-port` / base `1dd5136`, dirty worktree at `C:\Users\DELL\Documents\Codex\2026-10-16\hey-voiceos-js-current-port` | Active; cancel checks around native capability discovery and postcondition replay coverage; Rust files excluded. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-current-port` / `523600c02392a35cad48affc73a2691fd01910fb`; integrated `e9121ba` | Done for current task; no native trust enforcement claim. |
 | 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-backend-port-013e17a` / `85f682afd2ccfee9c98863a0fba151bf85a79f0f`; integrated `9e50fc4` | Done for current task; live Supabase behavior remains unverified. |
 | 09 HEY One | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | no new port needed; current provider route already bounded | Idle; retain its source checkpoint, no duplicate provider patch. |
 | 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | source `9ec2792adbfc5856885790177298d34953a83856`; integrated `b833e57` | Done for current task; benchmarks remain selection-only. |
 | 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-cancel-persist` / `8322771780131043ad925db47c646a7948435f71`; integrated `8ff8ac3` | Done for current task; live provider and Deno checks remain unverified. |
 
-Immediate actions: complete review/integration of active tasks 02 and 07 against `9e50fc4`; run their focused tests, current full suite, supported changed-file lint and build; update this file and the step map; push the checkpoint. Continue to report runtime/backend/native gaps explicitly.
+Immediate actions: push the verified `6efb67b` integration plus this handoff update; inspect the next open product gap and resume existing specialists concurrently only on distinct scopes. Keep authenticated browser, live backend/provider, camera/microphone, native compilation/device, and production journeys explicitly unverified until exercised against real configured services/hardware.
 
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 5 integrated
 
