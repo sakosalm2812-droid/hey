@@ -72,7 +72,7 @@ function validatePortableDocument(value) {
     const space = spaceRecord.value;
     if (SPACE_FIELDS.some((field) => !Object.hasOwn(space, field))
       || typeof space.id !== "string" || !space.id || space.id.length > 100 || seenIds.has(space.id)
-      || typeof space.name !== "string" || !safeSpaceName.test(space.name)
+      || typeof space.name !== "string" || space.name.length > 80 || !safeSpaceName.test(space.name)
       || typeof space.description !== "string" || space.description.length > 240 || hasControlCharacters(space.description)
       || !["empty", "planning", "research", "custom"].includes(space.templateId)
       || !Number.isSafeInteger(space.detailsRevision) || space.detailsRevision < 0

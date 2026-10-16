@@ -130,6 +130,7 @@ test("adversarial backup fixtures are rejected before RPC and the direct RPC has
   const invalidDocuments = [
     ["unsafe Space name", (document) => { document.spaces[0].name = "Bad/name"; }],
     ["oversized Space name", (document) => { document.spaces[0].name = "A".repeat(81); }],
+    ["oversized UTF-16 Space name", (document) => { document.spaces[0].name = "😀".repeat(41); }],
     ["control character in name", (document) => { document.spaces[0].name = "Plan\u0007"; }],
     ["oversized description", (document) => { document.spaces[0].description = "A".repeat(241); }],
     ["control character in description", (document) => { document.spaces[0].description = "Plan\u0085"; }],
