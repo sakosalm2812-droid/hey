@@ -53,6 +53,9 @@ test("ending an active camera session requires fresh consent before restart", ()
   assert.match(studioSource, /payload\?\.reason === "camera_track_ended"\) \{ setConsent\(false\); setError\(/);
   assert.match(studioSource, /payload\?\.reason === "permission_revoked"\) \{ setConsent\(false\); setError\(/);
 });
+test("page visibility loss stops the session and requires fresh camera consent", () => {
+  assert.match(studioSource, /payload\?\.reason === "page_hidden"\) \{ setConsent\(false\); setError\(/);
+});
 test("Gesture actions have a route handler and completion is recorded after navigation", () => {
   assert.match(bridgeSource, /request\?\.action\?\.action !== "summon"/);
   assert.match(bridgeSource, /navigate\("\/dashboard"\)/);

@@ -851,6 +851,83 @@ test("a frame completing after pause and resume cannot trigger an action", async
   }
 });
 
+test("hiding the page stops active gesture capture and rejects the in-flight detection", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  camera.video.readyState = 2;
+  const visibilityListeners = new Map();
+  const canvas = {
+    getContext: () => ({ drawImage() {}, getImageData() { return { data: new Uint8ClampedArray(4) }; } }),
+  };
+  const previousDocument = globalThis.document;
+  const previousOffscreenCanvas = globalThis.OffscreenCanvas;
+  globalThis.document = {
+    visibilityState: "visible",
+    hidden: false,
+    createElement(kind) { return kind === "video" ? camera.video : canvas; },
+    addEventListener(name, listener) { visibilityListeners.set(name, listener); },
+    removeEventListener(name, listener) { if (visibilityListeners.get(name) === listener) visibilityListeners.delete(name); },
+  };
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { drawImage() {}, getImageData() { return { data: new Uint8ClampedArray(4) }; } };
+    }
+  };
+  let resolveDetection;
+  let signalDetectionStarted;
+  let detectionSignal;
+  const detectionStarted = new Promise((resolve) => { signalDetectionStarted = resolve; });
+  let adapterStops = 0;
+  const states = [];
+  const observations = [];
+  engine.subscribe((event, payload) => {
+    if (event === "recognition_state_changed") states.push(payload);
+    if (event === "gesture_frame_observed") observations.push(payload);
+  });
+  engine.setRecognitionAdapter({
+    kind: "mediapipe-hands-bundled",
+    detect(_frame, _profile, { signal }) {
+      detectionSignal = signal;
+      signalDetectionStarted();
+      return new Promise((resolve) => { resolveDetection = resolve; });
+    },
+    getLatestObservation() {
+      return { pose: Array(63).fill(0), handedness: "right", handConfidence: 0.99, timestamp: Date.now() };
+    },
+    stop() { adapterStops += 1; },
+  });
+  engine.createBinding({ profileId: profile.id, gestureId: "G01", action: "summon", actionType: "ui" });
+  const actions = [];
+  const offAction = subscribe("gesture.action_requested", (event) => actions.push(event));
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "active" })).success, true);
+    await detectionStarted;
+    assert.equal(visibilityListeners.size, 1);
+    globalThis.document.visibilityState = "hidden";
+    globalThis.document.hidden = true;
+    visibilityListeners.get("visibilitychange")();
+    resolveDetection({ id: "G01", confidence: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(engine.cameraCapabilityStatus, "supported");
+    assert.equal(camera.stopped, 1);
+    assert.equal(adapterStops, 1);
+    assert.equal(detectionSignal.aborted, true);
+    assert.equal(states.at(-1)?.reason, "page_hidden");
+    assert.equal(visibilityListeners.size, 0);
+    assert.deepEqual(observations, []);
+    assert.deepEqual(actions, []);
+    assert.equal(engine.getLatestDetectorObservation(), null);
+  } finally {
+    offAction();
+    engine.stopRecognition("test_cleanup");
+    globalThis.document = previousDocument;
+    if (previousOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = previousOffscreenCanvas;
+  }
+});
 test("browser camera permission revocation stops the session and unregisters its observer", async () => {
   const { engine, profile } = makeEngine();
   const camera = installCamera();

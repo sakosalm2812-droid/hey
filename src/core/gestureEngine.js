@@ -256,6 +256,8 @@ export class GestureEngine {
     this.recognitionGeneration = 0;
     this.cameraPermissionStatus = null;
     this.cameraPermissionHandler = null;
+    this.visibilityTarget = null;
+    this.visibilityHandler = null;
     this.cameraCapabilityStatus = "unknown";
     this.activeProfileId = null;
     this.frameCanvas = null;
@@ -785,13 +787,18 @@ export class GestureEngine {
     this.testCustomGestureId = null;
     this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", detector: "initializing", mode });
 
+    const cancellationResult = () => abortController.signal.reason === "page_hidden"
+      ? { success: false, error: "Gesture recognition stopped because the page became hidden.", code: "page_hidden" }
+      : { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
     let detectorInitializing = false;
     try {
+      this.watchPageVisibility(generation);
+      if (abortController.signal.aborted || generation !== this.recognitionGeneration) return cancellationResult();
       if (typeof this.recognitionAdapter.prepare === "function") {
         detectorInitializing = true;
         const adapterReady = await this.recognitionAdapter.prepare({ signal: abortController.signal, profile });
         if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-          return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+          return cancellationResult();
         }
         if (adapterReady === false) throw Object.assign(new Error("Gesture detector could not be initialized."), { code: "gesture_adapter_unavailable" });
         detectorInitializing = false;
@@ -822,7 +829,7 @@ export class GestureEngine {
 
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
         stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
-        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+        return cancellationResult();
       }
       const videoTrack = stream.getVideoTracks?.()[0];
       if (!videoTrack) throw new Error("Camera track is unavailable.");
@@ -853,7 +860,7 @@ export class GestureEngine {
         video.srcObject = null;
         if (this.mediaStream === stream) this.mediaStream = null;
         if (this.videoElement === video) this.videoElement = null;
-        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+        return cancellationResult();
       }
 
 
@@ -864,7 +871,7 @@ export class GestureEngine {
         video.srcObject = null;
         if (this.mediaStream === stream) this.mediaStream = null;
         if (this.videoElement === video) this.videoElement = null;
-        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+        return cancellationResult();
       }
       if (!permissionAllowed) {
         this.setCameraCapabilityStatus("revoked", "permission_revoked");
@@ -884,7 +891,7 @@ export class GestureEngine {
       return { success: true, profileId, camera: "active", visible: true, mode, adapter: this.recognitionAdapter.kind || "custom" };
     } catch (error) {
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        return { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
+        return cancellationResult();
       }
       let errorCode = "";
       try { errorCode = typeof error?.code === "string" ? error.code : ""; } catch { /* Host errors can be accessor-backed. */ }
@@ -903,6 +910,25 @@ export class GestureEngine {
     }
   }
 
+  watchPageVisibility(generation) {
+    let documentObject;
+    try { documentObject = globalThis.document; } catch { return false; }
+    if (typeof documentObject?.addEventListener !== "function") return false;
+
+    const onVisibilityChange = () => {
+      if (generation !== this.recognitionGeneration) return;
+      try {
+        if (documentObject.visibilityState === "hidden" || documentObject.hidden === true) {
+          this.stopRecognition("page_hidden");
+        }
+      } catch { /* The browser did not expose a readable visibility state. */ }
+    };
+    documentObject.addEventListener("visibilitychange", onVisibilityChange);
+    this.visibilityTarget = documentObject;
+    this.visibilityHandler = onVisibilityChange;
+    onVisibilityChange();
+    return generation === this.recognitionGeneration;
+  }
   async watchCameraPermission(generation) {
     let permissions;
     let query;
@@ -1206,7 +1232,13 @@ export class GestureEngine {
     }
     this.cameraPermissionStatus = null;
     this.cameraPermissionHandler = null;
-    
+
+    if (this.visibilityTarget && this.visibilityHandler) {
+      this.visibilityTarget.removeEventListener?.("visibilitychange", this.visibilityHandler);
+    }
+    this.visibilityTarget = null;
+    this.visibilityHandler = null;
+
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(t => t.stop());
       this.mediaStream = null;
