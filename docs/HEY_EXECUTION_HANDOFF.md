@@ -1,6 +1,6 @@
 ## Latest integration checkpoint — 2026-10-16 20:35 Asia/Baghdad
 
-Coordinator branch `codex/resume-emergency-2026-10-14` currently integrates through `f5d2a38` (`Require enrolled devices for command delivery`); this batch is ready to push with its handoff update. Previous pushed checkpoint: `e6b3736`. Nine specialist follow-up commits were reviewed and integrated:
+Coordinator branch `codex/resume-emergency-2026-10-14` currently integrates through `f5d2a38` (`Require enrolled devices for command delivery`); this batch is ready to push with its handoff update. Previous pushed checkpoint: `e6b3736`. Ten specialist follow-up commits were reviewed and integrated:
 
 | Area | Specialist branch / source commit → coordinator commit | Integrated behavior and evidence boundary |
 |---|---|---|
@@ -1132,3 +1132,4 @@ Existing task IDs are retained; no replacement tasks were created. Follow-up mod
 Worker 05 (`01a14073-de07-7a90-b8bb-08faadea17bc`) completed the regression port as `94c8d6f31d43a9260db404b802a5a59c03262fe0`, integrated at `b0c3ce1`. Workers 02, 07, 08 and 11 are idle/completed at their recorded checkpoints; 07's JS-only launch guard is still partial due the direct native IPC gap. Worker 08's page is integrated at `d88d6ce` and nav cleanup `ea48a2f`; both remain contingent on resolving the route duplication and account switch. All existing task IDs remain the recovery references; no replacement worker chats were created.
 
 Current root checkout has no uncommitted tracked source changes; keep `docs/requirements/v3-agent-pack/` untracked and preserved. The previous handoff checkpoint is pushed at `ef062dd`. The next actions are to fix the reachable Teacher route, review current-HEAD ports from 03/04/06/10, integrate only narrow verified commits, rerun full suite/build, and push the next checkpoint. Live Supabase URL/key, signed-in test account, provider credentials, Rust toolchain and device hardware remain unavailable, so authenticated service, real inference, native execution and camera journeys are still **UNVERIFIED**.
+
