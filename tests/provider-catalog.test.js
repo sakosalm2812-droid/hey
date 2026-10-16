@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import {
   calculateProviderUsageCost,
   listConfiguredProviders,
@@ -175,6 +176,83 @@ test("Gemini dispatch keeps its key out of URLs while preserving the exact model
       return new Response(`vendor echoed ${secretKey}`, { status: 401 });
     },
   }), (error) => !error.message.includes(secretKey) && !error.message.includes("vendor echoed"));
+});
+
+test("Gemini dispatch refuses redirects without leaking its key", async () => {
+  const secretKey = "gemini-controlled-http-secret";
+  const model = "gemini-exact-fixture";
+  const geminiAttempt = { id: "gemini", model, key: secretKey };
+  const geminiPricing = parseChatPricingConfig(JSON.stringify({
+    budgetUsd: 0.02,
+    providers: [{ id: "gemini", model, inputUsdPerMillion: 1, outputUsdPerMillion: 3, maxCostUsd: 0.01 }],
+  }));
+  const received = [];
+  const attackerRequests = [];
+  let attackerPort;
+  const providerServer = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    received.push({
+      method: request.method,
+      url: request.url,
+      key: request.headers["x-goog-api-key"],
+      body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+    });
+    if (request.url === "/redirect") {
+      response.writeHead(302, { Location: `http://127.0.0.1:${attackerPort}/stolen` });
+      response.end("redirect body must stay private");
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      candidates: [{ content: { parts: [{ text: "fixture response" }] } }],
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2 },
+    }));
+  });
+  const attackerServer = createServer((request, response) => {
+    attackerRequests.push({ url: request.url, key: request.headers["x-goog-api-key"] });
+    response.end("unexpected");
+  });
+  const listen = (server) => new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve(server.address().port);
+    });
+  });
+  const close = (server) => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  let providerPort;
+  try {
+    [providerPort, attackerPort] = await Promise.all([listen(providerServer), listen(attackerServer)]);
+    const dispatch = (path) => callConfiguredProvider({
+      messages: [{ role: "user", content: "hello" }],
+      attempts: [geminiAttempt],
+      pricingConfig: geminiPricing,
+      fetchImpl: (url, init) => {
+        assert.equal(String(url), `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
+        return fetch(`http://127.0.0.1:${providerPort}${path}`, init);
+      },
+    });
+
+    const success = await dispatch("/success");
+    assert.equal(success.model, model);
+    assert.deepEqual(received[0], {
+      method: "POST",
+      url: "/success",
+      key: secretKey,
+      body: {
+        contents: [{ role: "user", parts: [{ text: "user: hello" }] }],
+        generationConfig: { maxOutputTokens: 1200, temperature: 0.7 },
+      },
+    });
+
+    await assert.rejects(dispatch("/redirect"), (error) =>
+      !error.message.includes(secretKey) && !error.message.includes("redirect body must stay private"));
+    assert.equal(received[1].key, secretKey, "the key is sent only to the configured endpoint");
+    assert.deepEqual(attackerRequests, [], "the redirected request never reaches the second server");
+  } finally {
+    await Promise.all([close(providerServer), close(attackerServer)]);
+  }
 });
 
 test("an explicit model failure does not silently fall back to another provider", async () => {

@@ -99,6 +99,7 @@ export async function callConfiguredProvider({
           ? await fetchWithTimeout(`${PROVIDER_ENDPOINTS.gemini}/${encodeURIComponent(provider.model)}:generateContent`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-goog-api-key": provider.key },
+            redirect: "error",
             body: JSON.stringify({
               contents: [{ role: "user", parts: [{ text: inputText }] }],
               generationConfig: { maxOutputTokens: providerMaxTokens, temperature: 0.7 },
