@@ -3,8 +3,9 @@ import test from "node:test";
 import HEY from "../src/core/index.js";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
 import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, getToolLifecycleContract, getToolLifecycleActivity } from "../src/core/toolRegistry.js";
-import { seedPermissions, clearPermissions } from "../src/core/permissionManager.js";
+import { seedPermissions, clearPermissions, revokePermission } from "../src/core/permissionManager.js";
 import { setAccountScope } from "../src/core/accountScope.js";
+import { publish } from "../src/core/eventBus.js";
 
 test("Tool Library catalog derives availability from capability policy without exposing handlers", () => {
   const availableCapability = "test.tool_library.available";
@@ -649,6 +650,105 @@ test("a non-cooperative handler is never reported as stopped when it completes a
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(getToolLifecycleContract(name, context).status, "completed_after_stop");
   } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("revoking a required account permission aborts its active lifecycle session", async () => {
+  const name = "test.tool_library.lifecycle_permission_revoked";
+  const capability = "test.tool_library.lifecycle_permission_revoked_capability";
+  const accountId = "lifecycle-permission-revoked-owner";
+  registerCapability({ id: capability, name: "Revocable lifecycle capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope(accountId);
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], accountId);
+  let entered;
+  let release;
+  let handlerSignal;
+  const handlerEntered = new Promise((resolve) => { entered = resolve; });
+  const releaseHandler = new Promise((resolve) => { release = resolve; });
+  const owner = { user: { id: accountId, plan: "elite", entitlements: ["elite"] } };
+  try {
+    registerTool(name, async (_input, context) => {
+      handlerSignal = context.signal;
+      entered();
+      await releaseHandler;
+      return { success: true };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, stop: true },
+    });
+    const started = startToolLibraryEntry(name, {}, owner);
+    assert.equal(started.status, "starting");
+    await handlerEntered;
+    assert.equal(handlerSignal.aborted, false);
+
+    revokePermission("filesystem.write", "account");
+    assert.equal(handlerSignal.aborted, true);
+    assert.equal(getToolLifecycleContract(name, owner).status, "stopping");
+    assert.equal(getToolLifecycleActivity(name, owner).activity[0].status, "stopping");
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(getToolLifecycleContract(name, owner).status, "completed_after_stop");
+  } finally {
+    release?.();
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("lifecycle revocation notices are descriptor-safe and cannot override granted permission state", async () => {
+  const name = "test.tool_library.lifecycle_forged_revoke";
+  const capability = "test.tool_library.lifecycle_forged_revoke_capability";
+  const accountId = "lifecycle-forged-revoke-owner";
+  registerCapability({ id: capability, name: "Forged revocation capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope(accountId);
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], accountId);
+  let entered;
+  let release;
+  let handlerSignal;
+  let getterCalls = 0;
+  const handlerEntered = new Promise((resolve) => { entered = resolve; });
+  const releaseHandler = new Promise((resolve) => { release = resolve; });
+  const owner = { user: { id: accountId, plan: "elite", entitlements: ["elite"] } };
+  try {
+    registerTool(name, async (_input, context) => {
+      handlerSignal = context.signal;
+      entered();
+      await releaseHandler;
+      return { success: true };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, stop: true },
+    });
+    const started = startToolLibraryEntry(name, {}, owner);
+    await handlerEntered;
+
+    publish("permission.updated", {
+      permission: "filesystem.write",
+      scope: "account",
+      status: "revoked",
+    });
+    const hostileNotice = {};
+    for (const key of ["permission", "scope", "status"]) {
+      Object.defineProperty(hostileNotice, key, { get() { getterCalls += 1; return key === "permission" ? "filesystem.write" : key === "scope" ? "account" : "revoked"; } });
+    }
+    publish("permission.updated", hostileNotice);
+    assert.equal(getterCalls, 0);
+    assert.equal(handlerSignal.aborted, false, "the authoritative grant, not an event payload, decides whether to abort");
+    assert.equal(getToolLifecycleContract(name, owner).status, "running");
+
+    assert.equal(stopToolLibraryEntry(name, started.sessionId, owner).status, "stopping");
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(getToolLifecycleContract(name, owner).status, "completed_after_stop");
+  } finally {
+    release?.();
     unregisterTool(name);
     clearPermissions();
     setAccountScope(null);

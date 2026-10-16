@@ -1,5 +1,6 @@
 import { recordAudit } from "./auditLog.js";
 import { executeWithPermission, authorizeExecution, hasPermission } from "./permissionManager.js";
+import { subscribe } from "./eventBus.js";
 import { CAPABILITY_STATUS, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { getAccountScope, subscribeAccountScope } from "./accountScope.js";
 import { createToolLibraryPreferenceStore } from "./toolLibraryPreferences.js";
@@ -18,6 +19,31 @@ let capabilityAvailabilityResolver = null;
 let capabilityAvailabilityResolverOwner = null;
 export const toolLibraryPreferenceStore = createToolLibraryPreferenceStore({
   isToolRegistered: (name) => tools.has(name),
+});
+
+function readEventData(record, key) {
+  try {
+    const descriptor = record && typeof record === "object" ? Object.getOwnPropertyDescriptor(record, key) : null;
+    return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+subscribe("permission.updated", (grant) => {
+  const permission = readEventData(grant, "permission");
+  if (readEventData(grant, "status") !== "revoked" || readEventData(grant, "scope") !== "account" || typeof permission !== "string") return;
+  const scope = getAccountScope();
+  if (typeof scope !== "string" || !scope.startsWith("account:")) return;
+  const accountId = scope.slice("account:".length);
+  for (const session of activeToolSessions.values()) {
+    if (session.accountId !== accountId || !session.permissions.includes(permission) || !["starting", "running"].includes(session.status)) continue;
+    // Events are hints; the permission manager remains the authority.
+    if (hasPermission(permission, "account", accountId)) continue;
+    session.status = "stopping";
+    session.controller.abort(new Error("A required account permission was revoked."));
+    appendToolActivity(accountId, { id: session.id, name: session.name, status: "stopping", at: new Date().toISOString() });
+  }
 });
 
 subscribeAccountScope((previousScope) => {
@@ -543,7 +569,7 @@ export function startToolLibraryEntry(name, input, context = {}) {
 
   const id = crypto.randomUUID();
   const controller = new AbortController();
-  const session = { id, name, accountId: identity.accountId, status: "starting", startedAt: new Date().toISOString(), controller, result: null };
+  const session = { id, name, accountId: identity.accountId, permissions: permissions.slice(), status: "starting", startedAt: new Date().toISOString(), controller, result: null };
   inFlightToolSessions.add(session);
   activeToolSessions.set(key, session);
   appendToolActivity(identity.accountId, { id, name, status: "starting", at: session.startedAt });
