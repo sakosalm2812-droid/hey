@@ -3,6 +3,7 @@ import test from "node:test";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { clearPermissions, seedPermissions } from "../src/core/permissionManager.js";
+import HEY from "../src/core/index.js";
 import {
   createToolInvocationPlan,
   executeToolInvocationPlan,
@@ -159,6 +160,110 @@ test("output schema violations stop a plan and report a contract failure", async
     assert.equal(result.status, "invalid_output");
   } finally {
     unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("Tool Library plans share the per-account capacity reservation and record plan activity", async () => {
+  const accountId = "plan-capacity-account";
+  const capability = "test.plan.capacity_capability";
+  const names = Array.from({ length: 17 }, (_, index) => `test.plan.capacity_${index}`);
+  addCapability(capability);
+  setAccountScope(accountId);
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], accountId);
+  let releaseHandlers;
+  const release = new Promise((resolve) => { releaseHandlers = resolve; });
+  const entered = [];
+  const user = { id: accountId, plan: "elite", entitlements: ["elite"] };
+  try {
+    for (const name of names) {
+      registerTool(name, async () => {
+        entered.push(name);
+        await release;
+        return { verified: true };
+      }, { capabilities: [capability], permission: "filesystem.read", inputSchema: objectSchema({}) });
+    }
+    const activePlans = names.slice(0, 16).map((name, index) => executeToolInvocationPlan(
+      createToolInvocationPlan([{ id: `active-${index}`, toolName: name, input: {} }]),
+      { platform: "web", user },
+    ));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(entered.length, 16);
+    const full = await executeToolInvocationPlan(
+      createToolInvocationPlan([{ id: "over-capacity", toolName: names[16], input: {} }]),
+      { platform: "web", user },
+    );
+    assert.equal(full.status, "capacity");
+    assert.equal(HEY.tools.lifecycleActivity(names[16], { user }).activity[0].status, "capacity");
+
+    releaseHandlers();
+    assert.ok((await Promise.all(activePlans)).every(({ success }) => success));
+    assert.deepEqual(HEY.tools.lifecycleActivity(names[0], { user }).activity.map(({ status }) => status), ["completed", "starting"]);
+    const recovered = await executeToolInvocationPlan(
+      createToolInvocationPlan([{ id: "recovered", toolName: names[16], input: {} }]),
+      { platform: "web", user },
+    );
+    assert.equal(recovered.success, true);
+  } finally {
+    releaseHandlers?.();
+    names.forEach(unregisterTool);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("plans stop after an account switch and a retryable failure recovers through a fresh plan", async () => {
+  const accountA = "plan-recovery-account-a";
+  const accountB = "plan-recovery-account-b";
+  const switchName = "test.plan.recovery_switch";
+  const laterName = "test.plan.recovery_later";
+  const retryName = "test.plan.recovery_retry";
+  const capability = "test.plan.recovery_capability";
+  addCapability(capability);
+  setAccountScope(accountA);
+  seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], accountA);
+  let laterExecutions = 0;
+  let retryExecutions = 0;
+  try {
+    registerTool(switchName, async () => {
+      setAccountScope(accountB);
+      return { verified: true };
+    }, { capabilities: [capability], permission: "filesystem.read", inputSchema: objectSchema({}) });
+    registerTool(laterName, async () => { laterExecutions += 1; return { verified: true }; }, {
+      capabilities: [capability], permission: "filesystem.read", inputSchema: objectSchema({}),
+    });
+    const switched = await executeToolInvocationPlan(createToolInvocationPlan([
+      { id: "switch", toolName: switchName, input: {} },
+      { id: "must-not-run", toolName: laterName, input: {} },
+    ]), { platform: "web", user: { id: accountA, plan: "elite" } });
+    assert.equal(switched.status, "denied");
+    assert.deepEqual(switched.completed, ["switch"]);
+    assert.equal(laterExecutions, 0);
+
+    setAccountScope(accountA);
+    seedPermissions([{ permission: "filesystem.read", status: "granted", scope: "account" }], accountA);
+    registerTool(retryName, async () => {
+      retryExecutions += 1;
+      if (retryExecutions === 1) return { success: false, error: "Temporary provider outage.", retryable: true };
+      return { verified: true, value: "recovered" };
+    }, { capabilities: [capability], permission: "filesystem.read", inputSchema: objectSchema({}) });
+    const user = { id: accountA, plan: "elite" };
+    const failed = await executeToolInvocationPlan(createToolInvocationPlan([{ id: "first-attempt", toolName: retryName, input: {} }]), {
+      platform: "web", user, requestId: "retry-first-request",
+    });
+    assert.equal(failed.success, false);
+    assert.equal(failed.results[0].metadata.retryable, true);
+    assert.equal(failed.results[0].metadata.requestId, "retry-first-request");
+    const recovered = await executeToolInvocationPlan(createToolInvocationPlan([{ id: "second-attempt", toolName: retryName, input: {} }]), {
+      platform: "web", user, requestId: "retry-second-request",
+    });
+    assert.equal(recovered.success, true);
+    assert.equal(recovered.results[0].metadata.requestId, "retry-second-request");
+    assert.deepEqual(HEY.tools.lifecycleActivity(retryName, { user }).activity.map(({ status }) => status), ["completed", "starting", "failed", "starting"]);
+    assert.equal(retryExecutions, 2);
+  } finally {
+    [switchName, laterName, retryName].forEach(unregisterTool);
     clearPermissions();
     setAccountScope(null);
   }

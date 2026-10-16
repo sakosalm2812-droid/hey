@@ -30,6 +30,9 @@ subscribeAccountScope((previousScope) => {
     session.controller.abort(new Error("Account scope changed."));
     activeToolSessions.delete(key);
   }
+  for (const session of inFlightToolSessions) {
+    if (session.accountId === previousAccountId) session.controller.abort(new Error("Account scope changed."));
+  }
   toolSessionActivity.delete(previousAccountId);
 });
 
@@ -260,28 +263,86 @@ export function createToolInvocationPlan(steps) {
 export async function executeToolInvocationPlan(plan, context = {}) {
   const steps = invocationPlans.get(plan);
   if (!steps) return { success: false, status: "invalid_plan", error: "Invocation plan is invalid or was not created by this registry.", completed: [], results: [] };
+  invocationPlans.delete(plan);
+  const identity = resolveToolAccount(context);
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required.", completed: [], results: [] };
+  const names = [...new Set(steps.map(({ toolName }) => toolName))];
+  const ownsTool = (session, name) => session.name === name || session.names?.includes(name);
+  if ([...inFlightToolSessions].some((session) => session.accountId === identity.accountId && names.some((name) => ownsTool(session, name)))) {
+    for (const name of names) appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "conflict", at: new Date().toISOString() });
+    return { success: false, status: "conflict", error: "This account already has an active run for one of these tools.", completed: [], results: [] };
+  }
+  const activeSessionCount = [...inFlightToolSessions].filter((session) => session.accountId === identity.accountId).length;
+  if (activeSessionCount >= MAX_ACTIVE_TOOL_SESSIONS_PER_ACCOUNT) {
+    for (const name of names) appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "capacity", at: new Date().toISOString() });
+    return { success: false, status: "capacity", error: "This account has reached its active tool run limit.", completed: [], results: [] };
+  }
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(context.signal?.reason || new Error("Invocation plan was cancelled."));
+  if (context.signal?.aborted) abortFromCaller();
+  else context.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const reservation = { id: context.requestId || crypto.randomUUID(), accountId: identity.accountId, names, controller, kind: "plan" };
+  inFlightToolSessions.add(reservation);
+  const runContext = { ...context, signal: controller.signal };
   const byId = new Map();
   const results = [];
+  const recordStatus = (step, status) => {
+    if (getAccountScope() === `account:${identity.accountId}`) {
+      appendToolActivity(identity.accountId, { id: step.id, name: step.toolName, status, at: new Date().toISOString() });
+    }
+  };
+  try {
   for (const step of steps) {
+    if (resolveToolAccount(context)?.accountId !== identity.accountId) {
+      controller.abort(new Error("Account scope changed."));
+      return { success: false, status: "denied", failedStepId: step.id, error: "The signed-in account changed before this step could run.", completed: results.map(({ stepId }) => stepId), results };
+    }
+    if (controller.signal.aborted) {
+      recordStatus(step, "cancelled");
+      return { success: false, status: "cancelled", failedStepId: step.id, error: "Invocation plan was cancelled before dispatch.", completed: results.map(({ stepId }) => stepId), results };
+    }
     if (tools.get(step.toolName) !== step.tool) {
+      recordStatus(step, "stale_registration");
       return { success: false, status: "stale_registration", failedStepId: step.id, error: `Tool registration changed for ${step.toolName}.`, completed: results.map(({ stepId }) => stepId), results };
     }
     const input = snapshotToolData(step.input, `Input for ${step.toolName}`);
     for (const binding of step.bindings) {
       const source = byId.get(binding.fromStepId);
       if (!source || !source.output || !Object.hasOwn(source.output, binding.fromField)) {
+        recordStatus(step, "binding_failed");
         return { success: false, status: "binding_failed", failedStepId: step.id, error: "A declared output binding was unavailable.", completed: results.map(({ stepId }) => stepId), results };
       }
       input[binding.toField] = source.output[binding.fromField];
     }
     const inputError = validateToolValue(input, step.tool.metadata.inputSchema, `Input for ${step.toolName}`);
-    if (inputError) return { success: false, status: "binding_failed", failedStepId: step.id, error: inputError, completed: results.map(({ stepId }) => stepId), results };
-    const result = await runToolLibraryEntry(step.toolName, input, context);
-    results.push({ stepId: step.id, success: result?.success === true, status: result?.status || (result?.success ? "completed" : "failed"), result: result?.result ?? null, error: result?.error || null });
+    if (inputError) {
+      recordStatus(step, "binding_failed");
+      return { success: false, status: "binding_failed", failedStepId: step.id, error: inputError, completed: results.map(({ stepId }) => stepId), results };
+    }
+    recordStatus(step, "starting");
+    const result = await runToolLibraryEntry(step.toolName, input, runContext);
+    results.push({
+      stepId: step.id,
+      toolName: step.toolName,
+      success: result?.success === true,
+      status: result?.status || (result?.success ? "completed" : "failed"),
+      result: result?.result ?? null,
+      error: result?.error || null,
+      requiresConfirmation: result?.requiresConfirmation === true,
+      requiresPermission: result?.requiresPermission === true,
+      request: result?.request || null,
+      authorization: result?.authorization || null,
+      metadata: result?.metadata || null,
+    });
+    recordStatus(step, results.at(-1).status);
     if (!result?.success) return { success: false, status: result?.status || "failed", failedStepId: step.id, error: result?.error || "Tool invocation failed.", completed: results.slice(0, -1).map(({ stepId }) => stepId), results };
     byId.set(step.id, { output: result.result });
   }
   return { success: true, status: "completed", completed: results.map(({ stepId }) => stepId), results };
+  } finally {
+    context.signal?.removeEventListener("abort", abortFromCaller);
+    inFlightToolSessions.delete(reservation);
+  }
 }
 
 export function getTool(name) {
@@ -469,7 +530,7 @@ export function startToolLibraryEntry(name, input, context = {}) {
 
   const key = sessionKey(identity.accountId, name);
   const current = activeToolSessions.get(key);
-  const inFlightCurrent = [...inFlightToolSessions].some((session) => session.accountId === identity.accountId && session.name === name);
+  const inFlightCurrent = [...inFlightToolSessions].some((session) => session.accountId === identity.accountId && (session.name === name || session.names?.includes(name)));
   if ((current && ["starting", "running", "stopping"].includes(current.status)) || inFlightCurrent) {
     appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "conflict", at: new Date().toISOString() });
     return { success: false, status: "conflict", error: "This account already has an active run for this tool." };

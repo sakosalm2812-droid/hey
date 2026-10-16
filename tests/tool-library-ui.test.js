@@ -32,3 +32,14 @@ test("Tool Library exposes labeled search and stable headings for assistive tech
   assert.match(pageSource, /Search tools, permissions, and capabilities/);
   assert.match(pageSource, /aria-live="polite"/);
 });
+
+test("Tool Library runs through the canonical plan API and offers only explicitly retryable recovery", () => {
+  assert.match(pageSource, /HEY\.tools\.plan\(/);
+  assert.match(pageSource, /HEY\.tools\.executePlan\(/);
+  assert.match(pageSource, /HEY\.tools\.lifecycleActivity\(/);
+  assert.match(pageSource, /HEY\.permissions\.request\(/);
+  assert.match(pageSource, /HEY\.permissions\.grant\(/);
+  assert.match(pageSource, /stepReceipt\.metadata\?\.retryable === true/);
+  assert.match(pageSource, /Retry this run/);
+  assert.match(pageSource, /Your signed-in account changed while this tool was running/);
+});

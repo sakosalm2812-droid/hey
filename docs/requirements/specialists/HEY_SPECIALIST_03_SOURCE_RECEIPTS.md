@@ -1,0 +1,20 @@
+# HEY Specialist 03 source receipts
+
+The implementation was informed by the validated complete V3 agent pack at `C:\Users\DELL\Documents\Codex\hey-v3-agent-pack`. The incomplete extracted copy under `docs/requirements/v3-agent-pack/` was not staged, changed, or removed.
+
+The authoritative committed archive was supplied as `docs/requirements/v3-source/HEY_COMPLETE_SPEC_AGENT_PACK_V3_2026-10-15.zip`, SHA-256 `9074747F3490BBEB800018CF3BF74376CD08766AE7BB778C568E46AFDEAA5FE4`. Its full independently validated extraction was used for source reading.
+
+| Source | SHA-256 |
+| --- | --- |
+| Coordinator brief: `docs/requirements/specialists/HEY_SPECIALIST_03_BRIEF.md` | `ECF6F92A5C71E2C72BBCE112A461BD3019ECA63C93789FAD2F0120F7BFF660F1` |
+| V3 `AGENT_BRIEFS/03_Universal_Tool_Library.md` | `E9739D92C16B03B5F2E5CA90CD9C59DF7F348C6C578A4E55BBEBFC352216E8D6` |
+| V3 `WORKSTREAMS/ORIGINAL_47_FULL_PROMPTS/HEY_WORKSTREAM_08_HEY_Prompt_08_Tool_Action_Fabric_Universal_Command_Protocol_and_Verification.md` | `1F2C856CE345E225E7E792847721267F83CF8915FCB2FC560D68E87CE55B5C37` |
+| V3 `SOURCE_SPLIT/HEY_FINAL/01_DETAILED_SYSTEM_SPECS/09_COMPLETE_PLATFORM_CAPABILITY_MATRIX.md` | `A1FB469D93A9C3B69BBCFD37893FB7A34594B7EDC13DE3677A87D02395D57A33` |
+| V3 `SOURCE_SPLIT/HEY_FINAL/01_DETAILED_SYSTEM_SPECS/10_COMPLETE_PERMISSIONS_RISK_MATRIX.md` | `D0EE5C372D572FADFA1F74C36E3841DC03B4D4A3DA35D2FBB74DE764911B04E6` |
+| V3 `SOURCE_SPLIT/HEY_FINAL/01_DETAILED_SYSTEM_SPECS/15_COMPLETE_FAILURE_RECOVERY_CATALOG.md` | `78D5311E63D0F91B56C73E2020476D4EF5B06CBBFD133F4BDEAF58EAFFCABF0D` |
+| V3 `10_CURRENT_PRODUCT_CONTRACT_AND_DEFINITION_OF_DONE.md` | `406101CFA4347D98E01BFF97D218C54939C62D17DC9ECBEB7A95B1001E309F6E` |
+| V3 `01_LATEST_APPROVED_REFINEMENTS.md` | `61A34A061EE756EAF73906B9A07E5E10141B8739056C7F72A14FE73C3492803F` |
+| V3 `E2E_ACCEPTANCE_CASES.jsonl` | `FCBE46002465A9E894C4A1591A08718455F417E93D500AF4EB1DFAEE1D41766B` |
+| V3 `CAPABILITY_CARDS/diagnostics_and_reliability.md` (BIBLE-1372 Retry) | `C9963FB5F6E5227D98391780D889F95219E5E0EDB43D966F268F95C2D80B35E2` |
+
+Applied constraints: use the one canonical registry/plan executor; recheck current account permission and platform policy at execution; keep activity account-scoped; preserve truthful failure, cancellation, and verification outcomes; offer retry only when the executor marks a failure retryable. `HEY-E2E-006` remains `NOT_EXECUTED`; these local tests do not claim live authenticated or deployed behavior.

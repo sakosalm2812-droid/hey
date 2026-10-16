@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, CircleHelp, LockKeyhole, Pin, Search, ShieldAlert, Star, Wrench } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, CircleHelp, CircleX, LockKeyhole, Pin, Play, Search, ShieldAlert, Star, Wrench, X } from "lucide-react";
 import { HEY } from "./core/index.js";
 import { useInterfaceLevel } from "./context/InterfaceLevelContext.jsx";
 import { useAuth } from "./AuthContext.jsx";
 import { getAccountScope } from "./core/accountScope.js";
 import { getToolLibraryPreferenceView } from "./lib/toolLibraryPreferenceView.js";
+import { canGrantPermission } from "./lib/permissionPolicy.js";
+import { resolveAccountPlan } from "./lib/accountRecords.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
@@ -23,6 +25,63 @@ function preferenceFailureMessage(status) {
   if (status === "account_required") return "Your account preference scope is not ready. Reload the Tools catalog after signing in.";
   if (status === "invalid_store") return "Saved tool preferences are invalid and could not be loaded.";
   return "Tool preferences could not be loaded from browser storage.";
+}
+
+function isSimpleInputSchema(schema) {
+  return schema?.type === "object" && schema.properties && typeof schema.properties === "object" &&
+    Object.values(schema.properties).every((property) =>
+      ["string", "number", "integer", "boolean"].includes(property?.type) ||
+      (Array.isArray(property?.enum) && property.enum.every((value) => value === null || ["string", "number", "boolean"].includes(typeof value))),
+    );
+}
+
+function initialInputValues(schema) {
+  return Object.fromEntries(Object.entries(schema?.properties || {}).map(([name, property]) => [
+    name,
+    property.type === "boolean" ? false : "",
+  ]));
+}
+
+function typedInputFromValues(schema, values) {
+  const input = {};
+  for (const [name, property] of Object.entries(schema.properties)) {
+    const value = values[name];
+    if (property.enum) {
+      if (value === "") continue;
+      const enumValue = property.enum[Number(value)];
+      if (enumValue === undefined) throw new TypeError(`Choose a valid value for ${name}.`);
+      input[name] = enumValue;
+    } else if (property.type === "boolean") {
+      input[name] = value === true;
+    } else if (value !== "") {
+      if (property.type === "string") input[name] = String(value);
+      else {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue) || (property.type === "integer" && !Number.isInteger(numericValue))) {
+          throw new TypeError(`${name} must be a valid ${property.type}.`);
+        }
+        input[name] = numericValue;
+      }
+    }
+  }
+  return input;
+}
+
+function safeReceiptText(value) {
+  try {
+    const serialized = JSON.stringify(value, null, 2);
+    return typeof serialized === "string" ? serialized.slice(0, 4_000) : "No result data was returned.";
+  } catch {
+    return "HEY received result data that could not be displayed safely.";
+  }
+}
+
+function safeToolError(value) {
+  return (typeof value === "string" && value.trim() ? value : "HEY could not complete this tool run.")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
+    .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .slice(0, 500);
 }
 
 function CapabilityDetails({ capabilities, errors }) {
@@ -45,17 +104,169 @@ function CapabilityDetails({ capabilities, errors }) {
 function ToolCard({
   tool,
   interfaceLevel,
+  user,
+  accountId,
+  onActivityChanged,
   isFavorite,
   isPinned,
   canManagePreferences,
   onToggleFavorite,
   onTogglePin,
 }) {
+  const metadata = HEY.tools.get(tool.name)?.metadata || {};
+  const inputSchema = metadata.inputSchema;
+  const canRun = tool.status === "supported" && isSimpleInputSchema(inputSchema) && tool.permissions.length === 1;
+  const permission = tool.permissions[0];
+  const [runPanelOpen, setRunPanelOpen] = useState(false);
+  const [inputValues, setInputValues] = useState(() => initialInputValues(inputSchema));
+  const [pendingRun, setPendingRun] = useState(null);
+  const [receipt, setReceipt] = useState(null);
+  const [activity, setActivity] = useState([]);
+  const [running, setRunning] = useState(false);
+  const runLock = useRef(false);
+  const controllerRef = useRef(null);
   const status = STATUS_DETAILS[tool.status] || STATUS_DETAILS.unsupported;
   const StatusIcon = status.Icon;
   const capabilityErrors = tool.capabilities
     .filter((capability) => capability.error)
     .map((capability) => capability.error);
+
+  const refreshActivity = useCallback(() => {
+    if (!accountId || getAccountScope() !== `account:${accountId}`) {
+      setActivity([]);
+      return;
+    }
+    const result = HEY.tools.lifecycleActivity(tool.name, { user });
+    setActivity(result?.success && Array.isArray(result.activity) ? result.activity : []);
+  }, [accountId, tool.name, user]);
+
+  useEffect(() => {
+    refreshActivity();
+  }, [refreshActivity]);
+
+  async function invokePlan(run, confirmed = false) {
+    if (runLock.current) return;
+    if (!accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "Your signed-in account changed. Reload the Tools catalog before running this tool." });
+      setPendingRun(null);
+      return;
+    }
+    runLock.current = true;
+    setRunning(true);
+    setReceipt({ status: "running", message: confirmed ? "Running after your confirmation…" : "Checking access and preparing the run…" });
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    try {
+      const plan = HEY.tools.plan([{ id: run.stepId, toolName: tool.name, input: run.input }]);
+      const response = await HEY.tools.executePlan(plan, {
+        platform: "web", user, requestId: run.requestId, confirmed, signal: controller.signal,
+      });
+      if (!accountId || getAccountScope() !== `account:${accountId}`) {
+        setReceipt({ status: "denied", message: "Your signed-in account changed while this tool was running. Its result is hidden; check the destination before running it again.", requestId: run.requestId });
+        setPendingRun(null);
+        return;
+      }
+      if (!response || typeof response.success !== "boolean" || !Array.isArray(response.results)) {
+        setReceipt({ status: "error", message: "HEY could not verify this run. Check the destination before trying again.", requestId: run.requestId });
+        setPendingRun(null);
+        return;
+      }
+      const stepReceipt = response.results.length === 1 ? response.results[0] : null;
+      if (!stepReceipt || stepReceipt.stepId !== run.stepId || stepReceipt.toolName !== tool.name || stepReceipt.metadata?.requestId !== run.requestId) {
+        setReceipt({ status: response.status || "error", message: safeToolError(stepReceipt?.error || response.error || "HEY returned an incomplete run receipt."), requestId: run.requestId });
+        setPendingRun(null);
+        return;
+      }
+      if (stepReceipt.requiresConfirmation || stepReceipt.requiresPermission || stepReceipt.status === "permission_required") {
+        setReceipt({ status: "confirmation_required", message: safeToolError(stepReceipt.error || "Review the details and confirm before running this action."), requestId: run.requestId });
+        setPendingRun(run);
+        return;
+      }
+      if (response.success && response.status === "completed" && response.completed?.[0] === run.stepId && stepReceipt.success && stepReceipt.status === "completed") {
+        const verified = stepReceipt.result?.verified === true || stepReceipt.metadata?.verified === true;
+        if (!verified) {
+          setReceipt({ status: "unverified", message: "The tool returned a result without verification evidence. Review it before treating the action as complete or retrying.", result: stepReceipt.result, requestId: run.requestId });
+        } else {
+          setReceipt({ status: "completed", message: "HEY completed this tool run.", result: stepReceipt.result, requestId: run.requestId });
+          onActivityChanged();
+        }
+        setPendingRun(null);
+        return;
+      }
+      const denied = ["denied", "restricted", "unsupported", "unsupported_authorization"].includes(stepReceipt.status);
+      setReceipt({
+        status: denied ? "denied" : stepReceipt.status === "cancelled" ? "cancelled" : "error",
+        message: safeToolError(stepReceipt.error || response.error),
+        requestId: run.requestId,
+        retryable: !denied && stepReceipt.status !== "cancelled" && stepReceipt.metadata?.retryable === true,
+        retryRun: !denied && stepReceipt.status !== "cancelled" && stepReceipt.metadata?.retryable === true ? run : null,
+      });
+      setPendingRun(null);
+    } catch (error) {
+      setReceipt({ status: controller.signal.aborted ? "cancelled" : "error", message: controller.signal.aborted ? "Cancellation requested. Check the destination if dispatch may have started." : safeToolError(error instanceof Error ? error.message : null), requestId: run.requestId });
+      setPendingRun(null);
+    } finally {
+      if (controllerRef.current === controller) controllerRef.current = null;
+      runLock.current = false;
+      setRunning(false);
+      refreshActivity();
+    }
+  }
+
+  function submitRun(event) {
+    event.preventDefault();
+    if (!canRun || !accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "Sign in with an active account before running this tool." });
+      return;
+    }
+    let input;
+    try { input = typedInputFromValues(inputSchema, inputValues); }
+    catch (error) {
+      setReceipt({ status: "error", message: safeToolError(error instanceof Error ? error.message : null) });
+      return;
+    }
+    const run = { input, requestId: crypto.randomUUID(), stepId: `run-${crypto.randomUUID()}` };
+    setReceipt(null);
+    setPendingRun(run);
+    if (!HEY.permissions.has(permission, "account", accountId)) {
+      const request = HEY.permissions.request({ permission, scope: "account", riskLevel: tool.riskLevel || "medium", reason: `Run ${tool.name} from the Tool Library.` });
+      if (!request || request.error) {
+        setReceipt({ status: "error", message: safeToolError(request?.error), requestId: run.requestId });
+        setPendingRun(null);
+        return;
+      }
+      setReceipt({ status: "authorization_required", message: `HEY needs account permission “${permission}” before this tool can run.`, requestId: run.requestId });
+      return;
+    }
+    void invokePlan(run);
+  }
+
+  function allowPermission() {
+    if (!pendingRun || !accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "Your signed-in account changed. No permission was granted." });
+      setPendingRun(null);
+      return;
+    }
+    const plan = resolveAccountPlan({ plan: user?.plan, entitlements: user?.entitlements });
+    if (!canGrantPermission({ plan, permission })) {
+      setReceipt({ status: "denied", message: `Your ${plan} plan does not include ${permission}.` });
+      setPendingRun(null);
+      return;
+    }
+    const grant = HEY.permissions.grant(permission, "account", { source: "tool_library", tool: tool.name, requestId: pendingRun.requestId });
+    if (!grant || grant.status !== "granted") {
+      setReceipt({ status: "error", message: "HEY could not save this permission." });
+      setPendingRun(null);
+      return;
+    }
+    void invokePlan(pendingRun);
+  }
+
+  function cancelRun() {
+    if (!controllerRef.current || controllerRef.current.signal.aborted) return;
+    controllerRef.current.abort(new Error("Tool Library run cancelled by the user."));
+    setReceipt((current) => ({ ...current, status: "cancelling", message: "Cancellation requested. The handler will report its actual outcome when it settles." }));
+  }
 
   return (
     <article id={`tool-card-${encodeURIComponent(tool.name)}`} className="tool-library__card" aria-labelledby={`tool-${encodeURIComponent(tool.name)}`}>
@@ -120,6 +331,43 @@ function ToolCard({
       {tool.status === "unsupported" && (
         <p className="tool-library__permission-note" role="note">This tool has no supported capability on the web platform.</p>
       )}
+      <details className="tool-library__advanced-details">
+        <summary>Activity</summary>
+        {activity.length ? <ul className="tool-library__activity-list">{activity.slice(0, 10).map((item) => (
+          <li key={`${item.id}-${item.status}-${item.at}`}><span>{item.status.replaceAll("_", " ")}</span><time dateTime={item.at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.at))}</time></li>
+        ))}</ul> : <p className="tool-library__run-help">No Tool Library activity is recorded for this tool on this device.</p>}
+      </details>
+      {canRun && <div className="tool-library__run-panel">
+        {!runPanelOpen ? <button type="button" className="tool-library__run-button" disabled={!accountId || getAccountScope() !== `account:${accountId}`} onClick={() => {
+          setInputValues(initialInputValues(inputSchema));
+          setReceipt(null);
+          setPendingRun(null);
+          setRunPanelOpen(true);
+        }}><Play size={15} aria-hidden="true" /> Customize and use</button> : <form onSubmit={submitRun}>
+          <div className="tool-library__run-heading"><h3>Run {describeName(tool.name)}</h3><button type="button" className="tool-library__close-run" disabled={running} aria-label={`Close ${describeName(tool.name)} run form`} onClick={() => { setRunPanelOpen(false); setPendingRun(null); }}><X size={16} aria-hidden="true" /></button></div>
+          <p className="tool-library__run-help">HEY checks current platform support and account permission again when you run this tool.</p>
+          {Object.entries(inputSchema.properties).map(([name, property]) => {
+            const fieldId = `tool-run-${encodeURIComponent(tool.name)}-${encodeURIComponent(name)}`;
+            const required = inputSchema.required.includes(name);
+            return <label className="tool-library__run-field" htmlFor={fieldId} key={name}>
+              <span>{name.replaceAll(/[_-]/g, " ")}{required ? " (required)" : ""}</span>
+              {property.enum ? <select id={fieldId} required={required} value={inputValues[name]} onChange={(event) => setInputValues((current) => ({ ...current, [name]: event.target.value }))}><option value="">Choose…</option>{property.enum.map((value, index) => <option key={`${typeof value}-${String(value)}-${index}`} value={String(index)}>{String(value)}</option>)}</select>
+                : property.type === "boolean" ? <input id={fieldId} type="checkbox" checked={inputValues[name] === true} onChange={(event) => setInputValues((current) => ({ ...current, [name]: event.target.checked }))} />
+                  : <input id={fieldId} type={property.type === "string" ? "text" : "number"} step={property.type === "integer" ? "1" : "any"} required={required} value={inputValues[name]} onChange={(event) => setInputValues((current) => ({ ...current, [name]: event.target.value }))} />}
+              {property.description && <small>{property.description}</small>}
+            </label>;
+          })}
+          <div className="tool-library__run-actions"><button type="submit" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`}><Play size={15} aria-hidden="true" /> Run</button>{running && <button type="button" className="tool-library__deny-button" onClick={cancelRun}>Cancel</button>}</div>
+        </form>}
+        {receipt && <div className={`tool-library__receipt tool-library__receipt--${receipt.status}`} role={["error", "denied"].includes(receipt.status) ? "alert" : "status"} aria-live="polite">
+          <div className="tool-library__receipt-heading">{receipt.status === "completed" ? <CheckCircle2 size={16} aria-hidden="true" /> : ["error", "denied"].includes(receipt.status) ? <CircleX size={16} aria-hidden="true" /> : <LockKeyhole size={16} aria-hidden="true" />}<strong>{receipt.status.replaceAll("_", " ")}</strong></div>
+          <p>{receipt.message}</p>{receipt.requestId && <small>Receipt {receipt.requestId}</small>}
+          {receipt.retryable && receipt.retryRun && !running && <button type="button" className="tool-library__run-button" onClick={() => { const retryRun = { ...receipt.retryRun, requestId: crypto.randomUUID(), stepId: `retry-${crypto.randomUUID()}` }; setReceipt(null); void invokePlan(retryRun); }}>Retry this run</button>}
+          {receipt.status === "authorization_required" && pendingRun && <div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" onClick={allowPermission}>Allow account permission</button><button type="button" className="tool-library__deny-button" onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div>}
+          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{safeReceiptText(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => void invokePlan(pendingRun, true)}>Confirm and run</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
+          {["completed", "unverified"].includes(receipt.status) && receipt.result !== undefined && <pre className="tool-library__result">{safeReceiptText(receipt.result)}</pre>}
+        </div>}
+      </div>}
     </article>
   );
 }
@@ -243,6 +491,15 @@ export default function ToolLibraryPage() {
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
   }
 
+  function refreshPreferences() {
+    if (!accountId || getAccountScope() !== `account:${accountId}`) {
+      setPreferenceState({ status: "account_required", accountId: null, preferences: null });
+      return;
+    }
+    const result = HEY.tools.preferences.load();
+    setPreferenceState({ status: result.success ? "ready" : result.status, accountId, preferences: result.success ? result.preferences : null });
+  }
+
   return (
     <section className="tool-library" aria-labelledby="tool-library-title">
       <header className="tool-library__header">
@@ -342,6 +599,9 @@ export default function ToolLibraryPage() {
               key={tool.name}
               tool={tool}
               interfaceLevel={interfaceLevel}
+              user={user}
+              accountId={accountId}
+              onActivityChanged={refreshPreferences}
               isFavorite={preferences.favorites.includes(tool.name)}
               isPinned={preferences.pinned.includes(tool.name)}
               canManagePreferences={preferenceReady}

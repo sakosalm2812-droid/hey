@@ -321,6 +321,29 @@
   border-radius: 2px;
 }
 
+.tool-library__run-panel { margin-top: 16px; }
+.tool-library__run-panel form { display: grid; gap: 12px; }
+.tool-library__run-heading, .tool-library__run-actions, .tool-library__receipt-heading { display: flex; align-items: center; gap: 8px; }
+.tool-library__run-heading { justify-content: space-between; }
+.tool-library__run-heading h3 { margin: 0; color: var(--text-primary, #f5f2ec); font-size: 14px; }
+.tool-library__run-help { margin: 8px 0; color: var(--text-secondary, #a7a4ae); font-size: 12px; line-height: 1.5; }
+.tool-library__run-field { display: grid; gap: 6px; color: var(--text-primary, #f5f2ec); font-size: 12px; }
+.tool-library__run-field input, .tool-library__run-field select { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 9px; background: rgba(255, 255, 255, .045); color: inherit; font: inherit; }
+.tool-library__run-field input[type="checkbox"] { width: 18px; min-height: 18px; }
+.tool-library__run-field small { color: var(--text-secondary, #a7a4ae); }
+.tool-library__run-button, .tool-library__deny-button, .tool-library__close-run { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 11px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 9px; background: rgba(255, 255, 255, .055); color: var(--text-primary, #f5f2ec); font: inherit; font-size: 12px; cursor: pointer; }
+.tool-library__run-button:focus-visible, .tool-library__deny-button:focus-visible, .tool-library__close-run:focus-visible { outline: 2px solid var(--gold-primary, #d6b66b); outline-offset: 3px; }
+.tool-library__run-button:disabled, .tool-library__deny-button:disabled { opacity: .55; cursor: not-allowed; }
+.tool-library__deny-button { color: #ffb6a8; }
+.tool-library__close-run { width: 34px; min-width: 34px; padding: 0; }
+.tool-library__receipt { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid rgba(255, 255, 255, .12); border-radius: 10px; background: rgba(255, 255, 255, .035); color: var(--text-primary, #f5f2ec); font-size: 12px; }
+.tool-library__receipt p { margin: 0; line-height: 1.5; }
+.tool-library__receipt small { color: var(--text-secondary, #a7a4ae); overflow-wrap: anywhere; }
+.tool-library__receipt--denied, .tool-library__receipt--error { border-color: rgba(255, 130, 110, .35); }
+.tool-library__result { max-height: 240px; overflow: auto; margin: 0; padding: 10px; border-radius: 8px; background: rgba(0, 0, 0, .2); color: var(--text-primary, #f5f2ec); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-library__activity-list { display: grid; gap: 6px; margin: 8px 0; padding: 0; list-style: none; }
+.tool-library__activity-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary, #a7a4ae); font-size: 12px; }
+
 .tool-library__message {
   display: flex;
   align-items: center;
