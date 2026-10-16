@@ -26,6 +26,7 @@
 .spaces-page__privacy { flex: none; padding: 9px 12px; border: 1px solid rgba(131, 217, 174, .28); border-radius: 999px; }
 
 .spaces-page__create,
+.spaces-page__suggestions,
 .spaces-page__preview,
 .spaces-page__empty,
 .spaces-page__message,
@@ -36,6 +37,14 @@
 }
 
 .spaces-page__create { padding: clamp(18px, 3vw, 28px); }
+.spaces-page__suggestions { margin-top: 16px; padding: clamp(18px, 3vw, 24px); border: 1px solid rgba(255, 255, 255, .09); border-radius: 20px; background: rgba(255, 255, 255, .025); }
+.spaces-page__suggestions-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+.spaces-page__suggestions-heading h2 { margin: 0; font-family: "Instrument Serif", "DM Serif Display", serif; font-size: 26px; font-weight: 400; }
+.spaces-page__suggestion-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 10px; margin: 15px 0 0; padding: 0; list-style: none; }
+.spaces-page__suggestion { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 14px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 14px; background: rgba(0, 0, 0, .1); }
+.spaces-page__suggestion h3 { margin: 0; font-size: 14px; }
+.spaces-page__suggestion p { margin: 5px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 11px; }
+.spaces-page__empty-suggestions { margin: 14px 0 0; color: var(--text-secondary, #a7a4ae); font-size: 13px; }
 .spaces-page__create label { display: block; margin-bottom: 7px; font-size: 16px; font-weight: 600; }
 .spaces-page__hint,
 .spaces-page__list-heading p { margin: 0; color: var(--text-secondary, #a7a4ae); font-size: 13px; line-height: 1.55; }

@@ -20,7 +20,8 @@ test("Spaces page exposes accessible loading, empty, error, and retry states", (
 });
 
 test("Space creation reviews exact private effects and requires an explicit confirm action", () => {
-  assert.match(page, /HEY\.spaces\.previewNaturalLanguageCreation\(\{ prompt \}\)/);
+  assert.match(page, /HEY\.spaces\.previewNaturalLanguageCreation\(previewRequest\)/);
+  assert.match(page, /createPreviewFromRequest\(\{ prompt \}\)/);
   assert.match(page, /HEY\.spaces\.confirmNaturalLanguageCreation\(\{ previewId: pending\.previewId, confirm: true \}\)/);
   assert.match(page, /result\.action !== "create_private_space"/);
   assert.match(page, /result\.space\?\.visibility !== "private"/);

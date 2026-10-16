@@ -364,6 +364,10 @@ export default function SpacesPage() {
   const [toolCatalog, setToolCatalog] = useState([]);
   const [toolCatalogAccountId, setToolCatalogAccountId] = useState("");
   const [toolCatalogStatus, setToolCatalogStatus] = useState("loading");
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionsAccountId, setSuggestionsAccountId] = useState("");
+  const [suggestionsStatus, setSuggestionsStatus] = useState("loading");
+  const [suggestionsError, setSuggestionsError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -391,6 +395,46 @@ export default function SpacesPage() {
       setLoadedAccountId(accountId);
       setLoadError("Your Spaces could not be loaded. Try again.");
       return false;
+    }
+  }, [accountId]);
+
+  const loadOnboardingSuggestions = useCallback(async () => {
+    const requestedAccountId = accountId;
+    setSuggestionsStatus("loading");
+    setSuggestions([]);
+    setSuggestionsAccountId("");
+    setSuggestionsError("");
+    await Promise.resolve();
+    if (!requestedAccountId) {
+      setSuggestionsStatus("error");
+      setSuggestionsError("Sign in to view onboarding Space suggestions.");
+      return;
+    }
+    if (accountRef.current !== requestedAccountId || getAccountScope() !== `account:${requestedAccountId}`) return;
+    try {
+      const result = HEY.spaces.getOnboardingSuggestions();
+      if (accountRef.current !== requestedAccountId || getAccountScope() !== `account:${requestedAccountId}`) return;
+      if (result?.error || result?.accountScope !== `account:${requestedAccountId}` || !Array.isArray(result.suggestions)) {
+        setSuggestionsStatus("error");
+        setSuggestionsAccountId(requestedAccountId);
+        setSuggestionsError(result?.error || "Space suggestions could not be loaded. Try again.");
+        return;
+      }
+      const safeSuggestions = result.suggestions.filter((suggestion) =>
+        suggestion && typeof suggestion.id === "string" && typeof suggestion.label === "string"
+        && suggestion.requiresConfirmation === true && suggestion.permissionsChanged === false
+        && suggestion.previewRequest?.accountScope === `account:${requestedAccountId}`
+        && typeof suggestion.previewRequest?.prompt === "string"
+      );
+      setSuggestions(safeSuggestions);
+      setSuggestionsAccountId(requestedAccountId);
+      setSuggestionsStatus("ready");
+    } catch {
+      if (accountRef.current === requestedAccountId && getAccountScope() === `account:${requestedAccountId}`) {
+        setSuggestionsStatus("error");
+        setSuggestionsAccountId(requestedAccountId);
+        setSuggestionsError("Space suggestions could not be loaded. Try again.");
+      }
     }
   }, [accountId]);
 
@@ -434,6 +478,10 @@ export default function SpacesPage() {
     setToolCatalog([]);
     setToolCatalogAccountId("");
     setToolCatalogStatus("loading");
+    setSuggestions([]);
+    setSuggestionsAccountId("");
+    setSuggestionsStatus("loading");
+    setSuggestionsError("");
     setPrompt("");
     setPreview(null);
     setPreviewError("");
@@ -456,6 +504,7 @@ export default function SpacesPage() {
       // Initial loading below still shows an actionable retry if listing fails.
     }
     loadToolCatalog();
+    loadOnboardingSuggestions();
     Promise.resolve().then(() => {
       if (!active) return;
       refreshSpaces();
@@ -466,10 +515,9 @@ export default function SpacesPage() {
       active = false;
       unsubscribe();
     };
-  }, [accountId, loadToolCatalog, refreshSpaces]);
+  }, [accountId, loadOnboardingSuggestions, loadToolCatalog, refreshSpaces]);
 
-  const createPreview = async (event) => {
-    event.preventDefault();
+  const createPreviewFromRequest = async (previewRequest) => {
     if (!accountId || accountRef.current !== accountId || creating) return;
     setPreview(null);
     setPreviewError("");
@@ -483,7 +531,7 @@ export default function SpacesPage() {
       return;
     }
     try {
-      const result = HEY.spaces.previewNaturalLanguageCreation({ prompt });
+      const result = HEY.spaces.previewNaturalLanguageCreation(previewRequest);
       if (accountRef.current !== accountId) return;
       if (!result || result.error || result.action !== "create_private_space" || result.requiresConfirmation !== true || result.permissionsChanged !== false || result.space?.visibility !== "private" || result.space?.sharing !== "off" || typeof result.previewId !== "string" || typeof result.space?.name !== "string") {
         setPreviewError(result?.error || "A safe preview could not be created. Check the description and try again.");
@@ -498,6 +546,17 @@ export default function SpacesPage() {
         setCreationPhase("");
       }
     }
+  };
+
+  const createPreview = (event) => {
+    event.preventDefault();
+    return createPreviewFromRequest({ prompt });
+  };
+
+  const previewSuggestion = (suggestion) => {
+    if (suggestionsAccountId !== accountId || !accountIsCurrent || !suggestions.includes(suggestion)) return;
+    setPrompt(suggestion.previewRequest.prompt);
+    return createPreviewFromRequest(suggestion.previewRequest);
   };
 
   const confirmPreview = async () => {
@@ -654,6 +713,27 @@ export default function SpacesPage() {
           </button>
         </div>
       </form>
+
+      <section className="spaces-page__suggestions" aria-labelledby="space-suggestions-title">
+        <div className="spaces-page__suggestions-heading">
+          <div><p className="spaces-page__eyebrow">From onboarding</p><h2 id="space-suggestions-title">Suggested Spaces</h2></div>
+          <button type="button" className="spaces-page__secondary" onClick={loadOnboardingSuggestions} disabled={!accountIsCurrent || suggestionsStatus === "loading"}>
+            <RotateCw size={14} aria-hidden="true" /> Refresh suggestions
+          </button>
+        </div>
+        <p className="spaces-page__hint">Suggestions use your onboarding interests. They never change permissions or create a Space until you review and confirm.</p>
+        {suggestionsStatus === "loading" && <p className="spaces-page__status" role="status" aria-live="polite"><LoaderCircle size={16} className="spaces-page__spin" aria-hidden="true" /> Loading Space suggestions…</p>}
+        {suggestionsStatus === "error" && suggestionsAccountId === accountId && <div className="spaces-page__message spaces-page__message--error" role="alert"><AlertCircle size={17} aria-hidden="true" /><p>{suggestionsError}</p><button type="button" className="spaces-page__secondary" onClick={loadOnboardingSuggestions} disabled={!accountIsCurrent}><RotateCw size={14} aria-hidden="true" /> Retry</button></div>}
+        {suggestionsStatus === "ready" && suggestionsAccountId === accountId && suggestions.length === 0 && <p className="spaces-page__empty-suggestions" role="status">No onboarding suggestions yet. Add interests during onboarding, or describe a Space above.</p>}
+        {suggestionsStatus === "ready" && suggestionsAccountId === accountId && suggestions.length > 0 && <ul className="spaces-page__suggestion-list">{suggestions.map((suggestion) => (
+          <li className="spaces-page__suggestion" key={suggestion.id}>
+            <div><h3>{suggestion.label}</h3><p>Private Space · permissions unchanged</p></div>
+            <button type="button" className="spaces-page__secondary" onClick={() => previewSuggestion(suggestion)} disabled={!accountIsCurrent || creating}>
+              <Layers3 size={15} aria-hidden="true" /> Preview suggestion
+            </button>
+          </li>
+        ))}</ul>}
+      </section>
 
       {creating && <p className="spaces-page__status" role="status" aria-live="polite">{creationPhase === "confirm" ? "Creating your private Space…" : "Preparing your preview…"}</p>}
 
