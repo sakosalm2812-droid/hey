@@ -149,8 +149,14 @@ export function getHEYChatError(response, details = {}, fusion = false) {
   if (details.code === "provider_profile_invalid") return "That routing profile is unavailable. Refresh the model list and try again.";
   if (details.code === "provider_pricing_unavailable") return "Cost-ranked routing is unavailable because verified model prices are missing.";
   if (fusion && response.status === 403) return "Your account is not permitted to use model fusion.";
-  if (fusion && response.status === 409) return "The providers could not independently confirm an answer. No answer was delivered.";
-  if (fusion && response.status === 503) return "Model fusion is unavailable because its provider permissions or pricing are not configured.";
+  if (fusion && response.status === 499) return "Model fusion was cancelled before a verified response was returned.";
+  if (fusion && (response.status === 409 || response.status === 503)) {
+    const serverMessage = typeof details.error === "string" ? details.error.trim().slice(0, 240) : "";
+    if (serverMessage) return serverMessage;
+    return response.status === 409
+      ? "Model verification could not be completed. No verified response was returned."
+      : "Model fusion is unavailable because its provider permissions or pricing are not configured.";
+  }
   if (response.status === 429) return "HEY is receiving too many requests. Wait a moment and try again.";
   if (response.status >= 500) return fusion
     ? "Model fusion is unavailable right now. No answer was delivered."

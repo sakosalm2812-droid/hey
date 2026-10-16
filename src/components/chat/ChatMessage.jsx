@@ -30,8 +30,10 @@ export default function ChatMessage({
         <div className="hey-chat-message-copy">{isUser ? children : <MarkdownResponse>{children}</MarkdownResponse>}</div>
         {!isUser && verification?.status === "verified" && verification.primary?.providerId && verification.checker?.providerId && (
           <div className="hey-chat-verification" role="status">
-            <div>Independent provider check passed · {providerName(verification.primary.providerId)} → {providerName(verification.checker.providerId)}</div>
-            {verification.cost && <div>Provider reported usage: ${verification.cost.providerReportedUsd.toFixed(4)} · reserved cap: ${verification.cost.reservedUsd.toFixed(4)} of ${verification.cost.requestCapUsd.toFixed(2)}</div>}
+            <div>Provider responses agreed for this request · {providerName(verification.primary.providerId)} · {verification.primary.modelId} → {providerName(verification.checker.providerId)} · {verification.checker.modelId}</div>
+            <div>This records provider-reported agreement for this prompt and answer. It is not a check against independent sources or a guarantee of factual accuracy.</div>
+            <div>This receipt is scoped to the signed-in account session that sent the request.</div>
+            {verification.cost && <div>Provider-reported usage estimate: ${verification.cost.providerReportedUsd.toFixed(4)} · reserved request cap: ${verification.cost.reservedUsd.toFixed(4)} of ${verification.cost.requestCapUsd.toFixed(2)}. Final provider billing may differ.</div>}
           </div>
         )}
         <div className="hey-chat-message-actions">

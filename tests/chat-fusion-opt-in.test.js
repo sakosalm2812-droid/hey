@@ -15,7 +15,12 @@ test("ordinary chat omits Fusion and explicit opt-in sends only the supported tr
 test("Fusion permission, configuration, and disagreement responses stay visible as failures", () => {
   assert.match(getHEYChatError({ status: 403 }, {}, true), /not permitted/i);
   assert.match(getHEYChatError({ status: 503 }, {}, true), /permissions or pricing are not configured/i);
-  assert.match(getHEYChatError({ status: 409 }, {}, true), /No answer was delivered/i);
+  assert.match(getHEYChatError({ status: 503 }, { error: "Provider pricing is not configured." }, true), /pricing is not configured/i);
+  assert.match(getHEYChatError({ status: 409 }, { error: "The verification exceeded its configured cost budget." }, true), /cost budget/i);
+  assert.match(getHEYChatError({ status: 409 }, { error: "The independent provider check timed out; no answer was delivered." }, true), /timed out/i);
+  assert.match(getHEYChatError({ status: 409 }, {}, true), /No verified response was returned/i);
+  assert.match(getHEYChatError({ status: 499 }, {}, true), /cancelled before a verified response/i);
+  assert.equal(getHEYChatError({ status: 409 }, { error: "x".repeat(300) }, true).length, 240);
   assert.match(getHEYChatError({ status: 500 }, {}, true), /No answer was delivered/i);
 });
 
@@ -117,7 +122,12 @@ test("chat UI exposes Fusion as a per-request checkbox and fences requests on un
   assert.match(page, /Supabase could not load your conversations/);
   assert.match(client, /HEY AI could not be reached/);
   assert.match(client, /parseFusionVerificationMetadata\(data\.fusion,/);
-  assert.match(message, /Independent provider check passed/);
-  assert.match(message, /Provider reported usage:/);
+  assert.match(message, /Provider responses agreed for this request/);
+  assert.match(message, /not a check against independent sources/i);
+  assert.match(message, /scoped to the signed-in account session/i);
+  assert.match(message, /primary\.modelId/);
+  assert.match(message, /checker\.modelId/);
+  assert.match(message, /Provider-reported usage estimate:/);
+  assert.match(message, /Final provider billing may differ/);
   assert.match(message, /role="status"/);
 });
