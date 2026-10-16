@@ -20,6 +20,12 @@ const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
   research: "reasoning",
   math: "reasoning",
 });
+const ROUTING_OVERRIDE_TERMS = "ignore|bypass|override|disable|circumvent|evade";
+const ROUTING_POLICY_TERMS = "permissions?|polic(?:y|ies)|safety|security|authority|guardrails?";
+const ADVERSARIAL_ROUTING_TEXT = new RegExp(
+  `\\b(?:${ROUTING_OVERRIDE_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_POLICY_TERMS})\\b|\\b(?:${ROUTING_POLICY_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_OVERRIDE_TERMS})\\b`,
+  "i",
+);
 const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
 const TOKEN_EXPERT_INDEX = new Map();
 const TOKEN_EXPERT_MASK_INDEX = new Map();
@@ -280,7 +286,17 @@ export function selectUltraSparseExpertsMasked(input, { limit = 2 } = {}) {
 export function createUltraSparsePlan(input, { intent = "conversation", limit = 2 } = {}) {
   const selection = selectUltraSparseExperts(input, { limit });
   const primaryExpert = selection.experts[0]?.id || null;
-  const capabilityHint = primaryExpert ? PROVIDER_CAPABILITY_BY_EXPERT[primaryExpert] || null : null;
+  const suppressedReason = selection.status === "invalid_input"
+    ? "invalid_input"
+    : selection.status !== "selected"
+      ? "no_match"
+      : selection.truncated
+        ? "query_truncated"
+        : ADVERSARIAL_ROUTING_TEXT.test(input)
+          ? "adversarial_policy_override_text"
+          : null;
+  const eligibleExpert = suppressedReason ? null : primaryExpert;
+  const capabilityHint = eligibleExpert ? PROVIDER_CAPABILITY_BY_EXPERT[eligibleExpert] || null : null;
   const hintedProviderPlan = capabilityHint
     ? createProviderPlan({ intent, capability: capabilityHint })
     : null;
@@ -296,10 +312,11 @@ export function createUltraSparsePlan(input, { intent = "conversation", limit = 
       ...selectedProviderPlan,
       adaptiveRouting: {
         kind: "lexical-capability-hint",
-        expert: primaryExpert,
+        expert: eligibleExpert,
         requestedCapability: capabilityHint,
         applied: useHintedPlan,
         fallback: capabilityHint && !useHintedPlan ? "no_capable_permitted_model" : null,
+        suppressedReason,
       },
     },
     inferencePerformed: false,
