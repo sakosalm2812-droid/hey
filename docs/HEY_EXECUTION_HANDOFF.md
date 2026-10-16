@@ -1,6 +1,6 @@
 ## Latest coordinator checkpoint — 2026-10-16, wave 6 integration
 
-Coordinator branch `codex/resume-emergency-2026-10-14` is at `013e17a` before this documentation/test checkpoint; origin currently ends at `4df8d77`, so the source commits below are pending push. Preserve untracked `docs/requirements/v3-agent-pack/`. Never reset or overwrite the specialist worktrees.
+Coordinator source branch `codex/resume-emergency-2026-10-14` is at `8ff8ac3`; the last pushed handoff checkpoint is `f3510eb`, so source commits since that checkpoint are pending push. This handoff/status refresh will record the exact pushed SHA. Preserve untracked `docs/requirements/v3-agent-pack/`. Never reset or overwrite the specialist worktrees.
 
 ### Integrated work since the last push
 
@@ -10,30 +10,32 @@ Coordinator branch `codex/resume-emergency-2026-10-14` is at `013e17a` before th
 - `1dd5136`: worker 01's current-head Teacher route fix removes the duplicate `/teacher` route and fences readiness, drafts, async results and operation locks to the signed-in account. Teacher suite **56/56**.
 - `e88628a`: worker 04's native boundary now denies direct Rust IPC and advertises zero native capabilities until native-verifiable signed permits exist. Source regression **3/3**; Rust unit tests are present but **UNVERIFIED** because `cargo` and `rustc` are unavailable. This is a denial boundary, not native authorization or support.
 - `013e17a`: worker 06's selected-text edit flow is wired to the configured provider with separate consent, current selection digest/range checks, inert preview, explicit replace/undo, cancellation and account-switch fencing. Fusion remains separate from this edit preview. Dictation-related focused suites **59/59**. Edge operation-order regression adjusted for the new authenticated rewrite branch and passes **7/7**.
+- `cb1062a`: worker 05's detector now rejects unknown handedness for explicit left/right profiles before pose calibration; `both` continues to accept unknown labels. Gesture tests and `fbf9f1e` source suite **49/49**.
+- `8ff8ac3`: worker 11 checks cancellation after Fusion verification and immediately before persistence, passes the request AbortSignal to the Supabase insert, and maps aborts to the cancellation response. Fusion/Edge worker suite **93/93**; combined Gesture/Fusion/Edge focused suite **50/50**. Cancellation that arrives after a database commit cannot undo that commit.
 
-Current root verification after all source integrations: **699/699** tests pass; production build succeeds, transforming 2,771 modules; changed-file ESLint passes except the last combined invocation named one nonexistent placeholder path and therefore exited before lint. Rerun the correct changed-file lint set before pushing. Build emits the known mixed-import warning for `contextManager.js`; sitemap generation skips without `SITE_URL`. Do not interpret mocked/local checks as live backend evidence.
+Current root verification after all source integrations: **701/701** tests pass; production build succeeds, transforming 2,771 modules; changed-file ESLint passes for supported JS/JSX sources and tests. Deno type-checking for the Edge TypeScript and Rust compilation remain unavailable. The earlier combined lint invocation named a nonexistent placeholder path; a corrected changed-file lint run passed. Build emits the known mixed-import warning for `contextManager.js`; sitemap generation skips without `SITE_URL`. Do not interpret mocked/local checks as live backend evidence.
 
 The live UI remains available at `http://127.0.0.1:5175/login`; browser shows sign-in disabled because `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are absent. Authenticated journeys, live database/provider, physical camera/microphone, native Rust compile/device, and production deployment remain **UNVERIFIED**.
 
 ### Active workers and exact next actions
 
-App snapshot after dispatch: tasks 02, 05, 07 and 11 were Active; task 08 was restarted and must be confirmed on next snapshot. Tasks 01, 04 and 06 completed the following current-head ports and are idle:
+App snapshot after dispatch: tasks 02, 07 and 08 are Active; tasks 05 and 11 completed their current-head ports and are idle. Tasks 01, 04 and 06 completed their current-head ports and are idle:
 
 | Worker | Existing task reference | Port branch / commit | Status / next action |
 |---:|---|---|---|
 | 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/teacher-account-route-fix-62649` / `2cccbac9c1bd0bdfb7451ef04d5f3209e5ace002`; integrated `1dd5136` | Done for current task; authenticated browser/Forge still unverified. |
-| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/next-02-onboarding-spaces` / latest published `a179639f6cc6a30dacd22787d887a8b68cbef3ea` | Active; continue isolated current-head lifecycle/recovery work. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-lifecycle-recovery-port` / base `4df8d77`, dirty current worktree at `C:\Users\DELL\Documents\Codex\2026-10-15\hey-local-chat-02-onboarding-spaces\work\space-lifecycle-recovery-port` | Active; account-scoped last-known-good Space recovery with explicit preview/restore, tests in progress. |
 | 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | port source `6c4c57ae47ea920e7a6cc72119564ab359ff5802`; integrated `355798b`, `62649e5`, `be71e03` | Done for current task; leave source worktree intact. |
 | 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/native-ipc-fail-closed-ea48` / `789b45ac42b10df1d0ed28abe25a09d453b40093`; integrated `e88628a` | Done; Rust compile remains blocked by missing toolchain. |
-| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | existing `codex/next-05-gesture-control`; current port pending | Active; verify actual profile/runtime integration and recovery. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-runtime-calibration-4df8d77` / `fbf9f1eb3562dc5157346869eff6a0a78a8f6287`; integrated `cb1062a` | Done for current task. |
 | 06 Flow | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-selected-edit-coordinator-62649` / `d517abb7a454cfc2451b03fb7a565eb3c9ba1c84`; integrated `013e17a` | Done for current task; real provider/auth journey remains unverified. |
-| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | existing `codex/next-07-voiceos-control`; current port pending | Active; JS preview/mandate boundary only, avoid duplicate Rust work. |
-| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | existing `codex/next-08-teacher-experience`; current port pending | Re-dispatched for implementation; verify state before counting active. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-current-port` / base `1dd5136`, dirty worktree at `C:\Users\DELL\Documents\Codex\2026-10-16\hey-voiceos-js-current-port` | Active; cancel checks around native capability discovery and postcondition replay coverage; Rust files excluded. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-backend-port-013e17a` / `85f682afd2ccfee9c98863a0fba151bf85a79f0f` | Active; verify Forge lifecycle receipts and finish integration tests; avoid Teacher UI files owned by 01. |
 | 09 HEY One | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | no new port needed; current provider route already bounded | Idle; retain its source checkpoint, no duplicate provider patch. |
 | 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | source `9ec2792adbfc5856885790177298d34953a83856`; integrated `b833e57` | Done for current task; benchmarks remain selection-only. |
-| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | existing `codex/next-11-fusion-models`; current port pending | Active; continue bounded provider/cost/checker resilience without duplicating worker 09. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-cancel-persist` / `8322771780131043ad925db47c646a7948435f71`; integrated `8ff8ac3` | Done for current task; live provider and Deno checks remain unverified. |
 
-Immediate actions: rerun changed-file ESLint without the nonexistent path, rerun build only if subsequent integration changes sources, commit the Edge regression test and latest handoff/status edits, then push the shared branch. Receive active worker checkpoints, review against `013e17a`, integrate only compatible changes, and repeat focused/full verification. Continue to report runtime/backend/native gaps explicitly.
+Immediate actions: complete review/integration of active tasks 02, 07 and 08 against `8ff8ac3`; run their focused tests, current full suite, supported changed-file lint and build; update this file and the step map; push the checkpoint. Continue to report runtime/backend/native gaps explicitly.
 
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 5 integrated
 
