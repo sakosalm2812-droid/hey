@@ -182,6 +182,12 @@ export function unregisterTool(name) {
     if (session.name === name) {
       session.controller.abort(new Error("Tool was unregistered."));
       activeToolSessions.delete(key);
+      appendToolActivity(session.accountId, {
+        id: session.id,
+        name,
+        status: "unregister_requested",
+        at: new Date().toISOString(),
+      });
     }
   }
   return tools.delete(name);
@@ -635,6 +641,21 @@ export function getToolLifecycleContract(name, context = {}) {
   };
 }
 
+/** Read bounded lifecycle history for the current account, including entries
+ * for tools that have since been unregistered. This reports registry events,
+ * not whether an uncooperative handler actually stopped. */
+export function getToolLifecycleActivity(name, context = {}) {
+  const identity = resolveToolAccount(context);
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+  if (typeof name !== "string" || !name.trim()) {
+    return { success: false, status: "invalid_name", error: "A tool name is required to read lifecycle activity." };
+  }
+  const activity = (toolSessionActivity.get(identity.accountId) || [])
+    .filter((item) => item.name === name)
+    .map(({ id, name: toolName, status, at }) => Object.freeze({ id, name: toolName, status, at }));
+  return { success: true, name, activity: Object.freeze(activity) };
+}
+
 export async function executeTool(name, input, context = {}) {
   const tool = tools.get(name) || null;
   const requestId = context.requestId || crypto.randomUUID();
@@ -817,6 +838,7 @@ export default {
   stopToolLibraryEntry,
   retryToolLibraryEntry,
   getToolLifecycleContract,
+  getToolLifecycleActivity,
   toolLibraryPreferenceStore,
   executeTool,
   createToolInvocationPlan,

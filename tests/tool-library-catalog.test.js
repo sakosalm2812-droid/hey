@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
-import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, getToolLifecycleContract } from "../src/core/toolRegistry.js";
+import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, getToolLifecycleContract, getToolLifecycleActivity } from "../src/core/toolRegistry.js";
 import { seedPermissions, clearPermissions } from "../src/core/permissionManager.js";
 import { setAccountScope } from "../src/core/accountScope.js";
 
@@ -547,6 +547,52 @@ test("a non-cooperative handler is never reported as stopped when it completes a
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(getToolLifecycleContract(name, context).status, "completed_after_stop");
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("unregister records an abort request and preserves account-scoped activity after removal", async () => {
+  const name = "test.tool_library.lifecycle_unregistered_activity";
+  const capability = "test.tool_library.lifecycle_unregistered_activity_capability";
+  registerCapability({ id: capability, name: "Unregister activity capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope("lifecycle-unregister-owner");
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-unregister-owner");
+  let entered;
+  let release;
+  const handlerEntered = new Promise((resolve) => { entered = resolve; });
+  const releaseHandler = new Promise((resolve) => { release = resolve; });
+  const owner = { user: { id: "lifecycle-unregister-owner", plan: "elite", entitlements: ["elite"] } };
+  try {
+    registerTool(name, async () => {
+      entered();
+      await releaseHandler;
+      return { success: true };
+    }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, stop: true },
+    });
+    const started = startToolLibraryEntry(name, {}, owner);
+    await handlerEntered;
+    assert.equal(unregisterTool(name), true);
+    assert.equal(getToolLifecycleContract(name, owner).status, "not_found");
+    assert.equal(getToolLifecycleActivity(name, { user: { id: "attacker" } }).status, "denied");
+    assert.equal(getToolLifecycleActivity(name, {}).status, "denied");
+    const afterUnregister = getToolLifecycleActivity(name, owner);
+    assert.equal(afterUnregister.success, true);
+    assert.ok(Object.isFrozen(afterUnregister.activity));
+    assert.deepEqual(afterUnregister.activity.map(({ status }) => status), ["unregister_requested", "running", "starting"]);
+    assert.equal(afterUnregister.activity[0].id, started.sessionId);
+
+    // An ignored abort signal may let the handler finish, but the registry
+    // keeps the accurate unregister request and does not claim it was stopped.
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const afterLateCompletion = getToolLifecycleActivity(name, owner);
+    assert.deepEqual(afterLateCompletion.activity.map(({ status }) => status), ["unregister_requested", "running", "starting"]);
   } finally {
     unregisterTool(name);
     clearPermissions();
