@@ -1,4 +1,21 @@
-## Current execution wave — 2026-10-16, parallel continuations launched from `fbeedd6`
+## Current execution wave — 2026-10-16, integration checkpoint
+
+Coordinator branch: `codex/resume-emergency-2026-10-14`. Code integrations now at `68e14d7` (`Localize VoiceOS preview accessibility copy`), `8e4a154` (`feat: add fail-closed expert pack research seam`), after handoff doc checkpoint `d4316d7`. The branch was previously pushed through `d4316d7`; these two code commits plus this handoff checkpoint need pushing. Latest verification on combined code: full `npm test` **734/734**; `npm run build` succeeds after transforming **2,774 modules**; changed-file ESLint and `git diff --check` pass. Existing build notes: `SITE_URL` is unset so sitemap generation skips, and Vite reports the known mixed static/dynamic `contextManager.js` import warning. Preserve the only untracked root path `docs/requirements/v3-agent-pack/`.
+
+Completed local parallel workers from the previous checkpoint (both GPT-6 Luna / High):
+
+| Worker | Codex collaboration task | Worktree branch / source commit | Integrated commit | Status / limits |
+|---|---|---|---|---|
+| `/root/step45` | Local collaboration task `/root/step45` | `codex/wave7-step45-expert-packs`, `6cbb3c0e7a04553d886077e62f932f1e5d20df47`; worktree `work/wave7-step45-expert-packs` | `8e4a154` | Fail-closed Expert Pack manifest/evidence seam and adversarial tests. Focused suite 15/15; source package is syntactic/unverified, no self-certification or authority, high-stakes escalation is required. Existing research provider is Wikipedia, so no live policy/source validation or certified pack. Candidate branch preserved. |
+| `/root/voiceos_i18n` | Local collaboration task `/root/voiceos_i18n` | `codex/wave7-voiceos-localization`, `d9cdadd95a8e0cfd0dbd5ecf431aa9c9325fb32f`; worktree `work/wave7-voiceos-localization` | `68e14d7` | VoiceOS preview labels/statuses localized for English, Kurdish, Arabic; accessibility and locale coverage tests. Focused suite 4/4. Translation quality still needs native-speaker review. Candidate branch preserved. |
+
+Full combined checks: **734/734** Node tests; production build successful; changed-file ESLint covers both integrated changes; `git diff --check` passed. The actual app remains open at `http://127.0.0.1:5175/login`; browser showed the real login UI with disabled sign-in because Supabase URL/public anon key are absent. No authenticated feature was demonstrated. Supabase/Forge, providers, native device and production remain **UNVERIFIED**. No local collaboration worker is active at this checkpoint.
+
+Exact next actions: update the requirement step ledger to this checkpoint, commit and push the handoff; choose next independent incomplete requirements from the authoritative Step 46/47 and vertical workstream prompts for parallel work; keep authenticated/runtime claims gated on missing service configuration. Continue reviewing and integrating one scoped branch at a time. Do not mark a workstream complete based on code presence.
+
+---
+
+## Prior execution wave — 2026-10-16, parallel continuations launched from `fbeedd6`
 
 Coordinator branch `codex/resume-emergency-2026-10-14` was last pushed at `7827e5b2d2723d6f8202eb21eb8cf4728c109bed`; current integration HEAD is `c447f1080e7ef5cf6e4bb4028539edd0b7cb8149`, one source commit ahead and pending this checkpoint push. Current full suite **730/730**, production build **2,773 modules**, scoped ESLint for VoiceOS changes and `git diff --check` pass. The only untracked root path is the preserved `docs/requirements/v3-agent-pack/` extraction.
 
