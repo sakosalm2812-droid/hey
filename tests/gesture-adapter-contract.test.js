@@ -66,6 +66,38 @@ test("gesture recognition fails closed until explicit consent and a real adapter
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
 });
 
+test("concurrent consented starts cannot race capability checks into duplicate detector or camera sessions", async () => {
+  const { engine, profile } = makeEngine();
+  let resolvePermission;
+  let cameraRequests = 0;
+  let prepares = 0;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { cameraRequests += 1; throw new Error("camera must not be requested"); } },
+      permissions: { query() { return new Promise((resolve) => { resolvePermission = resolve; }); } },
+    },
+  });
+  globalThis.document = { createElement: () => ({}) };
+  globalThis.requestAnimationFrame = () => 1;
+  engine.setRecognitionAdapter({
+    async prepare() { prepares += 1; return true; },
+    async detect() { return null; },
+  });
+
+  const first = engine.startRecognition(profile.id, { consent: true });
+  await Promise.resolve();
+  const second = await engine.startRecognition(profile.id, { consent: true });
+  assert.equal(second.code, "already_active");
+
+  engine.stopRecognition("user_cancelled_start");
+  resolvePermission({ state: "prompt" });
+  assert.equal((await first).code, "cancelled");
+  assert.equal(prepares, 0);
+  assert.equal(cameraRequests, 0);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+});
+
 test("calibration sensitivity and allowlisted mappings persist per account and reload by read-back", async () => {
   const memory = makeStorage();
   setAccountScope("gesture-owner-a");

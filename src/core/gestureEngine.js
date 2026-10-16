@@ -822,19 +822,6 @@ export class GestureEngine {
     if (!this.recognitionAdapter) {
       return { success: false, error: "No gesture recognition adapter is available on this platform.", code: "adapter_unavailable" };
     }
-    const capability = await this.getRecognitionCapability();
-    if (getAccountScope() !== startingAccountScope || !this.profiles.has(profileId)) {
-      return { success: false, error: "Gesture session ended after the account changed.", code: "account_changed" };
-    }
-    if (!capability.cameraSupported) {
-      this.setCameraCapabilityStatus("unavailable", "camera_api_unavailable");
-      return { success: false, error: "Camera capture is unsupported in this environment.", code: "camera_unsupported" };
-    }
-    if (capability.permission === "denied") {
-      this.setCameraCapabilityStatus("permission_denied", "permission_denied");
-      return { success: false, error: "Camera permission is denied in this browser.", code: "camera_permission_denied" };
-    }
-
     const generation = ++this.recognitionGeneration;
     const abortController = new AbortController();
     this.recognitionAbortController = abortController;
@@ -850,6 +837,22 @@ export class GestureEngine {
       : { success: false, error: "Gesture recognition was cancelled.", code: "cancelled" };
     let detectorInitializing = false;
     try {
+      const capability = await this.getRecognitionCapability();
+      if (abortController.signal.aborted || generation !== this.recognitionGeneration) return cancellationResult();
+      if (getAccountScope() !== startingAccountScope || !this.profiles.has(profileId)) {
+        this.stopRecognition("account_changed");
+        return { success: false, error: "Gesture session ended after the account changed.", code: "account_changed" };
+      }
+      if (!capability.cameraSupported) {
+        this.setCameraCapabilityStatus("unavailable", "camera_api_unavailable");
+        this.stopRecognition("camera_unsupported");
+        return { success: false, error: "Camera capture is unsupported in this environment.", code: "camera_unsupported" };
+      }
+      if (capability.permission === "denied") {
+        this.setCameraCapabilityStatus("permission_denied", "permission_denied");
+        this.stopRecognition("permission_denied");
+        return { success: false, error: "Camera permission is denied in this browser.", code: "camera_permission_denied" };
+      }
       this.watchPageVisibility(generation);
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) return cancellationResult();
       if (typeof this.recognitionAdapter.prepare === "function") {
