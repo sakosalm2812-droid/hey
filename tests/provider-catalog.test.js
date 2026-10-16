@@ -117,7 +117,10 @@ test("provider attempts use an immutable request snapshot across concurrent conf
 
 test("provider snapshot rejects malformed, duplicate, sparse, and hostile configuration atomically", () => {
   assert.equal(snapshotProviderAttempts([attempts[0], attempts[0]]), null);
-  assert.equal(snapshotProviderAttempts([attempts[0], , attempts[1]]), null);
+  const sparse = new Array(3);
+  sparse[0] = attempts[0];
+  sparse[2] = attempts[1];
+  assert.equal(snapshotProviderAttempts(sparse), null);
   assert.equal(snapshotProviderAttempts(new Proxy([], { getPrototypeOf() { throw new Error("hostile trap"); } })), null);
   assert.equal(snapshotProviderAttempts([{ id: "openai", model: "gpt-fixture", get key() { throw new Error("must not run"); } }]), null);
 });
