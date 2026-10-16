@@ -12,7 +12,7 @@ function readData(record, key) {
 
 export function getToolLibraryLifecycleView(record, accountId, activeScope, toolStatus) {
   if (typeof accountId !== "string" || !accountId || activeScope !== `account:${accountId}` || readData(record, "accountId") !== accountId) {
-    return { visible: false, startDeclared: false, stopDeclared: false, canStart: false, canStop: false, status: "unavailable", sessionId: null };
+    return { visible: false, startDeclared: false, stopDeclared: false, retryDeclared: false, canStart: false, canStop: false, canRetry: false, status: "unavailable", sessionId: null };
   }
 
   const actions = readData(record, "actions");
@@ -21,7 +21,9 @@ export function getToolLibraryLifecycleView(record, accountId, activeScope, tool
   const sessionId = readData(record, "sessionId");
   const startDeclared = readData(actions, "start") === true;
   const stopDeclared = readData(actions, "stop") === true;
+  const retryDeclared = readData(actions, "retry") === true;
   const active = ACTIVE_STATUSES.has(status);
+  const failed = status === "failed" || status === "failed_after_stop";
   return {
     visible: true,
     status: typeof status === "string" ? status : "registered",
@@ -29,7 +31,9 @@ export function getToolLibraryLifecycleView(record, accountId, activeScope, tool
     sessionId: typeof sessionId === "string" && sessionId ? sessionId : null,
     startDeclared,
     stopDeclared,
+    retryDeclared,
     canStart: toolStatus === "supported" && startDeclared && readiness !== "unavailable" && !active,
     canStop: stopDeclared && active && typeof sessionId === "string" && Boolean(sessionId),
+    canRetry: toolStatus === "supported" && retryDeclared && failed && readiness !== "unavailable" && typeof sessionId === "string" && Boolean(sessionId),
   };
 }

@@ -38,6 +38,18 @@ test("controls require declared actions, supported capability, and usable sessio
   assert.equal(getToolLibraryLifecycleView(contract({ status: "completed", sessionId: "session-a" }), "account-a", "account:account-a", "supported").canStop, false);
 });
 
+test("retry is exposed only for a declared retry action on the current failed session", () => {
+  const failed = contract({ actions: { start: true, stop: false, retry: true }, status: "failed", sessionId: "failed-session" });
+  const view = getToolLibraryLifecycleView(failed, "account-a", "account:account-a", "supported");
+  assert.equal(view.retryDeclared, true);
+  assert.equal(view.canRetry, true);
+  assert.equal(getToolLibraryLifecycleView(contract({ actions: { retry: true }, status: "running", sessionId: "session-a" }), "account-a", "account:account-a", "supported").canRetry, false);
+  assert.equal(getToolLibraryLifecycleView(contract({ actions: { retry: false }, status: "failed", sessionId: "failed-session" }), "account-a", "account:account-a", "supported").canRetry, false);
+  assert.equal(getToolLibraryLifecycleView(contract({ actions: { retry: true }, status: "failed" }), "account-a", "account:account-a", "supported").canRetry, false);
+  assert.equal(getToolLibraryLifecycleView(failed, "account-b", "account:account-b", "supported").canRetry, false);
+  assert.equal(getToolLibraryLifecycleView(contract({ actions: { retry: true }, status: "failed", sessionId: "failed-session", readiness: "unavailable" }), "account-a", "account:account-a", "supported").canRetry, false);
+});
+
 test("hostile accessors on lifecycle contracts are never invoked", () => {
   let getterCalls = 0;
   const hostile = { accountId: "account-a" };

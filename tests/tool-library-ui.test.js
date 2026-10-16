@@ -51,13 +51,23 @@ test("Tool Library lifecycle controls use the declared canonical account session
   assert.match(pageSource, /HEY\.tools\.lifecycle\(/);
   assert.match(pageSource, /HEY\.tools\.start\(/);
   assert.match(pageSource, /HEY\.tools\.stop\(/);
+  assert.match(pageSource, /HEY\.tools\.retry\(/);
   assert.match(pageSource, /lifecycleView\.startDeclared/);
   assert.match(pageSource, /lifecycleView\.stopDeclared/);
   assert.match(pageSource, /lifecycleView\.canStop/);
+  assert.match(pageSource, /lifecycleView\.canRetry/);
   assert.match(pageSource, /pendingRun\.action === "start"/);
   assert.match(pageSource, /Configure and launch/);
   assert.match(pageSource, /Start session/);
   assert.match(pageSource, /Stop session/);
+  assert.match(pageSource, /Retry failed session/);
+  assert.match(pageSource, /Configure retry/);
+  assert.match(pageSource, /run\.failedSessionId/);
+  assert.match(pageSource, /current\.sessionId !== run\.failedSessionId/);
+  assert.match(pageSource, /pendingRun\.action === "retry"/);
+  assert.match(pageSource, /requiresLifecycleConfirmation = tool\.requiresConfirmation \|\| \["high", "critical"\]/);
+  assert.match(pageSource, /values\[name\] === "" \|\| values\[name\] === undefined \|\| values\[name\] === null/);
+  assert.match(pageSource, /getAccountScope\(\) !== `account:\$\{accountId\}`/);
 });
 
 test("Tool Library maps the V3 natural language dictation request to a truthful live entrypoint", () => {

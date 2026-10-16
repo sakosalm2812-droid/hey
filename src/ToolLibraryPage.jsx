@@ -50,6 +50,11 @@ function initialInputValues(schema) {
 function typedInputFromValues(schema, values) {
   if (!schema || !schema.properties || typeof schema.properties !== "object") return {};
   const input = {};
+  for (const name of Array.isArray(schema.required) ? schema.required : []) {
+    if (values[name] === "" || values[name] === undefined || values[name] === null) {
+      throw new TypeError(`${name} is required.`);
+    }
+  }
   for (const [name, property] of Object.entries(schema.properties)) {
     const value = values[name];
     if (property.enum) {
@@ -125,7 +130,9 @@ function ToolCard({
   const lifecycleRecord = isToolLibraryRecordVisible(lifecycleState, accountId, getAccountScope()) ? lifecycleState : null;
   const lifecycleView = getToolLibraryLifecycleView(lifecycleRecord, accountId, getAccountScope(), tool.status);
   const canStart = lifecycleView.canStart && tool.permissions.length === 1;
-  const hasLifecycleControls = lifecycleView.visible && (lifecycleView.startDeclared || lifecycleView.stopDeclared);
+  const canRetry = lifecycleView.canRetry && tool.permissions.length === 1;
+  const requiresLifecycleConfirmation = tool.requiresConfirmation || ["high", "critical"].includes(String(tool.riskLevel || "").toLowerCase());
+  const hasLifecycleControls = lifecycleView.visible && (lifecycleView.startDeclared || lifecycleView.stopDeclared || lifecycleView.retryDeclared);
   const [running, setRunning] = useState(false);
   const runLock = useRef(false);
   const controllerRef = useRef(null);
@@ -298,7 +305,7 @@ function ToolCard({
       setReceipt({ status: "authorization_required", message: `HEY needs account permission “${permission}” before this tool can launch.`, requestId: run.requestId });
       return;
     }
-    if (tool.requiresConfirmation) {
+    if (requiresLifecycleConfirmation) {
       setReceipt({ status: "confirmation_required", message: "Review the launch details and confirm before starting this tool.", requestId: run.requestId });
       return;
     }
@@ -351,6 +358,73 @@ function ToolCard({
     refreshActivity();
   }
 
+  function submitLifecycleRetry() {
+    if (!canRetry || !lifecycleView.sessionId || !accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "This failed session is no longer available to retry in the current account or platform state." });
+      refreshActivity();
+      return;
+    }
+    let input;
+    try { input = typedInputFromValues(inputSchema, inputValues); }
+    catch (error) {
+      setReceipt({ status: "error", message: safeToolError(error instanceof Error ? error.message : null) });
+      return;
+    }
+    const run = { input, requestId: crypto.randomUUID(), stepId: `retry-${crypto.randomUUID()}`, action: "retry", failedSessionId: lifecycleView.sessionId };
+    setReceipt(null);
+    setPendingRun(run);
+    if (!HEY.permissions.has(permission, "account", accountId)) {
+      const request = HEY.permissions.request({ permission, scope: "account", riskLevel: tool.riskLevel || "medium", reason: `Retry ${tool.name} from the Tool Library.` });
+      if (!request || request.error) {
+        setReceipt({ status: "error", message: safeToolError(request?.error), requestId: run.requestId });
+        setPendingRun(null);
+        return;
+      }
+      setReceipt({ status: "authorization_required", message: `HEY needs account permission “${permission}” before this failed session can be retried.`, requestId: run.requestId });
+      return;
+    }
+    if (requiresLifecycleConfirmation) {
+      setReceipt({ status: "confirmation_required", message: "Review the retry details and confirm before starting a new session.", requestId: run.requestId });
+      return;
+    }
+    void retryLifecycle(run, false);
+  }
+
+  function retryLifecycle(run, confirmed) {
+    if (runLock.current) return;
+    if (!accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "Your signed-in account changed. No retry was started." });
+      setPendingRun(null);
+      return;
+    }
+    const current = HEY.tools.lifecycle(tool.name, { user, platform: "web" });
+    if (!current?.success || current.actions?.retry !== true || !["failed", "failed_after_stop"].includes(current.status) || current.sessionId !== run.failedSessionId || current.readiness === "unavailable") {
+      setReceipt({ status: "denied", message: safeToolError(current?.availability?.reason || "This failure is no longer eligible for retry under current policy.") });
+      setPendingRun(null);
+      refreshActivity();
+      return;
+    }
+    runLock.current = true;
+    setRunning(true);
+    let response;
+    try {
+      response = HEY.tools.retry(tool.name, run.input, run.failedSessionId, { platform: "web", user, confirmed });
+    } finally {
+      runLock.current = false;
+      setRunning(false);
+    }
+    if (response?.success && response.status === "starting" && typeof response.sessionId === "string") {
+      setReceipt({ status: "starting", message: "HEY started a new session to retry the failed run.", requestId: run.requestId, sessionId: response.sessionId });
+      setPendingRun(null);
+      refreshActivity();
+      onActivityChanged();
+      return;
+    }
+    setReceipt({ status: response?.status || "error", message: safeToolError(response?.error), requestId: run.requestId });
+    setPendingRun(null);
+    refreshActivity();
+  }
+
   function allowPermission() {
     if (!pendingRun || !accountId || getAccountScope() !== `account:${accountId}`) {
       setReceipt({ status: "denied", message: "Your signed-in account changed. No permission was granted." });
@@ -370,10 +444,16 @@ function ToolCard({
       return;
     }
     if (pendingRun.action === "start") {
-      if (tool.requiresConfirmation) {
+      if (requiresLifecycleConfirmation) {
         setReceipt({ status: "confirmation_required", message: "Review the launch details and confirm before starting this tool.", requestId: pendingRun.requestId });
       } else {
         startLifecycle(pendingRun, false);
+      }
+    } else if (pendingRun.action === "retry") {
+      if (requiresLifecycleConfirmation) {
+        setReceipt({ status: "confirmation_required", message: "Review the retry details and confirm before starting a new session.", requestId: pendingRun.requestId });
+      } else {
+        void retryLifecycle(pendingRun, false);
       }
     } else {
       void invokePlan(pendingRun);
@@ -455,10 +535,11 @@ function ToolCard({
           <li key={`${item.id}-${item.status}-${item.at}`}><span>{item.status.replaceAll("_", " ")}</span><time dateTime={item.at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.at))}</time></li>
         ))}</ul> : <p className="tool-library__run-help">No Tool Library activity is recorded for this tool on this device.</p>}
       </details>
-      {hasLifecycleControls && <details className="tool-library__advanced-details tool-library__lifecycle" open={lifecycleView.status === "starting" || lifecycleView.status === "running" || lifecycleView.status === "stopping"}>
+      {hasLifecycleControls && <details className="tool-library__advanced-details tool-library__lifecycle" open={lifecycleView.status === "starting" || lifecycleView.status === "running" || lifecycleView.status === "stopping" || lifecycleView.canRetry}>
         <summary>Session controls</summary>
         <p className="tool-library__run-help">Status: <strong>{lifecycleView.status.replaceAll("_", " ")}</strong> · Readiness: {lifecycleView.readiness.replaceAll("_", " ")}</p>
         {lifecycleView.canStop && <button type="button" className="tool-library__deny-button" disabled={running || getAccountScope() !== `account:${accountId}`} onClick={stopLifecycle}>Stop session</button>}
+        {canRetry && <><p className="tool-library__run-help">This failed session can be retried after HEY rechecks current permissions and platform support.</p><button type="button" className="tool-library__run-button" disabled={!accountId || getAccountScope() !== `account:${accountId}`} onClick={() => { setInputValues(initialInputValues(inputSchema)); setReceipt(null); setPendingRun(null); setRunPanelOpen(true); }}>Configure retry</button></>}
       </details>}
       {(canRun || canStart) && <div className="tool-library__run-panel">
         {!runPanelOpen ? <button type="button" className="tool-library__run-button" disabled={!accountId || getAccountScope() !== `account:${accountId}`} onClick={() => {
@@ -480,14 +561,14 @@ function ToolCard({
               {property.description && <small>{property.description}</small>}
             </label>;
           })}
-          <div className="tool-library__run-actions">{canRun && <button type="submit" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`}><Play size={15} aria-hidden="true" /> Run</button>}{canStart && <button type="button" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`} onClick={submitLifecycleStart}><Play size={15} aria-hidden="true" /> Start session</button>}{running && <button type="button" className="tool-library__deny-button" onClick={cancelRun}>Cancel</button>}</div>
+          <div className="tool-library__run-actions">{canRun && <button type="submit" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`}><Play size={15} aria-hidden="true" /> Run</button>}{canStart && <button type="button" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`} onClick={submitLifecycleStart}><Play size={15} aria-hidden="true" /> Start session</button>}{canRetry && <button type="button" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`} onClick={submitLifecycleRetry}>Retry failed session</button>}{running && <button type="button" className="tool-library__deny-button" onClick={cancelRun}>Cancel</button>}</div>
         </form>}
         {receipt && <div className={`tool-library__receipt tool-library__receipt--${receipt.status}`} role={["error", "denied"].includes(receipt.status) ? "alert" : "status"} aria-live="polite">
           <div className="tool-library__receipt-heading">{receipt.status === "completed" ? <CheckCircle2 size={16} aria-hidden="true" /> : ["error", "denied"].includes(receipt.status) ? <CircleX size={16} aria-hidden="true" /> : <LockKeyhole size={16} aria-hidden="true" />}<strong>{receipt.status.replaceAll("_", " ")}</strong></div>
           <p>{receipt.message}</p>{receipt.requestId && <small>Receipt {receipt.requestId}</small>}
           {receipt.retryable && receipt.retryRun && !running && <button type="button" className="tool-library__run-button" onClick={() => { const retryRun = { ...receipt.retryRun, requestId: crypto.randomUUID(), stepId: `retry-${crypto.randomUUID()}` }; setReceipt(null); void invokePlan(retryRun); }}>Retry this run</button>}
           {receipt.status === "authorization_required" && pendingRun && <div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" onClick={allowPermission}>Allow account permission</button><button type="button" className="tool-library__deny-button" onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div>}
-          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{formatToolLibraryReceipt(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => pendingRun.action === "start" ? startLifecycle(pendingRun, true) : void invokePlan(pendingRun, true)}>Confirm and {pendingRun.action === "start" ? "start" : "run"}</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
+          {receipt.status === "confirmation_required" && pendingRun && <><pre className="tool-library__result">{formatToolLibraryReceipt(pendingRun.input)}</pre><div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" disabled={running} onClick={() => pendingRun.action === "start" ? startLifecycle(pendingRun, true) : pendingRun.action === "retry" ? retryLifecycle(pendingRun, true) : void invokePlan(pendingRun, true)}>Confirm and {pendingRun.action === "start" ? "start" : pendingRun.action === "retry" ? "retry" : "run"}</button><button type="button" className="tool-library__deny-button" disabled={running} onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div></>}
           {["completed", "unverified"].includes(receipt.status) && receipt.result !== undefined && <pre className="tool-library__result">{formatToolLibraryReceipt(receipt.result)}</pre>}
         </div>}
       </div>}

@@ -823,6 +823,7 @@ test("failed lifecycle runs can be retried only by the authorized account throug
     });
     const owner = { platform: "web", user: { id: "lifecycle-retry-owner", plan: "elite", entitlements: ["elite"] } };
     assert.equal(getToolLifecycleContract(name, owner).actions.retry, true);
+    assert.equal(HEY.tools.retry, retryToolLibraryEntry, "the canonical public HEY API exposes lifecycle retry");
     assert.equal(retryToolLibraryEntry(name, {}, null, owner).status, "retry_unavailable", "retry cannot launch a tool without a failed run");
 
     const first = startToolLibraryEntry(name, {}, owner);
@@ -837,7 +838,7 @@ test("failed lifecycle runs can be retried only by the authorized account throug
     seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-retry-owner");
 
     const concurrent = [
-      retryToolLibraryEntry(name, {}, first.sessionId, owner),
+      HEY.tools.retry(name, {}, first.sessionId, owner),
       retryToolLibraryEntry(name, {}, first.sessionId, owner),
     ];
     const recovered = concurrent.find(({ success }) => success);
