@@ -8,6 +8,7 @@ import { getToolLibraryPreferenceView } from "./lib/toolLibraryPreferenceView.js
 import { canGrantPermission } from "./lib/permissionPolicy.js";
 import { resolveAccountPlan } from "./lib/accountRecords.js";
 import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryRecord } from "./lib/toolLibraryReceipts.js";
+import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolLibrarySearch.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
 
@@ -486,10 +487,9 @@ export default function ToolLibraryPage() {
   }
 
   const filteredTools = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return tools;
-    return tools.filter((tool) => `${tool.name} ${tool.permissions.join(" ")} ${tool.capabilities.map((item) => item.capability || "").join(" ")}`.toLowerCase().includes(normalizedQuery));
+    return searchToolLibraryCatalog(tools, query);
   }, [query, tools]);
+  const dictationDiscovery = isDictationDiscoveryQuery(query);
 
   const visibleTools = !preferenceReady || activeView === "all"
     ? filteredTools
@@ -574,6 +574,14 @@ export default function ToolLibraryPage() {
           )}
         </div>
       </section>
+
+      {dictationDiscovery && <section className="tool-library__intent-suggestion" aria-labelledby="tool-library-dictation-title">
+        <div>
+          <h2 id="tool-library-dictation-title">Dictation in Chat</h2>
+          <p>Open Chat to check browser speech recognition support. HEY asks for consent and microphone permission before capturing speech. Cross app text insertion is not available in this web app.</p>
+        </div>
+        <Link className="tool-library__retry" to="/chat">Open Chat dictation</Link>
+      </section>}
 
       {loading && (
         <div className="tool-library__message" role="status" aria-live="polite">

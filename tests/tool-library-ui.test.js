@@ -46,3 +46,10 @@ test("Tool Library runs through the canonical plan API and offers only explicitl
   assert.match(pageSource, /controllerRef\.current !== controller/);
   assert.match(pageSource, /isToolLibraryRecordVisible\(receiptState, accountId, getAccountScope\(\)\)/);
 });
+
+test("Tool Library maps the V3 natural language dictation request to a truthful live entrypoint", () => {
+  assert.match(pageSource, /isDictationDiscoveryQuery\(query\)/);
+  assert.match(pageSource, /Dictation in Chat/);
+  assert.match(pageSource, /Cross app text insertion is not available in this web app/);
+  assert.match(pageSource, /to="\/chat">Open Chat dictation/);
+});
