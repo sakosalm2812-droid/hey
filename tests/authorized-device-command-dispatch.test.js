@@ -48,7 +48,7 @@ async function signedMandate(keyPair, { issuedAt = now, expiresAt = now + 60_000
   });
 }
 
-function dependencies({ store = durableStore(), queue = {}, accountId: resolvedAccountId = accountId, deviceOwner = accountId, deviceUnavailableOnSecondRead = false, permissionUnavailableOnSecondRead = false, mutate } = {}) {
+function dependencies({ store = durableStore(), queue = {}, accountId: resolvedAccountId = accountId, deviceOwner = accountId, deviceStatus = "online", deviceUnavailableOnSecondRead = false, permissionUnavailableOnSecondRead = false, mutate } = {}) {
   const queueCalls = [];
   const queueImpl = queue.enqueue || (async (...args) => ({ created: true, command: { commandId: "6cc95d2f-b37c-4d99-a6d6-3c59eb9126fb", deviceId: args[1], envelope: args[3], state: "pending", attempts: 0, createdAt: now } }));
   const wrappedQueue = {
@@ -79,7 +79,7 @@ function dependencies({ store = durableStore(), queue = {}, accountId: resolvedA
       loadDevice: async (_userId, id) => {
         await Promise.resolve();
         deviceReads += 1;
-        return { id, user_id: deviceOwner, status: deviceUnavailableOnSecondRead && deviceReads > 1 ? "revoked" : "online", capabilities: [action] };
+        return { id, user_id: deviceOwner, status: deviceUnavailableOnSecondRead && deviceReads > 1 ? "revoked" : deviceStatus, capabilities: [action] };
       },
       mandateStore: store,
       trustedKeys: { root: globalThis.testPublicKey },
@@ -126,6 +126,30 @@ test("principal and device owner/capability mismatches never enqueue", async () 
     mandateStore: durableStore(), trustedKeys: { root: keyPair.publicKey }, queue: { async enqueue() { assert.fail("unauthorized enqueue"); } }, now,
   });
   assert.equal((await unsupported.run(body(mandate))).enqueued, false);
+});
+
+test("pending and revoked devices cannot enqueue while offline devices remain eligible", async () => {
+  const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  globalThis.testPublicKey = keyPair.publicKey;
+
+  for (const status of ["pending", "revoked"]) {
+    const denied = dependencies({ deviceStatus: status });
+    assert.equal((await denied.run(body(await signedMandate(keyPair)))).enqueued, false, `${status} device must be denied`);
+    assert.equal(denied.queueCalls.length, 0, `${status} device must be denied before queue access`);
+  }
+
+  const offline = dependencies({ deviceStatus: "offline" });
+  assert.equal((await offline.run(body(await signedMandate(keyPair)))).enqueued, true, "offline enrolled device may receive a queued command");
+  assert.equal(offline.queueCalls.length, 1);
+});
+
+test("database enrollment gate rejects pending-device queue inserts and cancels queued work on demotion", async () => {
+  const sql = await (await import("node:fs/promises")).readFile(new URL("../supabase/migrations/20261016000700_device_command_enrollment_gate.sql", import.meta.url), "utf8");
+  assert.match(sql, /before insert on public\.hey_device_commands/i);
+  assert.match(sql, /v_status is distinct from 'online' and v_status is distinct from 'offline'/i);
+  assert.match(sql, /after update of status on public\.hey_devices/i);
+  assert.match(sql, /new\.status is distinct from old\.status and new\.status not in \('online', 'offline'\)/i);
+  assert.match(sql, /set state = 'cancelled', lease_token = null, lease_until = null/i);
 });
 
 test("stale, revoked, malformed, and replayed mandates deny before queue enqueue", async () => {

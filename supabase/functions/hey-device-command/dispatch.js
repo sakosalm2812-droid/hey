@@ -20,7 +20,9 @@ function accountPermissions(account, action) {
 }
 
 function usableDevice(device, accountId, deviceId, action) {
-  return device?.id === deviceId && device.user_id === accountId && device.status !== "revoked"
+  // Pending devices have not completed enrollment and must not receive queued
+  // commands. Offline devices remain eligible because delivery is asynchronous.
+  return device?.id === deviceId && device.user_id === accountId && ["online", "offline"].includes(device.status)
     && Array.isArray(device.capabilities) && device.capabilities.includes(action);
 }
 
