@@ -33,16 +33,23 @@ export async function digestSelection(targetId, selectedText, start, end) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function readSelectionSnapshot(input) {
+export function readSelectionSnapshot(input, conversationId = null) {
   if (!input || input.id !== CHAT_EDIT_TARGET_ID || typeof input.value !== "string") return null;
   const start = input.selectionStart;
   const end = input.selectionEnd;
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > input.value.length) return null;
-  return Object.freeze({ targetId: input.id, currentText: input.value, start, end, sourceText: input.value.slice(start, end) });
+  return Object.freeze({ targetId: input.id, conversationId, currentText: input.value, start, end, sourceText: input.value.slice(start, end) });
 }
 
-export function selectionStillMatches(input, snapshot) {
+export function digestSelectionSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot.targetId !== "string" || typeof snapshot.conversationId !== "string" && snapshot.conversationId !== null) return Promise.resolve(null);
+  const contextBoundTarget = `${snapshot.targetId}\u0000conversation:${snapshot.conversationId ?? "new"}`;
+  return digestSelection(contextBoundTarget, snapshot.sourceText, snapshot.start, snapshot.end);
+}
+
+export function selectionStillMatches(input, snapshot, conversationId) {
   if (!input || !snapshot || input.id !== snapshot.targetId || input.value !== snapshot.currentText) return false;
+  if (arguments.length >= 3 && snapshot.conversationId !== conversationId) return false;
   if (input.selectionStart !== snapshot.start || input.selectionEnd !== snapshot.end) return false;
   return input.value.slice(snapshot.start, snapshot.end) === snapshot.sourceText;
 }

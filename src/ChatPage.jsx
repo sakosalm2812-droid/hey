@@ -982,6 +982,7 @@ function ChatWorkspace() {
               {renderComputerPreview()}
               <ChatInput
                 value={message}
+                conversationId={conversationId}
                 setValue={setMessage}
                 onSend={() => sendUserMessage(message)}
                 disabled={isSending}

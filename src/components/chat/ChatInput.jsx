@@ -8,6 +8,7 @@ import DictationEditControl from "./DictationEditControl.jsx";
 
 export default function ChatInput({
   value,
+  conversationId,
   setValue,
   onSend,
   disabled = false,
@@ -163,7 +164,7 @@ export default function ChatInput({
           </button>
         </div>
       </div>
-      <DictationEditControl inputRef={inputRef} setValue={setValue} disabled={disabled} userId={user?.id} providerProfile={providerProfile} fusionEnabled={fusionEnabled} />
+      <DictationEditControl inputRef={inputRef} setValue={setValue} disabled={disabled} userId={user?.id} conversationId={conversationId} providerProfile={providerProfile} fusionEnabled={fusionEnabled} />
     </div>
   );
 }

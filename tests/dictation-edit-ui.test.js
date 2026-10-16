@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   CHAT_EDIT_TARGET_ID,
   captureEditOperationFence,
+  digestSelectionSnapshot,
   digestSelection,
   editOperationFenceIsCurrent,
   readSelectionSnapshot,
@@ -45,6 +46,17 @@ test("selection digest changes with target or selected text and rejects unavaila
   assert.equal(await digestSelection(CHAT_EDIT_TARGET_ID, ""), null);
 });
 
+test("selected-text bindings become stale when identical text moves to another conversation", async () => {
+  const target = input();
+  const first = readSelectionSnapshot(target, "conversation-one");
+  const second = readSelectionSnapshot(target, "conversation-two");
+  assert.equal(selectionStillMatches(target, first, "conversation-one"), true);
+  assert.equal(selectionStillMatches(target, first, "conversation-two"), false);
+  assert.notEqual(await digestSelectionSnapshot(first), await digestSelectionSnapshot(second));
+  const newConversation = readSelectionSnapshot(target, null);
+  assert.notEqual(await digestSelectionSnapshot(first), await digestSelectionSnapshot(newConversation));
+});
+
 test("replacement changes only the bound range and rejects stale drafts", () => {
   const snapshot = readSelectionSnapshot(input());
   assert.equal(replaceSelection(snapshot.currentText, snapshot, "chosen"), "Hello chosen world");
@@ -73,6 +85,7 @@ test("real Chat page exposes selected-text voice editing with a discoverable idl
   const chatInput = await source("../src/components/chat/ChatInput.jsx");
   const control = await source("../src/components/chat/DictationEditControl.jsx");
   assert.match(chatPage, /<ChatInput[\s\S]*?value=\{message\}[\s\S]*?setValue=\{setMessage\}/);
+  assert.match(chatPage, /<ChatInput[\s\S]*?conversationId=\{conversationId\}/);
   assert.match(chatInput, /<DictationEditControl[^>]*inputRef=\{inputRef\}[^>]*setValue=\{setValue\}/);
   assert.match(control, /Select text in your message draft, then choose voice edit\./);
   assert.match(control, /preview before replacing anything/);
@@ -102,6 +115,10 @@ test("voice edit UI fences account changes, requires provider consent, and never
   assert.doesNotMatch(control, /onSend|sendUserMessage|askHEY|sessionStorage|localStorage/);
   assert.match(inputSource, /id="hey-chat-message-composer"/);
   assert.match(inputSource, /<DictationEditControl[^>]*providerProfile=\{providerProfile\}[^>]*fusionEnabled=\{fusionEnabled\}/);
+  assert.match(inputSource, /<DictationEditControl[^>]*conversationId=\{conversationId\}/);
+  assert.match(control, /Conversation changed\. Select text again before continuing the edit\./);
+  assert.match(control, /snapshot\.conversationId !== conversationId/);
+  assert.match(control, /digestSelectionSnapshot\(selection\)/);
   assert.match(inputSource, /Fusion is an independent opt-in and uses its own provider selection\./);
   assert.match(dictation, /if \(onCapture\) \{\s*onCapture\(text\);\s*setStatus\("Transcript captured for voice edit\. Your draft is unchanged\."\);\s*\}\s*else onInsert\(text\);/);
   assert.match(dictation, /if \(!onCapture\) setStatus\(translateRef\.current\("chat\.dictation\.inserted"\)\)/);

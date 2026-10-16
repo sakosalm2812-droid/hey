@@ -7,7 +7,7 @@ import { focusDictationEditTarget } from "../../lib/dictationEditFocus.js";
 import {
   CHAT_EDIT_APPLICATION_ID,
   captureEditOperationFence,
-  digestSelection,
+  digestSelectionSnapshot,
   editOperationFenceIsCurrent,
   readSelectionSnapshot,
   replaceSelection,
@@ -23,7 +23,7 @@ const REWRITE_DISCLOSURE = Object.freeze({
   disclosureVersion: "selected-text-rewrite-v1",
 });
 
-export default function DictationEditControl({ inputRef, setValue, disabled, userId, providerProfile = "automatic", fusionEnabled = false }) {
+export default function DictationEditControl({ inputRef, setValue, disabled, userId, conversationId = null, providerProfile = "automatic", fusionEnabled = false }) {
   const [selection, setSelection] = useState(null);
   const [proposal, setProposal] = useState(null);
   const [confirmedText, setConfirmedText] = useState(null);
@@ -40,10 +40,10 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   const statusRef = useRef(null);
 
   const refreshSelection = useCallback(() => {
-    const next = readSelectionSnapshot(inputRef.current);
+    const next = readSelectionSnapshot(inputRef.current, conversationId);
     setSelection(next);
     return next;
-  }, [inputRef]);
+  }, [conversationId, inputRef]);
 
   const destroySession = useCallback(() => {
     abortRef.current?.abort();
@@ -104,6 +104,23 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   }, [inputRef, proposal, refreshSelection, resetFlow, selection]);
 
   useEffect(() => {
+    if (!selection && !proposal && !confirmedText && !undoEntry && stage === "idle") return;
+    if (selection?.conversationId === conversationId) return;
+    generationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    destroySession();
+    setSelection(null);
+    setProposal(null);
+    setConfirmedText(null);
+    setInstruction("");
+    setConsented(false);
+    setUndoEntry(null);
+    setStage("idle");
+    setStatus("Conversation changed. Select text again before continuing the edit.");
+  }, [conversationId, confirmedText, destroySession, proposal, selection, stage, undoEntry]);
+
+  useEffect(() => {
     if (disabled && stage !== "idle") resetFlow();
   }, [disabled, resetFlow, stage]);
 
@@ -121,13 +138,14 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setInstruction("");
     setConsented(false);
     try {
-      const snapshot = readSelectionSnapshot(inputRef.current);
+      const expectedConversationId = conversationId;
+      const snapshot = readSelectionSnapshot(inputRef.current, expectedConversationId);
       if (!snapshot || !userId || getAccountScope() !== accountRef.current) {
         setStatus("Select text in the message draft before editing.");
         return;
       }
-      const selectionDigest = await digestSelection(snapshot.targetId, snapshot.sourceText, snapshot.start, snapshot.end);
-      if (!selectionDigest || getAccountScope() !== accountRef.current || !selectionStillMatches(inputRef.current, snapshot)) {
+      const selectionDigest = await digestSelectionSnapshot(snapshot);
+      if (!selectionDigest || conversationId !== expectedConversationId || getAccountScope() !== accountRef.current || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
         setStatus("The selection changed or secure selection checks are unavailable. Select it again.");
         return;
       }
@@ -140,9 +158,10 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         rewriteProvider: { proposeRewrite: (request) => rewriteHEYText({ ...request, providerProfile }) },
         rewriteDisclosure: REWRITE_DISCLOSURE,
         resolveCurrentTarget: async () => {
-          const current = readSelectionSnapshot(inputRef.current);
-          if (!current || getAccountScope() !== accountRef.current) return null;
-          const digest = await digestSelection(current.targetId, current.sourceText, current.start, current.end);
+          const current = readSelectionSnapshot(inputRef.current, expectedConversationId);
+          if (!current || conversationId !== expectedConversationId || getAccountScope() !== accountRef.current) return null;
+          const digest = await digestSelectionSnapshot(current);
+          if (conversationId !== expectedConversationId || !selectionStillMatches(inputRef.current, current, conversationId)) return null;
           return digest ? {
             applicationId: CHAT_EDIT_APPLICATION_ID,
             targetId: current.targetId,
@@ -167,9 +186,9 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setStage("previewing");
     setStatus("");
     try {
-      const currentDigest = await digestSelection(snapshot.targetId, snapshot.sourceText, snapshot.start, snapshot.end);
+      const currentDigest = await digestSelectionSnapshot(snapshot);
       if (generationRef.current !== generation || controller.signal.aborted || getAccountScope() !== accountRef.current) return;
-      if (!currentDigest || currentDigest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot)) {
+      if (conversationId !== snapshot.conversationId || !currentDigest || currentDigest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
         resetFlow("The selection changed. Select the text again and retry.");
         return;
       }
@@ -198,7 +217,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         setStatus(result?.status === "cancelled" ? "Edit cancelled. Your draft is unchanged." : `Could not prepare a preview (${result?.status || "unavailable"}). Your draft is unchanged.`);
         return;
       }
-      if (!selectionStillMatches(inputRef.current, snapshot)) {
+      if (!selectionStillMatches(inputRef.current, snapshot, conversationId)) {
         resetFlow("The selection changed. Select the text again and retry.");
         return;
       }
@@ -218,15 +237,15 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   }
 
   async function confirmProposal() {
-    if (!proposal || !selection || !selectionStillMatches(inputRef.current, selection) || getAccountScope() !== accountRef.current) {
+    if (!proposal || !selection || !selectionStillMatches(inputRef.current, selection, conversationId) || getAccountScope() !== accountRef.current) {
       resetFlow("The selection changed. Select the text again and retry.");
       return;
     }
     const operationFence = captureEditOperationFence(generationRef.current, getAccountScope());
-    const digest = await digestSelection(selection.targetId, selection.sourceText, selection.start, selection.end);
+    const digest = await digestSelectionSnapshot(selection);
     if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
       || operationFence.accountScope !== accountRef.current) return;
-    if (!digest || digest !== selection.selectionDigest || !selectionStillMatches(inputRef.current, selection)) {
+    if (conversationId !== selection.conversationId || !digest || digest !== selection.selectionDigest || !selectionStillMatches(inputRef.current, selection, conversationId)) {
       resetFlow("The selection changed. Select the text again and retry.");
       return;
     }
@@ -248,15 +267,15 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
 
   async function replaceConfirmed() {
     const snapshot = selection;
-    if (typeof confirmedText !== "string" || !snapshot || !selectionStillMatches(inputRef.current, snapshot) || getAccountScope() !== accountRef.current) {
+    if (typeof confirmedText !== "string" || !snapshot || snapshot.conversationId !== conversationId || !selectionStillMatches(inputRef.current, snapshot, conversationId) || getAccountScope() !== accountRef.current) {
       resetFlow("The draft or selection changed. Nothing was replaced.");
       return;
     }
     const operationFence = captureEditOperationFence(generationRef.current, getAccountScope());
-    const digest = await digestSelection(snapshot.targetId, snapshot.sourceText, snapshot.start, snapshot.end);
+    const digest = await digestSelectionSnapshot(snapshot);
     if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
       || operationFence.accountScope !== accountRef.current) return;
-    if (!digest || digest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot)) {
+    if (conversationId !== snapshot.conversationId || !digest || digest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
       resetFlow("The selection changed. Nothing was replaced.");
       return;
     }
@@ -265,7 +284,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       resetFlow("The draft changed. Nothing was replaced.");
       return;
     }
-    setUndoEntry({ previousValue: inputRef.current.value, nextValue, start: snapshot.start, originalEnd: snapshot.end });
+    setUndoEntry({ previousValue: inputRef.current.value, nextValue, start: snapshot.start, originalEnd: snapshot.end, conversationId: snapshot.conversationId });
     setValue(nextValue);
     requestAnimationFrame(() => {
       if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
@@ -281,7 +300,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   }
 
   function undoAppliedEdit() {
-    if (!undoEntry || inputRef.current?.value !== undoEntry.nextValue) {
+    if (!undoEntry || undoEntry.conversationId !== conversationId || inputRef.current?.value !== undoEntry.nextValue) {
       setUndoEntry(null);
       setStatus("The draft changed after the edit, so it cannot be undone here.");
       return;
