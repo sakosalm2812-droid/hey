@@ -174,6 +174,9 @@ test("bounded JSON Schema comparison reports structural contract changes without
       propertyBoundChanges: 0,
       stringLengthBoundChanges: 0,
       arrayCardinalityBoundChanges: 0,
+      patternPropertiesAdded: 0,
+      patternPropertiesRemoved: 0,
+      patternPropertiesChanged: 0,
       itemsChanges: 0,
       enumChanges: 1,
       constChanges: 0,
@@ -242,6 +245,129 @@ test("array cardinality bounds reject malformed values and unsupported dialects"
     assert.ok(report.entries.filter(({ path: itemPath }) => itemPath.includes("unsupported-items-dialect")).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_format"));
     assert.ok(report.contractSemanticComparisons.every(({ status }) => status === "unsupported_schema_profile"));
     assert.doesNotMatch(JSON.stringify(report), /9007199254740992/);
+  });
+});
+
+test("patternProperties equivalence ignores mapping order and never returns regex or schema content", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    writeJson(root, "contracts/a-patterns.schema.json", {
+      $schema: dialect,
+      $id: "private-pattern-contract",
+      patternProperties: {
+        "^(a+)+$": { type: ["string", "null"] },
+        "^api_key=secret$": { maxLength: 20 },
+      },
+    });
+    writeJson(root, "contracts/z-patterns.schema.json", {
+      $schema: dialect,
+      $id: "private-pattern-contract",
+      patternProperties: {
+        "^api_key=secret$": { maxLength: 20 },
+        "^(a+)+$": { type: ["null", "string"] },
+      },
+    });
+    const before = readFileSync(path.join(root, "contracts/a-patterns.schema.json"));
+    const after = readFileSync(path.join(root, "contracts/z-patterns.schema.json"));
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-patterns.schema.json", "contracts/z-patterns.schema.json"],
+    });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantically_equivalent_in_supported_profile");
+    assert.equal(comparison.changes.patternPropertiesAdded, 0);
+    assert.equal(comparison.changes.patternPropertiesRemoved, 0);
+    assert.equal(comparison.changes.patternPropertiesChanged, 0);
+    assert.doesNotMatch(JSON.stringify(report), /private-pattern-contract|api_key=secret|\^\(a\+\)\+\$/);
+    assert.deepEqual(readFileSync(path.join(root, "contracts/a-patterns.schema.json")), before);
+    assert.deepEqual(readFileSync(path.join(root, "contracts/z-patterns.schema.json")), after);
+  });
+});
+
+test("patternProperties additions, removals, and changed schemas each count exactly once without echoing patterns", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    writeJson(root, "contracts/a-pattern-diff.schema.json", {
+      $schema: dialect,
+      $id: "pattern-diff-contract",
+      patternProperties: { "^removed-secret$": { type: "string" }, "^changed-secret$": { type: "string" } },
+    });
+    writeJson(root, "contracts/z-pattern-diff.schema.json", {
+      $schema: dialect,
+      $id: "pattern-diff-contract",
+      patternProperties: { "^added-secret$": { type: "boolean" }, "^changed-secret$": { type: "number" } },
+    });
+    const report = buildRepositoryEvidenceReport({
+      repositoryRoot: root,
+      files: ["contracts/a-pattern-diff.schema.json", "contracts/z-pattern-diff.schema.json"],
+    });
+    const comparison = report.contractSemanticComparisons[0];
+    assert.equal(comparison.status, "semantic_diff");
+    assert.equal(comparison.changes.patternPropertiesAdded, 1);
+    assert.equal(comparison.changes.patternPropertiesRemoved, 1);
+    assert.equal(comparison.changes.patternPropertiesChanged, 1);
+    assert.equal(comparison.changes.constraintChanges, 0);
+    assert.equal(comparison.changes.typeChanges, 0);
+    assert.doesNotMatch(JSON.stringify(report), /pattern-diff-contract|removed-secret|added-secret|changed-secret/);
+  });
+});
+
+test("patternProperties accepts the configured per-schema limit of 128 patterns", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    const leftPatterns = Object.fromEntries(Array.from({ length: 128 }, (_, index) => [`^key-${index}$`, { type: "string" }]));
+    const rightPatterns = Object.fromEntries(Object.entries(leftPatterns).reverse());
+    writeJson(root, "contracts/a.schema.json", { $schema: dialect, $id: "private-schema-identifier", patternProperties: leftPatterns });
+    writeJson(root, "contracts/b.schema.json", { $schema: dialect, $id: "private-schema-identifier", patternProperties: rightPatterns });
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: ["contracts/a.schema.json", "contracts/b.schema.json"] });
+    assert.equal(report.contractSemanticComparisons[0].status, "semantically_equivalent_in_supported_profile");
+    assert.equal(report.contractSemanticComparisons[0].changes.patternPropertiesAdded, 0);
+    assert.equal(report.contractSemanticComparisons[0].changes.patternPropertiesRemoved, 0);
+    assert.equal(report.contractSemanticComparisons[0].changes.patternPropertiesChanged, 0);
+    assert.doesNotMatch(JSON.stringify(report), /private-schema-identifier|\^key-127\$/);
+  });
+});
+
+test("patternProperties fails closed on invalid regex, wrong shape, excessive counts, overlong patterns, and deep documents", () => {
+  withRoot((root) => {
+    const dialect = "https://json-schema.org/draft/2020-12/schema";
+    const invalidCases = [
+      ["invalid-regex", { "[unterminated": { type: "string" } }],
+      ["wrong-shape", ["not-an-object"]],
+      ["too-many", Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`^pattern-${index}$`, { type: "string" }]))],
+      ["too-long", { ["x".repeat(513)]: { type: "string" } }],
+    ];
+    const paths = [];
+    for (const [id, patternProperties] of invalidCases) {
+      const leftPath = `contracts/a-${id}.schema.json`;
+      const rightPath = `contracts/z-${id}.schema.json`;
+      writeJson(root, leftPath, { $schema: dialect, $id: id, patternProperties });
+      writeJson(root, rightPath, { $schema: dialect, $id: id, type: "object" });
+      paths.push(leftPath, rightPath);
+    }
+    const repeatedPatterns = Object.fromEntries(Array.from({ length: 110 }, (_, index) => [`^document-pattern-${index}$`, { type: "string" }]));
+    const nestedPatternSchemas = Object.fromEntries(Array.from({ length: 5 }, (_, index) => [`property${index}`, { patternProperties: repeatedPatterns }]));
+    const tooManyDocumentPath = "contracts/a-too-many-document-patterns.schema.json";
+    writeJson(root, tooManyDocumentPath, { $schema: dialect, $id: "too-many-document-patterns", properties: nestedPatternSchemas });
+    paths.push(tooManyDocumentPath);
+    let deepBody = "{\"type\":\"string\"}";
+    for (let index = 0; index < 34; index += 1) deepBody = `{"patternProperties":{"^p$":${deepBody}}}`;
+    const deepPath = path.join(root, "contracts", "deep.schema.json");
+    mkdirSync(path.dirname(deepPath), { recursive: true });
+    writeFileSync(deepPath, `{"$schema":"${dialect}","$id":"deep-pattern","patternProperties":{"^root$":${deepBody}}}`);
+    paths.push("contracts/deep.schema.json");
+
+    const report = buildRepositoryEvidenceReport({ repositoryRoot: root, files: paths });
+    assert.ok(report.entries.filter(({ path: itemPath }) => !itemPath.endsWith("deep.schema.json")).filter(({ path: itemPath }) => /a-(?:invalid-regex|wrong-shape|too-many|too-long)/.test(itemPath)).every(({ semanticAnalysisStatus }) => semanticAnalysisStatus === "unsupported_schema_features"));
+    assert.equal(report.entries.find(({ path: itemPath }) => itemPath === tooManyDocumentPath).semanticAnalysisStatus, "unsupported_schema_features");
+    assert.equal(report.entries.find(({ path: itemPath }) => itemPath.endsWith("deep.schema.json")).analysisStatus, "json_budget_exceeded");
+    assert.doesNotMatch(JSON.stringify(report), /unterminated|not-an-object|deep-pattern|\^root\$|x{513}/);
+
+    let accessorInvoked = false;
+    const hostilePath = {};
+    Object.defineProperty(hostilePath, "path", { get() { accessorInvoked = true; return "contracts/a-patterns.schema.json"; } });
+    assert.throws(() => buildRepositoryEvidenceReport({ repositoryRoot: root, files: [hostilePath] }), /paths must be strings/);
+    assert.equal(accessorInvoked, false);
   });
 });
 

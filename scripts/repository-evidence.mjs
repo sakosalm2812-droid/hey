@@ -25,9 +25,12 @@ const SCHEMA_CONSTRAINT_KEYS = new Set([
 const SCHEMA_PROPERTY_BOUND_KEYS = new Set(["minProperties", "maxProperties"]);
 const SCHEMA_LENGTH_BOUND_KEYS = new Set(["minLength", "maxLength"]);
 const SCHEMA_ARRAY_BOUND_KEYS = new Set(["minItems", "maxItems"]);
+const MAX_PATTERN_PROPERTIES_PER_SCHEMA = 128;
+const MAX_PATTERN_PROPERTIES_PER_DOCUMENT = 512;
+const MAX_PATTERN_PROPERTY_LENGTH = 512;
 const SCHEMA_SUPPORTED_KEYS = new Set([
   ...SCHEMA_METADATA_KEYS, ...SCHEMA_CONSTRAINT_KEYS, ...SCHEMA_PROPERTY_BOUND_KEYS, ...SCHEMA_LENGTH_BOUND_KEYS, ...SCHEMA_ARRAY_BOUND_KEYS,
-  "type", "properties", "required", "dependentRequired", "additionalProperties", "items", "enum", "const",
+  "type", "properties", "patternProperties", "required", "dependentRequired", "additionalProperties", "items", "enum", "const",
 ]);
 
 function safePath(filePath) {
@@ -232,7 +235,7 @@ function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-function validJsonSchemaNode(node, dialect, depth = 0, budget = { nodes: 0 }) {
+function validJsonSchemaNode(node, dialect, depth = 0, budget = { nodes: 0, patternEntries: 0 }) {
   budget.nodes += 1;
   if (budget.nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH || !node || typeof node !== "object" || Array.isArray(node)) return null;
   if (depth > 0 && (Object.hasOwn(node, "$schema") || Object.hasOwn(node, "$id"))) return null;
@@ -253,6 +256,27 @@ function validJsonSchemaNode(node, dialect, depth = 0, budget = { nodes: 0 }) {
       properties[name] = child;
     }
     model.properties = properties;
+  }
+  if (Object.hasOwn(node, "patternProperties")) {
+    if (!node.patternProperties || typeof node.patternProperties !== "object" || Array.isArray(node.patternProperties)) return null;
+    const patterns = Object.keys(node.patternProperties);
+    if (patterns.length > MAX_PATTERN_PROPERTIES_PER_SCHEMA) return null;
+    budget.patternEntries += patterns.length;
+    if (budget.patternEntries > MAX_PATTERN_PROPERTIES_PER_DOCUMENT) return null;
+    const patternProperties = Object.create(null);
+    for (const pattern of patterns.sort()) {
+      if (pattern.length > MAX_PATTERN_PROPERTY_LENGTH) return null;
+      try {
+        // Compile only to reject malformed regular expressions; repository data is never matched against them.
+        new RegExp(pattern);
+      } catch {
+        return null;
+      }
+      const child = validJsonSchemaNode(node.patternProperties[pattern], dialect, depth + 1, budget);
+      if (!child) return null;
+      patternProperties[pattern] = child;
+    }
+    model.patternProperties = patternProperties;
   }
   if (Object.hasOwn(node, "required")) {
     if (!Array.isArray(node.required) || node.required.some((name) => typeof name !== "string") || new Set(node.required).size !== node.required.length) return null;
@@ -347,6 +371,9 @@ function compareSchemaModels(left, right) {
     propertyBoundChanges: 0,
     stringLengthBoundChanges: 0,
     arrayCardinalityBoundChanges: 0,
+    patternPropertiesAdded: 0,
+    patternPropertiesRemoved: 0,
+    patternPropertiesChanged: 0,
     itemsChanges: 0, enumChanges: 0, constChanges: 0, annotationChanges: 0,
     constraintChanges: 0, schemaShapeChanges: 0,
   };
@@ -377,6 +404,14 @@ function compareSchemaModels(left, right) {
     const afterArrayBounds = b.arrayBounds || {};
     changes.arrayCardinalityBoundChanges += [...new Set([...Object.keys(beforeArrayBounds), ...Object.keys(afterArrayBounds)])]
       .filter((key) => beforeArrayBounds[key] !== afterArrayBounds[key]).length;
+    const beforePatterns = a.patternProperties || {};
+    const afterPatterns = b.patternProperties || {};
+    const beforePatternNames = Object.keys(beforePatterns);
+    const afterPatternNames = Object.keys(afterPatterns);
+    changes.patternPropertiesAdded += afterPatternNames.filter((pattern) => !Object.hasOwn(beforePatterns, pattern)).length;
+    changes.patternPropertiesRemoved += beforePatternNames.filter((pattern) => !Object.hasOwn(afterPatterns, pattern)).length;
+    changes.patternPropertiesChanged += beforePatternNames.filter((pattern) => Object.hasOwn(afterPatterns, pattern)
+      && canonicalJson(beforePatterns[pattern]) !== canonicalJson(afterPatterns[pattern])).length;
     if (canonicalJson(a.additionalProperties ?? null) !== canonicalJson(b.additionalProperties ?? null)) changes.additionalPropertiesChanges += 1;
     const beforeProperties = a.properties || {};
     const afterProperties = b.properties || {};
@@ -566,6 +601,6 @@ export function buildRepositoryEvidenceReport({ repositoryRoot, files = [], stat
     })),
     contractSemanticComparisons: compareJsonSchemaContracts(contractEntries),
     migrationTimestampCollisions,
-    conclusions: ["Classification is limited to recognized paths and allowlisted metadata.", "Migration files are hashed and classified by path only; SQL is not parsed or executed.", "Matching direct dependency declarations prove exact text equality only; they do not prove lockfile correctness or runtime compatibility.", "Semantic comparisons cover a bounded JSON Schema profile paired by identical $id and dialect; compared dimensions include types, property/required membership and cardinality bounds, dependentRequired rules, additionalProperties, items, enum/const, selected scalar constraints, and read/write/deprecation annotations. This is not full standards validation.", "dependentRequired is supported only for the 2019-09 and 2020-12 dialects; minProperties/maxProperties, minLength/maxLength, and minItems/maxItems are supported as non-negative safe integers in the listed dialects.", "OpenAPI, AsyncAPI, YAML, references, and unsupported JSON Schema features are not semantically compared.", "Contract comparison paths are sorted lexically as left and right; that ordering does not imply version chronology.", "Unrecognized files and formats remain outside this report."],
+    conclusions: ["Classification is limited to recognized paths and allowlisted metadata.", "Migration files are hashed and classified by path only; SQL is not parsed or executed.", "Matching direct dependency declarations prove exact text equality only; they do not prove lockfile correctness or runtime compatibility.", "Semantic comparisons cover a bounded JSON Schema profile paired by identical $id and dialect; compared dimensions include types, property/required membership and cardinality bounds, patternProperties membership and per-pattern schema changes, dependentRequired rules, additionalProperties, items, enum/const, selected scalar constraints, and read/write/deprecation annotations. This is not full standards validation.", "patternProperties is limited to 128 patterns per schema, 512 per document, and 512 characters per pattern; patterns are syntax-checked with the host RegExp parser, never matched against repository content, and are not certified for cross-runtime regex compatibility.", "dependentRequired is supported only for the 2019-09 and 2020-12 dialects; minProperties/maxProperties, minLength/maxLength, and minItems/maxItems are supported as non-negative safe integers in the listed dialects.", "OpenAPI, AsyncAPI, YAML, references, and unsupported JSON Schema features are not semantically compared.", "Contract comparison paths are sorted lexically as left and right; that ordering does not imply version chronology.", "Unrecognized files and formats remain outside this report."],
   };
 }
