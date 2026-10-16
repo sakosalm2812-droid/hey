@@ -223,6 +223,13 @@ test("expert pack contract rejects accessor, sparse, malformed, and self-certifi
   const getterManifest = expertPackFixture();
   Object.defineProperty(getterManifest, "domain", { enumerable: true, get() { throw new Error("must not execute"); } });
   assert.equal(validateExpertPackManifest(getterManifest).valid, false);
+  let arrayMethodGetterInvoked = false;
+  const hostileHierarchy = expertPackFixture().sourceHierarchy;
+  Object.defineProperty(hostileHierarchy, "find", { enumerable: true, get() { arrayMethodGetterInvoked = true; throw new Error("must not execute"); } });
+  const hostileArrayManifest = expertPackFixture({ sourceHierarchy: hostileHierarchy });
+  assert.equal(validateExpertPackManifest(hostileArrayManifest).valid, false);
+  assert.equal(assessExpertPackEvidence({ manifest: hostileArrayManifest, source: { url: "https://courts.ca.gov/opinion" }, jurisdiction: "US-CA" }).status, "invalid");
+  assert.equal(arrayMethodGetterInvoked, false);
   const sparseJurisdictions = new Array(3);
   sparseJurisdictions[0] = "US-CA";
   sparseJurisdictions[2] = "US-NY";
@@ -252,6 +259,11 @@ test("expert pack evidence is bounded by declared source, jurisdiction, freshnes
   const hostileSource = { ...source };
   Object.defineProperty(hostileSource, "retrievedAt", { enumerable: true, get() { throw new Error("must not execute"); } });
   assert.equal(assessExpertPackEvidence({ manifest, source: hostileSource, jurisdiction: "US-CA", now }).reason, "invalid_source");
+  let sourceArrayMethodGetterInvoked = false;
+  const hostileJurisdictions = ["US-CA"];
+  Object.defineProperty(hostileJurisdictions, "includes", { enumerable: true, get() { sourceArrayMethodGetterInvoked = true; throw new Error("must not execute"); } });
+  assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, jurisdictions: hostileJurisdictions }, jurisdiction: "US-CA", now }).reason, "invalid_source_jurisdictions");
+  assert.equal(sourceArrayMethodGetterInvoked, false);
   const claim = createClaimRecord({ text: "A decision applies", source: { ...source, title: "Decision" }, accountScope: "account:a", workspaceId: "research", createdAt: source.retrievedAt });
   const citation = claim.candidateCitations[0];
   const evaluated = evaluateCitationCoverage(claim, citation, { now, requiredJurisdiction: "US-CA", expertPack: manifest });

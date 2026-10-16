@@ -27,7 +27,24 @@ function readArray(value, path, errors, { min = 1 } = {}) {
     errors.push(`${path}: expected an array with ${min} to ${MAX_ARRAY_ITEMS} items`);
     return [];
   }
+  if (Object.getPrototypeOf(value) !== Array.prototype) {
+    errors.push(`${path}: custom array prototypes are not allowed`);
+    return [];
+  }
   const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (key === "length") continue;
+    const index = typeof key === "string" ? Number(key) : Number.NaN;
+    if (!Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+      errors.push(`${path}: custom array properties are not allowed`);
+      return [];
+    }
+    const descriptor = descriptors[key];
+    if (!descriptor.enumerable || !("value" in descriptor)) {
+      errors.push(`${path}[${key}]: accessor entries are not allowed`);
+      return [];
+    }
+  }
   const entries = [];
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = descriptors[index];
@@ -135,7 +152,12 @@ function assessExpertPackEvidenceUnsafe({ manifest: rawManifest, source, jurisdi
     if (!validText(jurisdiction, 64)) return { status: "invalid", reason: "invalid_required_jurisdiction" };
     if (!manifest.jurisdictions.includes("*") && !manifest.jurisdictions.includes(jurisdiction)) return { status: "invalid", reason: "pack_jurisdiction_mismatch" };
     const sourceJurisdictions = safeSource.jurisdictions ?? safeSource.jurisdiction;
-    const values = Array.isArray(sourceJurisdictions) ? sourceJurisdictions : [sourceJurisdictions];
+    let values = [sourceJurisdictions];
+    if (Array.isArray(sourceJurisdictions)) {
+      const jurisdictionErrors = [];
+      values = readArray(sourceJurisdictions, "source.jurisdictions", jurisdictionErrors);
+      if (jurisdictionErrors.length || values.some((value) => !validText(value, 64))) return { status: "invalid", reason: "invalid_source_jurisdictions" };
+    }
     if (!values.includes(jurisdiction)) return { status: "invalid", reason: sourceJurisdictions ? "source_jurisdiction_mismatch" : "source_jurisdiction_missing" };
   }
   const capturedAt = timestamp(safeSource.retrievedAt ?? safeSource.capturedAt);
