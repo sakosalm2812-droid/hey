@@ -67,6 +67,7 @@ test("multi-select starter choices remain onboarding preferences and never creat
 test("HEY exposes versioned saved Space layout preference operations to consumers", () => {
   assert.equal(spacesApi.layoutPreferencesContractVersion, 1);
   assert.equal(spacesApi.storageContractVersion, 5);
+  assert.equal(spacesApi.recoveryContractVersion, 1);
   assert.equal(typeof spacesApi.getLayoutPreferences, "function");
   assert.equal(typeof spacesApi.previewRecovery, "function");
   assert.equal(typeof spacesApi.confirmRecovery, "function");
@@ -1129,12 +1130,20 @@ test("private Space recovery restores the latest verified account snapshot after
 
     const primaryKey = getAccountStorageKey("hey_spaces");
     const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
-    assert.equal(JSON.parse(storage.getItem(recoveryKey)).spaces[created.space.id].description, "Latest verified description");
+    const snapshot = JSON.parse(storage.getItem(recoveryKey));
+    assert.equal(snapshot.recoveryContractVersion, 1);
+    assert.equal(snapshot.accountScope, "account:space-recovery-owner");
+    assert.ok(snapshot.sequence > 0);
+    assert.equal(snapshot.payloadLength, snapshot.payload.length);
+    assert.equal(typeof snapshot.checksum, "string");
+    assert.equal(JSON.parse(snapshot.payload).spaces[created.space.id].description, "Latest verified description");
     storage.setItem(primaryKey, "{corrupt primary");
     const unreadable = new SpaceCreationEngine();
     assert.throws(() => unreadable.getSpaces(), /storage could not be read/);
     const preview = unreadable.previewRecovery({ accountScope: "account:space-recovery-owner" });
     assert.equal(preview.requiresConfirmation, true);
+    assert.equal(preview.recoveryContractVersion, 1);
+    assert.equal(preview.recoverySequence, snapshot.sequence);
     assert.equal(preview.spaceCount, 1);
     assert.deepEqual(preview.spaces, [{ id: created.space.id, name: "Recovery notes", status: "archived" }]);
     assert.match(unreadable.confirmRecovery({ previewId: preview.previewId, confirm: false }).error, /Explicit confirmation/);
@@ -1173,7 +1182,7 @@ test("Space recovery preview is fenced by account scope and backup ownership", (
     assert.deepEqual(new SpaceCreationEngine().getSpaces(), []);
     const accountBRecovery = JSON.parse(storage.getItem(getAccountStorageKey("hey_spaces_recovery")));
     assert.equal(accountBRecovery.accountScope, "account:space-recovery-account-b");
-    assert.deepEqual(accountBRecovery.spaces, {});
+    assert.deepEqual(JSON.parse(accountBRecovery.payload).spaces, {});
 
     storage.setItem(getAccountStorageKey("hey_spaces"), "corrupt B primary");
     storage.setItem(getAccountStorageKey("hey_spaces_recovery"), JSON.stringify({
@@ -1239,5 +1248,63 @@ test("Space recovery invalidates an unverifiable stale snapshot after a committe
     storage.setItem(getAccountStorageKey("hey_spaces"), "damaged");
     const unreadable = new SpaceCreationEngine();
     assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-snapshot-failure" }).error, /unavailable/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("versioned Space recovery rejects truncated or checksum-mismatched snapshots without overwriting primary data", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-integrity");
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Integrity check" });
+    assert.equal(engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).success, true);
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    const originalPrimary = "damaged canonical record";
+    storage.setItem(primaryKey, originalPrimary);
+    const validEnvelope = JSON.parse(storage.getItem(recoveryKey));
+    const envelope = { ...validEnvelope };
+    envelope.payload = JSON.stringify({ contractVersion: 5, accountScope: "account:space-recovery-integrity", spaces: {} });
+    storage.setItem(recoveryKey, JSON.stringify(envelope));
+
+    const unreadable = new SpaceCreationEngine();
+    assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-integrity" }).error, /unavailable/);
+    assert.equal(storage.getItem(primaryKey), originalPrimary);
+
+    storage.setItem(recoveryKey, JSON.stringify({ ...validEnvelope, spaceCount: validEnvelope.spaceCount + 1 }));
+    assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-integrity" }).error, /unavailable/);
+    assert.equal(storage.getItem(primaryKey), originalPrimary);
+
+    storage.setItem(recoveryKey, JSON.stringify(envelope).slice(0, -4));
+    assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-integrity" }).error, /unavailable/);
+    assert.equal(storage.getItem(primaryKey), originalPrimary);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("legacy Space recovery payloads remain recoverable and upgrade after a confirmed restore", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("space-recovery-legacy");
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Legacy recovery" });
+    assert.equal(engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).success, true);
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    const legacyPayload = storage.getItem(primaryKey);
+    storage.setItem(recoveryKey, legacyPayload);
+    storage.setItem(primaryKey, "legacy primary corruption");
+    const unreadable = new SpaceCreationEngine();
+    const preview = unreadable.previewRecovery({ accountScope: "account:space-recovery-legacy" });
+    assert.equal(preview.recoveryContractVersion, 0);
+    assert.equal(preview.spaceCount, 1);
+    assert.equal(unreadable.confirmRecovery({ previewId: preview.previewId, confirm: true }).success, true);
+    assert.equal(unreadable.getSpaces()[0].name, "Legacy recovery");
+
+    storage.setItem(primaryKey, "corrupt again");
+    const retry = unreadable.previewRecovery({ accountScope: "account:space-recovery-legacy" });
+    assert.equal(retry.recoveryContractVersion, 1);
+    assert.equal(retry.spaceCount, 1);
   } finally { setAccountScope(previousScope); }
 }));
