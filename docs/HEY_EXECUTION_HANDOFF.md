@@ -1217,4 +1217,3 @@ The existing specialist threads are active. New branch heads were created from t
 | 09 HEY One / `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/next-09-client-response-deadline-70e7891` | `70e7891`, no new commit observed |
 | 10 UltraSparse / `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-punctuation-evasion` | `70e7891`, no new commit observed |
 | 11 Fusion / `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-bounded-retry-70e7891` | `70e7891`, no new commit observed |
-
