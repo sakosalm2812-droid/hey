@@ -6,6 +6,7 @@ const browserSpeechProviders = new WeakSet();
 const MAX_DICTATION_PHRASES = 64;
 const MAX_DICTATION_VOCABULARY = 32;
 const MAX_DICTATION_REPLACEMENT_LENGTH = 2000;
+const MAX_DICTATION_TRANSCRIPT_LENGTH = 8000;
 
 export function createBrowserSpeechProvider(environment = globalThis) {
   let Recognition;
@@ -444,8 +445,18 @@ export function createDictationSession({ speechProvider, environment = globalThi
         language: sessionLanguage,
         vocabulary: vocabularySnapshot,
         onTranscript: (transcript) => {
-          const text = typeof transcript === "string" ? transcript.trim() : "";
           if (!active || destroyed || currentGeneration !== generation || getAccountScope() !== startingScope) return;
+          if (typeof transcript === "string" && transcript.length > MAX_DICTATION_TRANSCRIPT_LENGTH) {
+            active = false;
+            generation += 1;
+            finishAttempt("oversized_result");
+            const rejectedRecognition = recognition;
+            recognition = null;
+            try { activeSpeechProvider?.stop(rejectedRecognition); } catch { /* The session still fails closed. */ }
+            transition(VOICE_STATES.error, "Speech recognition returned an oversized result. It was discarded; start again to retry.");
+            return;
+          }
+          const text = typeof transcript === "string" ? transcript.trim() : "";
           if (!text) {
             currentAttempt.emptyTranscriptCount = Math.min(1000, currentAttempt.emptyTranscriptCount + 1);
             return;

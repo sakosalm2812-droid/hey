@@ -145,6 +145,43 @@ test("cancellation during permission is reported once and late completion cannot
   session.destroy();
 });
 
+test("oversized recognition results are discarded with bounded diagnostics and a retryable session", async () => {
+  const callbacks = [];
+  const transcripts = [];
+  const metrics = [];
+  const states = [];
+  let starts = 0;
+  let stops = 0;
+  const session = createDictationSession({
+    speechProvider: {
+      start(options) { starts += 1; callbacks.push(options); return { attempt: starts }; },
+      stop() { stops += 1; },
+    },
+    environment: environmentWithPermission(),
+    onTranscript: (value) => transcripts.push(value),
+    onStateChange: (value) => states.push(value),
+    onMetrics: (value) => metrics.push(value),
+  });
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  const oversizedPrivateResult = `private-recognition-marker:${"x".repeat(8001)}`;
+  callbacks[0].onTranscript(oversizedPrivateResult);
+  assert.equal(transcripts.length, 0);
+  assert.equal(stops, 1);
+  assert.equal(states.at(-1).state, "error");
+  assert.match(states.at(-1).error, /oversized result.*discarded/i);
+  assert.equal(states.at(-1).error.includes("private-recognition-marker"), false);
+  assert.equal(metrics[0].status, "oversized_result");
+  assert.equal(JSON.stringify(metrics).includes("private-recognition-marker"), false);
+
+  callbacks[0].onTranscript("late result from rejected recognition");
+  assert.equal(transcripts.length, 0);
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  callbacks[1].onTranscript("safe retry");
+  assert.deepEqual(transcripts, ["safe retry"]);
+  session.destroy();
+});
+
 test("account switches stop dictation and emit only an aggregate terminal metric", async () => {
   setAccountScope("metrics-account-a");
   let callbacks;
