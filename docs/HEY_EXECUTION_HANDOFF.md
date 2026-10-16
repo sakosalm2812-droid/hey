@@ -1,3 +1,30 @@
+## Current execution wave — 2026-10-16, parallel continuations launched from `fbeedd6`
+
+Coordinator branch `codex/resume-emergency-2026-10-14` is pushed at `fbeedd6f90f83cfe12954c86bcea1326e69824df`. Source implementation HEAD is `6efb67b`; documentation checkpoint `fbeedd6` records it. Latest verified source checks: full suite **709/709**, production build **2,771 modules**, Space changed-file ESLint and diff check pass. The only untracked path is the preserved `docs/requirements/v3-agent-pack/` extraction.
+
+The prior specialist tasks remain preserved; continuation messages were dispatched concurrently using GPT-6 Luna / High where selectable. Each worker was asked to use a coordinator-based continuation checkout and preserve its existing branch. New continuation branch names and SHAs are pending their first receipts. Active scopes:
+
+| Worker | Existing task reference | Existing source branch / integrated source | Current continuation scope |
+|---:|---|---|---|
+| 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/teacher-account-route-fix-62649` / prior port `2cccbac`; coordinator `1dd5136` | Add discoverable Chat UI entrypoint for selected-text edit preview; coordinate boundaries without messaging other tasks. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/space-lifecycle-recovery-port` / prior port `22d942d`; coordinator `6efb67b` | Durable versioned snapshot / partial-write resilience. |
+| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/tool-library-plan-capacity-activity` / earlier port integrated `be71e03` | Account-scoped user-visible execution outcome/recovery. |
+| 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/native-ipc-fail-closed-ea48` / coordinator `e88628a` | Delivery/ack idempotency and revocation fencing; keep native IPC denied. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/gesture-runtime-calibration-4df8d77` / coordinator `cb1062a` | Detector recovery UI/runtime under explicit camera consent and Trust Kernel authorization. |
+| 06 Flow | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-selected-edit-coordinator-62649` / coordinator `013e17a` | Dictation/rewrite runtime provider failure and cancellation robustness; no shared Chat UI edits. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/next-07-voiceos-current-port` / coordinator `e9121ba` | Inert computer-action preview/status, explicitly confirmed and Trust Kernel gated. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/teacher-backend-port-013e17a` / coordinator `9e50fc4` | Scoped draft artifact lifecycle/recovery UI. |
+| 09 HEY One | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | Existing bounded provider path; no new integrated change | Asked to continue only on a verified nonduplicate provider-boundary gap; follow-up clarifies human authorization, no new branch/commit yet. |
+| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave5-10-selector-budget` / coordinator `b833e57` | Adversarial planner parity/fallback evaluation. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/next-11-fusion-models` / coordinator `8ff8ac3` | User-facing budget/integrity receipt accuracy. |
+
+Latest app snapshots showed workers 01–08, 10, and 11 active; worker 09 initially returned idle while asking for authorization context, and a direct user-authorization clarification was sent. Recheck status and exact continuation branches before integration. Do not cherry-pick stale source branches. Each new candidate needs diff review, relevant adversarial tests, changed-file lint, build, and a root integration verification before claiming it landed.
+
+Live browser at `http://127.0.0.1:5175/login` showed actual HEY UI with sign-in disabled and a visible missing-Supabase-configuration message. No credentials were entered. Authenticated UI, Supabase/Forge/provider, camera/microphone, native Rust/device and production behavior remain **UNVERIFIED**. Continue code work while these external prerequisites are unavailable.
+
+Exact next actions: collect new branch/commit receipts without waiting serially; inspect candidate diffs for overlap and policy regressions; integrate independent commits in small batches; rerun affected suites, full suite, build and changed-file lint; update this handoff and `HEY_STEP_STATUS.md`, then push a checkpoint.
+
+---
 ## Latest coordinator checkpoint — 2026-10-16, wave 6 integration
 
 Coordinator source branch `codex/resume-emergency-2026-10-14` is at `6efb67b`; it is two commits ahead of the last pushed checkpoint `a6fa230`. Spaces private recovery is integrated. Preserve untracked `docs/requirements/v3-agent-pack/`. Never reset or overwrite the specialist worktrees.
