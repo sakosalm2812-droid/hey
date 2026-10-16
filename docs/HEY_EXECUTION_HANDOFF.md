@@ -28,6 +28,21 @@ All workers were directed to read their existing `docs/requirements/specialists/
 
 **Next exact actions:** poll the 11 existing tasks for their first branch/checkpoint receipts; independently inspect each changed-file diff and source receipt; integrate only nonduplicate changes onto this coordinator; run the affected adversarial suite, full suite, lint, build and app journey evidence after each batch; update this handoff and the 47-step evidence map with the resulting SHAs. Keep live login/provider/DB/device tests marked **UNVERIFIED** until real configuration and a user-authorized service/device are available.
 
+### Live wave 6 progress snapshot
+
+Latest app snapshots confirm all 11 resumed chats are active. No wave 6 commit is yet reported complete.
+
+- Worker 01 found its local branch worktree contains six commits beyond the published `a70b972` and is 21 commits ahead / 125 behind coordinator history. Worker 02 found 15 unique branch commits and intended to merge the coordinator history into its branch; coordinator sent a correction to avoid importing the 125-commit history wholesale and instead preserve the branch and port only unique feature changes. Both are inspecting divergence; no history was rewritten.
+- Worker 03 confirms its clean `codex/next-03-tool-library` worktree at `77a691f` and is preparing the source receipt before implementation.
+- Worker 04 found its preserved local branch at `5b74235`, two commits ahead of the published `ad79d5d`; it is fetching the coordinator state without resetting.
+- Worker 05 identified an unverified Gesture event bridge boundary in the active branch and is implementing a short-lived, single-use session authorization check plus denial/camera-loss and emergency-stop handling. This is a worker report, not yet independently confirmed or integrated.
+- Worker 06/07/08 confirmed use of the complete short-path source pack and are recording per-file hashes.
+- Worker 09 identified the request lifecycle in `callConfiguredProvider` as the app path to integrate, after reviewing existing provider entitlement and cancellation branches.
+- Worker 10 reports HEY Brain integration exists on its resumed branch and is checking the real API path plus benchmark; selector bound is already integrated on coordinator.
+- Worker 11 is adding provider usage/cap-cost receipt to a verified Fusion response and client reservation validation. This remains unverified until diff/tests land.
+
+Current external blockers: this repo has only `.env.example`; no `.env` config, `supabase` CLI or `docker` executable is available in the coordinator environment. The running local page `http://127.0.0.1:5175/login` has sign-in disabled until `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are provided through a safe local config. No live DB, provider, auth, or device outcome is currently possible to claim.
+
 ### Wave 5 integration just completed
 
 - Worker 01 `codex/wave5-01-space-archive-ui`, task `01a14073-33bf-7403-940b-871cd0de9ebc`, worker commit `d4e5302df3c6c45d43ccd9557bf9230d9e10a392`, coordinator `ca8c9b7`: accessible Space archive/restore controls, explicit preview and confirmation, stale revision re-review, account-switch fencing, lifecycle status announcements. Focused archive UI test included. Authenticated UI/live storage is unverified because this local app has no Supabase URL/public anon key.
