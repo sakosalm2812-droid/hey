@@ -1115,6 +1115,36 @@ test("stop during pending camera permission cancels startup and releases the lat
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
 });
 
+test("emergency stop releases video and detector when a camera track throws during cleanup", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera({ track: {
+    readyState: "live",
+    stop() { throw new Error("track release failed"); },
+    addEventListener() {},
+  } });
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({
+    async detect() { return null; },
+    stop() { adapterStops += 1; },
+  });
+
+  try {
+    const started = await engine.startRecognition(profile.id, { consent: true });
+    assert.equal(started.success, true);
+    engine.stopRecognition("user_emergency_stop");
+
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(engine.mediaStream, null);
+    assert.equal(engine.videoElement, null);
+    assert.equal(camera.video.srcObject, null);
+    assert.equal(adapterStops, 1);
+  } finally {
+    if (engine.getRecognitionState() !== GESTURE_STATES.INACTIVE || engine.mediaStream || engine.videoElement) {
+      engine.stopRecognition("test_cleanup");
+    }
+  }
+});
+
 test("late camera permission from a cancelled startup cannot replace a newer session", async () => {
   const { engine, profile } = makeEngine();
   const pendingStreams = [];
