@@ -9,12 +9,21 @@ import { supabaseClient } from "../lib/supabase.js";
 export function isTeacherAnswerKeyArtifact(artifact) {
   const seen = new WeakSet();
   const containsAnswer = (value, depth = 0) => {
-    if (!value || typeof value !== "object" || depth > 32 || seen.has(value)) return false;
+    if (!value || typeof value !== "object") return false;
+    // If content is too deep or cyclic to inspect completely, keep it private.
+    if (depth > 32 || seen.has(value)) return true;
     seen.add(value);
     if (Array.isArray(value)) return value.some((child) => containsAnswer(child, depth + 1));
     return Object.entries(value).some(([key, child]) => key === "teacherAnswer" || containsAnswer(child, depth + 1));
   };
-  return Boolean(artifact && typeof artifact === "object" && containsAnswer(artifact.content));
+  const metadata = artifact?.metadata;
+  const content = artifact?.content;
+  return Boolean(artifact && typeof artifact === "object" && (
+    containsAnswer(content)
+    || content?.type === "teacher_assessment"
+    || metadata?.workflow === "teacher_assessment"
+    || metadata?.artifactContract === "hey.teacher.assessment.v1"
+  ));
 }
 
 export function isStudentWorksheetArtifact(artifact) {
@@ -23,8 +32,11 @@ export function isStudentWorksheetArtifact(artifact) {
 
 export function isTeacherLessonArtifact(artifact) {
   const content = artifact?.content;
-  return Boolean(content && Array.isArray(content.learningObjectives) && Array.isArray(content.activities)
-    && content.assessment && typeof content.assessment === "object" && typeof content.durationMinutes === "number");
+  const metadata = artifact?.metadata;
+  return Boolean((content && Array.isArray(content.learningObjectives) && Array.isArray(content.activities)
+    && content.assessment && typeof content.assessment === "object" && typeof content.durationMinutes === "number")
+    || metadata?.workflow === "teacher_lesson_plan"
+    || metadata?.artifactContract === "hey.teacher.lesson.v1");
 }
 
 function hasTeacherClassAccess(artifact, context, user) {

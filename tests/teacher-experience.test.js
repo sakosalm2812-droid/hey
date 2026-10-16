@@ -19,7 +19,7 @@ import {
 } from "../src/core/teacherExperience.js";
 import HEY from "../src/core/index.js";
 import { supabaseClient } from "../src/lib/supabase.js";
-import { authorizeTeacherArtifactRead, authorizeTeacherArtifactWrite } from "../src/core/teacherArtifactAccess.js";
+import { authorizeTeacherArtifactRead, authorizeTeacherArtifactWrite, isTeacherAnswerKeyArtifact } from "../src/core/teacherArtifactAccess.js";
 import { artifactEngine } from "../src/core/artifactEngine.js";
 
 supabaseClient.auth.getUser = async () => ({ data: { user: {
@@ -216,6 +216,76 @@ test("teacher lesson content is not readable by student-role or cross-account us
   assert.equal(authorizeTeacherArtifactRead(lesson, {}, teacher), true);
   assert.equal(authorizeTeacherArtifactRead(lesson, {}, { ...teacher, app_metadata: { ...teacher.app_metadata, hey_role: "student" } }), false);
   assert.equal(authorizeTeacherArtifactRead(lesson, {}, { ...teacher, app_metadata: { ...teacher.app_metadata, hey_account_scope: "account:other" } }), false);
+});
+
+test("legacy assessment markers keep malformed or answer-free private artifacts owner-only through history", async () => {
+  const artifact = {
+    id: "teacher-key-legacy-contract-marker", projectId: "school-space", type: "document", title: "Imported assessment",
+    content: { type: "teacher_assessment", questions: [{ prompt: "Legacy prompt" }] },
+    createdBy: "teacher-1",
+    metadata: { workflow: "teacher_assessment", artifactContract: "hey.teacher.assessment.v1", audience: "student",
+      accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  const version = {
+    id: "teacher-key-legacy-contract-version", artifact_id: artifact.id, version_number: 1,
+    branch_name: "main", content: { type: "teacher_assessment", questions: [{ prompt: "Historical prompt" }] },
+    metadata: {}, created_by: "teacher-1",
+  };
+  assert.equal(isTeacherAnswerKeyArtifact(artifact), true, "legacy assessment metadata keeps a damaged key in the private path");
+  const owner = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  const sameClassTeacher = { ...owner, id: "teacher-2" };
+  const damagedLesson = {
+    content: { title: "Incomplete imported lesson" }, createdBy: "teacher-1",
+    metadata: { workflow: "teacher_lesson_plan", accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  assert.equal(authorizeTeacherArtifactRead(damagedLesson, {}, owner), true);
+  assert.equal(authorizeTeacherArtifactRead(damagedLesson, {}, sameClassTeacher), false);
+  assert.equal(authorizeTeacherArtifactRead(damagedLesson, {}, null), false);
+  const deeplyNested = {};
+  let cursor = deeplyNested;
+  for (let index = 0; index < 36; index += 1) cursor = cursor.child = {};
+  cursor.teacherAnswer = "deep answer";
+  const deepArtifact = { content: deeplyNested, createdBy: "teacher-1", metadata: artifact.metadata };
+  assert.equal(isTeacherAnswerKeyArtifact(deepArtifact), true, "uninspectable imported depth fails closed as private");
+  assert.equal(authorizeTeacherArtifactRead(deepArtifact, {}, sameClassTeacher), false);
+  artifactEngine.artifacts.set(artifact.id, artifact);
+  const originalFrom = supabaseClient.from;
+  const originalGetUser = supabaseClient.auth.getUser;
+  supabaseClient.from = (table) => {
+    assert.equal(table, "hey_artifact_versions");
+    return {
+      select() { return this; },
+      eq() { return this; },
+      single: async () => ({ data: version, error: null }),
+      order() { return this; },
+      limit: async () => ({ data: [version], error: null }),
+    };
+  };
+  try {
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-2", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    assert.equal(await HEY.artifacts.get(artifact.id), null);
+    assert.equal(await HEY.artifacts.getVersion(artifact.id, version.id), null);
+    assert.deepEqual(await HEY.artifacts.getHistory(artifact.id), []);
+
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    assert.equal((await HEY.artifacts.get(artifact.id)).id, artifact.id);
+    assert.equal((await HEY.artifacts.getVersion(artifact.id, version.id)).id, version.id);
+    assert.equal((await HEY.artifacts.getHistory(artifact.id)).length, 1);
+
+    supabaseClient.auth.getUser = async () => ({ data: { user: {
+      id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    } }, error: null });
+    assert.equal(await HEY.artifacts.get(artifact.id), null);
+  } finally {
+    supabaseClient.from = originalFrom;
+    supabaseClient.auth.getUser = originalGetUser;
+    artifactEngine.artifacts.delete(artifact.id);
+    artifactEngine.versionGraphs.delete(artifact.id);
+  }
 });
 
 test("canonical artifact reads deny cached answer keys to students", async () => {
