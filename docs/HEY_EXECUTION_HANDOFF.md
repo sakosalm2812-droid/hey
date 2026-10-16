@@ -1,21 +1,39 @@
-## Latest coordinator checkpoint — 2026-10-16, wave 6 continued
+## Latest coordinator checkpoint — 2026-10-16, wave 6 integration
 
-Coordinator branch `codex/resume-emergency-2026-10-14` is at `62649e5` (ahead of origin by three commits at checkpoint time). Preserve the untracked `docs/requirements/v3-agent-pack/` directory. The isolated Tool Library port worktree is `work/hey-integration-tool-plan-v2`; it has a dependency junction to the coordinator `node_modules` for local verification and should not be treated as a separate source-of-truth checkout.
+Coordinator branch `codex/resume-emergency-2026-10-14` is at `013e17a` before this documentation/test checkpoint; origin currently ends at `4df8d77`, so the source commits below are pending push. Preserve untracked `docs/requirements/v3-agent-pack/`. Never reset or overwrite the specialist worktrees.
 
-### Newly integrated source and evidence
+### Integrated work since the last push
 
-- `b833e57` integrated bounded advisory UltraSparse expert hints into the ordinary HEY Brain path. Unavailable model/capability hints preserve the ordinary route and do not alter server authority. Focused tests **17/17**; same-source production Vite build transformed 2,773 modules. Root full test suite now passes **692/692** after later integrations.
-- `355798b` integrates the current-head Tool Library plan/capacity/activity port from worker 03's `6c4c57a` source lineage. It adds user-facing plan run/retry behavior and account-scoped activity while retaining typed inputs, permission checks and retryable-only recovery.
-- `62649e5` rejects accessor-bearing permissioned tool outputs before they can be spread or inspected by Tool Library UI code. The regression asserts an enumerable output getter is never invoked. Focused `tests/tool-invocation-plans.test.js`: **7/7**; changed-file ESLint passes; same-source production Vite build passes (2,773 modules). Root full suite: **692/692**. Sitemap generation is skipped without `SITE_URL`; existing mixed static/dynamic `contextManager.js` chunk warning remains.
-- Browser state remains genuinely testable at `http://127.0.0.1:5175/login`. The live local UI reports missing `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` and disables sign-in. Authenticated frontend/backend, live database/provider, native device and production journeys remain **UNVERIFIED**.
+- `b833e57`: advisory UltraSparse capability hints are wired into ordinary HEY Brain planning. Hints are bounded/advisory and fallback preserves the standard plan; no server authority changes. Focused suite **17/17**.
+- `355798b`: worker 03 Tool Library plan execution now shares bounded capacity reservations and account-scoped lifecycle activity, with retry only for retryable outcomes.
+- `62649e5` and `be71e03`: permissioned Tool Library handler outputs are snapshotted before inspection and rejected if accessors or unsupported data are present. The regression checks that neither nested nor top-level getters execute; plan suite **7/7**.
+- `1dd5136`: worker 01's current-head Teacher route fix removes the duplicate `/teacher` route and fences readiness, drafts, async results and operation locks to the signed-in account. Teacher suite **56/56**.
+- `e88628a`: worker 04's native boundary now denies direct Rust IPC and advertises zero native capabilities until native-verifiable signed permits exist. Source regression **3/3**; Rust unit tests are present but **UNVERIFIED** because `cargo` and `rustc` are unavailable. This is a denial boundary, not native authorization or support.
+- `013e17a`: worker 06's selected-text edit flow is wired to the configured provider with separate consent, current selection digest/range checks, inert preview, explicit replace/undo, cancellation and account-switch fencing. Fusion remains separate from this edit preview. Dictation-related focused suites **59/59**. Edge operation-order regression adjusted for the new authenticated rewrite branch and passes **7/7**.
 
-### Current worker state and exact next actions
+Current root verification after all source integrations: **699/699** tests pass; production build succeeds, transforming 2,771 modules; changed-file ESLint passes except the last combined invocation named one nonexistent placeholder path and therefore exited before lint. Rerun the correct changed-file lint set before pushing. Build emits the known mixed-import warning for `contextManager.js`; sitemap generation skips without `SITE_URL`. Do not interpret mocked/local checks as live backend evidence.
 
-Existing Codex tasks 01, 04 and 06 were resumed concurrently against coordinator `62649e5`; all three report Active. Current continuation turn IDs: 01 `01a1448a-4f45-79f2-a317-d42deacdb07c`, 04 `01a1448a-506d-7803-89fe-cac1dfdafb9b`, 06 `01a1448a-516c-73d2-8578-c4a8f3d69c55`. Their existing task references and original branch paths are in the worker table below. They are to preserve old histories, make a current-head port branch, and return SHAs/test evidence. 01 checks the reachable Teacher route/account-switch state; 04 narrowly denies direct native IPC and advertises zero unverified capabilities; 06 ports safe selected-text voice editing while preserving explicit consent, inert preview, target revalidation, explicit replace/undo, cancellation and account-switch fencing.
+The live UI remains available at `http://127.0.0.1:5175/login`; browser shows sign-in disabled because `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are absent. Authenticated journeys, live database/provider, physical camera/microphone, native Rust compile/device, and production deployment remain **UNVERIFIED**.
 
-Worker 03 task `01a14073-ae0b-7fa2-a145-2d4b3283f087` completed the current-head Tool Library port. Original candidate `6c4c57a`; coordinator integrations `355798b` and `62649e5`. Its continuation worktree has not been deleted. All other specialists are currently idle after their prior checkpoints; do not report them active unless a fresh app snapshot confirms it.
+### Active workers and exact next actions
 
-Immediate coordinator actions: push `62649e5` after updating this handoff and step map; receive the three active worker checkpoints; review each diff against latest coordinator; integrate only compatible narrow changes; then rerun affected focused tests and full suite. Keep the in-repo V3 pack untracked and untouched. Do not claim production readiness or authenticated app functionality from this local login-only proof.
+App snapshot after dispatch: tasks 02, 05, 07 and 11 were Active; task 08 was restarted and must be confirmed on next snapshot. Tasks 01, 04 and 06 completed the following current-head ports and are idle:
+
+| Worker | Existing task reference | Port branch / commit | Status / next action |
+|---:|---|---|---|
+| 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/teacher-account-route-fix-62649` / `2cccbac9c1bd0bdfb7451ef04d5f3209e5ace002`; integrated `1dd5136` | Done for current task; authenticated browser/Forge still unverified. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/next-02-onboarding-spaces` / latest published `a179639f6cc6a30dacd22787d887a8b68cbef3ea` | Active; continue isolated current-head lifecycle/recovery work. |
+| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | port source `6c4c57ae47ea920e7a6cc72119564ab359ff5802`; integrated `355798b`, `62649e5`, `be71e03` | Done for current task; leave source worktree intact. |
+| 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/native-ipc-fail-closed-ea48` / `789b45ac42b10df1d0ed28abe25a09d453b40093`; integrated `e88628a` | Done; Rust compile remains blocked by missing toolchain. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | existing `codex/next-05-gesture-control`; current port pending | Active; verify actual profile/runtime integration and recovery. |
+| 06 Flow | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/flow-selected-edit-coordinator-62649` / `d517abb7a454cfc2451b03fb7a565eb3c9ba1c84`; integrated `013e17a` | Done for current task; real provider/auth journey remains unverified. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | existing `codex/next-07-voiceos-control`; current port pending | Active; JS preview/mandate boundary only, avoid duplicate Rust work. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | existing `codex/next-08-teacher-experience`; current port pending | Re-dispatched for implementation; verify state before counting active. |
+| 09 HEY One | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | no new port needed; current provider route already bounded | Idle; retain its source checkpoint, no duplicate provider patch. |
+| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | source `9ec2792adbfc5856885790177298d34953a83856`; integrated `b833e57` | Done for current task; benchmarks remain selection-only. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | existing `codex/next-11-fusion-models`; current port pending | Active; continue bounded provider/cost/checker resilience without duplicating worker 09. |
+
+Immediate actions: rerun changed-file ESLint without the nonexistent path, rerun build only if subsequent integration changes sources, commit the Edge regression test and latest handoff/status edits, then push the shared branch. Receive active worker checkpoints, review against `013e17a`, integrate only compatible changes, and repeat focused/full verification. Continue to report runtime/backend/native gaps explicitly.
 
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 5 integrated
 

@@ -124,7 +124,7 @@ test("Vision aborts provider fallback while retaining authenticated request iden
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   const vision = route.match(/if \(payload\.operation === "vision"\) \{([\s\S]*?)\n\s+if \(payload\.operation === "forge"\)/);
   assert.ok(vision, "canonical route has a Vision operation");
-  assert.match(route, /const requestId = validRequestId\(payload\.requestId\);\s+if \(payload\.operation === "vision"\)/);
+  assert.match(route, /const requestId = validRequestId\(payload\.requestId\);[\s\S]*?if \(payload\.operation === "dictation_rewrite"\)[\s\S]*?if \(payload\.operation === "vision"\)/);
   assert.match(route, /supabase\.auth\.getUser\(token\)[\s\S]*?const requestId = validRequestId\(payload\.requestId\)/);
   assert.match(vision[1], /for \(const attempt of visionAttempts\.slice\(0, 3\)\) \{\s+if \(request\.signal\.aborted\)/);
   assert.match(vision[1], /\}, 30_000, request\.signal\)/);
