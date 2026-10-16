@@ -120,7 +120,7 @@ test("credential rotation is owner-bound, one-time, random and persists only a d
   assert.equal(saved[0][2], await digestDeviceCredential(first.credential));
   assert.equal(JSON.stringify(saved).includes(first.credential), false);
 
-  for (const device of [null, { id: deviceId, user_id: otherAccountId, status: "online" }, { id: deviceId, user_id: accountId, status: "revoked" }]) {
+  for (const device of [null, { id: deviceId, user_id: otherAccountId, status: "online" }, { id: deviceId, user_id: accountId, status: "revoked" }, { id: deviceId, user_id: accountId, status: "pending" }, { id: deviceId, user_id: accountId, status: "unknown" }]) {
     const denied = await issueDeviceCredential({ ...deps, loadDevice: async () => device });
     assert.equal(denied.ok, false);
   }
@@ -243,6 +243,39 @@ test("credential migration stores only hashes, requires trusted service role and
   assert.match(sql, /grant execute on function public\.authenticate_hey_device_credential\(text\) to service_role/i);
   assert.doesNotMatch(sql, /grant execute on function public\.(?:rotate|authenticate)_hey_device_credential\([^;]+\) to [^;]*authenticated/i);
   assert.doesNotMatch(sql, /credential text|secret text|token text/i);
+});
+
+test("pending or unknown device states cannot rotate or authenticate transport credentials", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20261016000000_fail_closed_device_transport_status.sql", import.meta.url), "utf8");
+  assert.match(migration, /d\.status in \('online', 'offline'\)/i);
+  assert.equal((migration.match(/d\.status in \('online', 'offline'\)/gi) || []).length, 2);
+  assert.match(migration, /grant execute on function public\.rotate_hey_device_credential\(uuid, uuid, text\) to service_role/i);
+  assert.match(migration, /grant execute on function public\.authenticate_hey_device_credential\(text\) to service_role/i);
+  assert.doesNotMatch(migration, /grant execute on function public\.(?:rotate|authenticate)_hey_device_credential\([^;]+\) to [^;]*authenticated/i);
+
+  let rotationCalls = 0;
+  for (const status of ["pending", "revoked", "unknown"]) {
+    const denied = await issueDeviceCredential({
+      authenticatedAccountId: accountId,
+      deviceId,
+      loadDevice: async () => ({ id: deviceId, user_id: accountId, status }),
+      credentialStore: { async rotate() { rotationCalls += 1; return true; } },
+    });
+    assert.equal(denied.ok, false);
+    assert.equal(Object.hasOwn(denied, "credential"), false);
+  }
+  assert.equal(rotationCalls, 0);
+
+  const token = await credential();
+  let queueCalls = 0;
+  const result = await handleDeviceTransport({
+    authorization: `Bearer ${token}`,
+    body: { operation: "claim", deviceId },
+    credentialStore: { async authenticate() { return null; } },
+    queue: { async claimNext() { queueCalls += 1; return null; } },
+  });
+  assert.equal(result.status, 401);
+  assert.equal(queueCalls, 0);
 });
 
 test("edge stop route authenticates the account JWT and never accepts caller-supplied account scope", async () => {

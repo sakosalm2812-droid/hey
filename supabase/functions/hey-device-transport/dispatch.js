@@ -128,7 +128,7 @@ export async function issueDeviceCredential({ authenticatedAccountId, deviceId, 
   }
   try {
     const device = await loadDevice(authenticatedAccountId, deviceId);
-    if (device?.id !== deviceId || device.user_id !== authenticatedAccountId || device.status === "revoked") {
+    if (device?.id !== deviceId || device.user_id !== authenticatedAccountId || !["online", "offline"].includes(device.status)) {
       return result(false, { reason: "The requested device is unavailable for this account." });
     }
     const bytes = new Uint8Array(32);
