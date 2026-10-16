@@ -174,17 +174,17 @@ export async function handleDeviceTransport({ authorization, body, credentialSto
       return result(false, { status: 401, reason: "Device credential is invalid or revoked." });
     }
     if (request.operation === "claim") {
-      const claim = await queue.claimNext(identity.accountId, identity.deviceId, request.leaseMs);
+      const claim = await queue.claimNext(identity.accountId, identity.deviceId, request.leaseMs, digest);
       return result(true, { status: 200, claim });
     }
     if (request.operation === "renew") {
       if (typeof queue.renewLease !== "function") return result(false, { status: 503, reason: "Device transport is unavailable." });
-      const renewal = await queue.renewLease(identity.accountId, identity.deviceId, request.commandId, request.leaseToken, request.idempotencyKey, request.leaseMs);
+      const renewal = await queue.renewLease(identity.accountId, identity.deviceId, request.commandId, request.leaseToken, request.idempotencyKey, request.leaseMs, digest);
       return result(renewal.renewed, { status: renewal.renewed ? 200 : 409, renewal });
     }
     const accepted = request.operation === "ack"
-      ? await queue.acknowledge(identity.accountId, identity.deviceId, request.commandId, request.leaseToken)
-      : await queue.recordFailure(identity.accountId, identity.deviceId, request.commandId, request.leaseToken);
+      ? await queue.acknowledge(identity.accountId, identity.deviceId, request.commandId, request.leaseToken, digest)
+      : await queue.recordFailure(identity.accountId, identity.deviceId, request.commandId, request.leaseToken, digest);
     return result(accepted === true, { status: accepted === true ? 200 : 409, accepted: accepted === true });
   } catch {
     return result(false, { status: 503, reason: "Device transport is unavailable." });

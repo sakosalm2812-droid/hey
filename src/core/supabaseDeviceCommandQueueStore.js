@@ -1,9 +1,15 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_LEASE_MS = 300_000;
 const MAX_COMMAND_BYTES = 65_536;
 
 function requiredUuid(value, label) {
   if (typeof value !== "string" || !UUID.test(value)) throw new TypeError(`${label} must be a UUID.`);
+  return value;
+}
+
+function requiredCredentialHash(value) {
+  if (typeof value !== "string" || !SHA256.test(value)) throw new TypeError("Device credential digest must be a SHA-256 hex digest.");
   return value;
 }
 
@@ -106,7 +112,7 @@ function commandFromRow(row) {
   return { commandId: row.commandId, deviceId: row.deviceId, envelope: normalizeEnvelope(row.envelope), state: row.state, attempts: row.attempts, createdAt: Date.parse(row.createdAt), ...(row.lastError ? { lastError: row.lastError } : {}) };
 }
 
-/** Trusted service-role adapter for durable command transport. The caller must already authenticate the account and verify authorization/mandates; this store only queues envelopes. */
+/** Trusted service-role adapter for durable command transport. Transport mutations require the authenticated credential digest so their RPC can recheck it atomically with each queue operation. */
 export class SupabaseDeviceCommandQueueStore {
   constructor(client, { trustedServer = false } = {}) {
     if (!client || typeof client.rpc !== "function") throw new TypeError("A configured Supabase client is required for device command storage.");
@@ -132,15 +138,15 @@ export class SupabaseDeviceCommandQueueStore {
     return { created: data.created, command: commandFromRow(data.command) };
   }
 
-  async claimNext(accountId, deviceId, leaseMs = 30_000) {
+  async claimNext(accountId, deviceId, leaseMs = 30_000, credentialHash) {
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS) throw new RangeError("Device command lease must be between 1 ms and 5 minutes.");
-    const data = rpcData(await this.client.rpc("claim_hey_device_command", { p_account_id: requiredUuid(accountId, "accountId"), p_device_id: requiredUuid(deviceId, "deviceId"), p_lease_ms: leaseMs }), "claim");
+    const data = rpcData(await this.client.rpc("claim_hey_device_command", { p_account_id: requiredUuid(accountId, "accountId"), p_device_id: requiredUuid(deviceId, "deviceId"), p_lease_ms: leaseMs, p_credential_hash: requiredCredentialHash(credentialHash) }), "claim");
     if (data === null) return null;
     if (!data || typeof data !== "object" || !UUID.test(data.leaseToken)) throw new Error("Supabase device command lease response was malformed.");
     return { command: commandFromRow(data.command), leaseToken: data.leaseToken };
   }
 
-  async renewLease(accountId, deviceId, commandId, leaseToken, idempotencyKey, leaseMs = 30_000) {
+  async renewLease(accountId, deviceId, commandId, leaseToken, idempotencyKey, leaseMs = 30_000, credentialHash) {
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > MAX_LEASE_MS) throw new RangeError("Device command lease must be between 1 ms and 5 minutes.");
     const data = rpcData(await this.client.rpc("renew_hey_device_command_lease", {
       p_account_id: requiredUuid(accountId, "accountId"),
@@ -149,6 +155,7 @@ export class SupabaseDeviceCommandQueueStore {
       p_lease_token: requiredUuid(leaseToken, "leaseToken"),
       p_idempotency_key: boundedText(idempotencyKey, "Lease renewal idempotency key", 128),
       p_lease_ms: leaseMs,
+      p_credential_hash: requiredCredentialHash(credentialHash),
     }), "lease renewal");
     if (!data || typeof data !== "object" || typeof data.renewed !== "boolean") throw new Error("Supabase device command renewal response was malformed.");
     if (!data.renewed) return { renewed: false, leaseUntil: null, idempotent: false };
@@ -158,20 +165,20 @@ export class SupabaseDeviceCommandQueueStore {
     return { renewed: true, leaseUntil: Date.parse(data.leaseUntil), idempotent: data.idempotent };
   }
 
-  async acknowledge(accountId, deviceId, commandId, leaseToken) {
+  async acknowledge(accountId, deviceId, commandId, leaseToken, credentialHash) {
     for (const value of [accountId, deviceId, commandId, leaseToken]) {
       if (typeof value !== "string" || !UUID.test(value)) return false;
     }
-    const data = rpcData(await this.client.rpc("ack_hey_device_command", { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken }), "acknowledgement");
+    const data = rpcData(await this.client.rpc("ack_hey_device_command", { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_credential_hash: requiredCredentialHash(credentialHash) }), "acknowledgement");
     if (typeof data !== "boolean") throw new Error("Supabase device command response was malformed.");
     return data;
   }
 
-  async recordFailure(accountId, deviceId, commandId, leaseToken) {
+  async recordFailure(accountId, deviceId, commandId, leaseToken, credentialHash) {
     for (const value of [accountId, deviceId, commandId, leaseToken]) {
       if (typeof value !== "string" || !UUID.test(value)) return false;
     }
-    const data = rpcData(await this.client.rpc("fail_hey_device_command", { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken }), "failure recording");
+    const data = rpcData(await this.client.rpc("fail_hey_device_command", { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_credential_hash: requiredCredentialHash(credentialHash) }), "failure recording");
     if (typeof data !== "boolean") throw new Error("Supabase device command response was malformed.");
     return data;
   }

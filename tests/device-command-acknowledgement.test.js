@@ -8,6 +8,7 @@ const otherAccountId = "10e7b9e4-765b-4e88-b5d4-5eafc0f39f40";
 const deviceId = "67337f11-57da-4c23-a41f-fc19d1995b61";
 const commandId = "6cc95d2f-b37c-4d99-a6d6-3c59eb9126fb";
 const leaseToken = "1b8473f4-b50d-4a04-9834-7e5b446c07b4";
+const credentialHash = "a".repeat(64);
 
 test("queue adapter passes exact ack scope and preserves idempotent RPC results", async () => {
   const calls = [];
@@ -19,13 +20,13 @@ test("queue adapter passes exact ack scope and preserves idempotent RPC results"
     },
   }, { trustedServer: true });
 
-  assert.equal(await queue.acknowledge(accountId, deviceId, commandId, leaseToken), true);
-  assert.equal(await queue.acknowledge(accountId, deviceId, commandId, leaseToken), true, "same lease retry is accepted by the atomic RPC");
-  assert.equal(await queue.acknowledge(otherAccountId, deviceId, commandId, leaseToken), false);
+  assert.equal(await queue.acknowledge(accountId, deviceId, commandId, leaseToken, credentialHash), true);
+  assert.equal(await queue.acknowledge(accountId, deviceId, commandId, leaseToken, credentialHash), true, "same lease retry is accepted by the atomic RPC");
+  assert.equal(await queue.acknowledge(otherAccountId, deviceId, commandId, leaseToken, credentialHash), false);
   assert.deepEqual(calls, [
-    { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
-    { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
-    { name: "ack_hey_device_command", params: { p_account_id: otherAccountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken } },
+    { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_credential_hash: credentialHash } },
+    { name: "ack_hey_device_command", params: { p_account_id: accountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_credential_hash: credentialHash } },
+    { name: "ack_hey_device_command", params: { p_account_id: otherAccountId, p_device_id: deviceId, p_command_id: commandId, p_lease_token: leaseToken, p_credential_hash: credentialHash } },
   ]);
 });
 

@@ -159,11 +159,47 @@ test("transport binds claim, acknowledgement and failure to authenticated device
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "ack", deviceId, commandId, leaseToken }, credentialStore, queue }), { ok: true, status: 200, accepted: true });
   assert.deepEqual(await handleDeviceTransport({ authorization: `Bearer ${token}`, body: { operation: "fail", deviceId, commandId, leaseToken }, credentialStore, queue }), { ok: true, status: 200, accepted: true });
   assert.deepEqual(calls, [
-    ["claim", accountId, deviceId, 10_000],
-    ["renew", accountId, deviceId, commandId, leaseToken, "renew-one", 10_000],
-    ["ack", accountId, deviceId, commandId, leaseToken],
-    ["fail", accountId, deviceId, commandId, leaseToken],
+    ["claim", accountId, deviceId, 10_000, digest],
+    ["renew", accountId, deviceId, commandId, leaseToken, "renew-one", 10_000, digest],
+    ["ack", accountId, deviceId, commandId, leaseToken, digest],
+    ["fail", accountId, deviceId, commandId, leaseToken, digest],
   ]);
+});
+
+test("credential rotation or revocation between authentication and dispatch is fenced at the queue call", async () => {
+  const token = await credential();
+  const authenticatedDigest = await digestDeviceCredential(token);
+  let currentDigest = authenticatedDigest;
+  const queueCalls = [];
+  const queue = {
+    async claimNext(...args) { queueCalls.push(["claim", ...args]); return args[3] === currentDigest ? { commandId } : null; },
+    async renewLease(...args) { queueCalls.push(["renew", ...args]); return { renewed: args[6] === currentDigest }; },
+    async acknowledge(...args) { queueCalls.push(["ack", ...args]); return args[4] === currentDigest; },
+    async recordFailure(...args) { queueCalls.push(["fail", ...args]); return args[4] === currentDigest; },
+  };
+  const credentialStore = {
+    async authenticate(received) {
+      assert.equal(received, authenticatedDigest);
+      currentDigest = "f".repeat(64); // Simulate rotation after auth reads the old digest.
+      return { accountId, deviceId, active: true };
+    },
+  };
+  const racingOperations = [
+    { body: { operation: "claim", deviceId, leaseMs: 10_000 }, expected: { status: 200, claim: null } },
+    { body: { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew-race", leaseMs: 10_000 }, expected: { status: 409, renewal: { renewed: false } } },
+    { body: { operation: "ack", deviceId, commandId, leaseToken }, expected: { status: 409, accepted: false } },
+    { body: { operation: "fail", deviceId, commandId, leaseToken }, expected: { status: 409, accepted: false } },
+  ];
+  for (const { body, expected } of racingOperations) {
+    const response = await handleDeviceTransport({ authorization: `Bearer ${token}`, body, credentialStore, queue });
+    assert.equal(response.status, expected.status);
+    if (Object.hasOwn(expected, "claim")) assert.equal(response.claim, expected.claim);
+    if (Object.hasOwn(expected, "renewal")) assert.equal(response.renewal.renewed, expected.renewal.renewed);
+    if (Object.hasOwn(expected, "accepted")) assert.equal(response.accepted, expected.accepted);
+  }
+  assert.equal(queueCalls.length, 4);
+  assert.ok(queueCalls.every((call) => call.at(-1) === authenticatedDigest), "each atomic RPC receives the digest authenticated earlier");
+  assert.deepEqual(queueCalls.map((call) => call[0]), ["claim", "renew", "ack", "fail"]);
 });
 
 test("malformed, spoofed, revoked and mismatched credentials fail before queue access", async () => {
