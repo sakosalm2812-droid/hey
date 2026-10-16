@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
+import { subscribe as subscribeToEvent } from "../src/core/eventBus.js";
 import { OnboardingEngine, TutorialEngine } from "../src/core/onboardingEngine.js";
 import { getSetting } from "../src/core/settingsRegistry.js";
 import { WorkspaceEngine } from "../src/core/workspaceEngine.js";
@@ -9,8 +10,13 @@ class MemoryStorage {
   values = new Map();
   blockedReads = new Set();
   blockedWrites = new Set();
+  onSetItem = null;
   getItem(key) { return this.blockedReads.has(key) ? null : this.values.get(key) ?? null; }
-  setItem(key, value) { if (!this.blockedWrites.has(key)) this.values.set(key, String(value)); }
+  setItem(key, value) {
+    if (this.blockedWrites.has(key)) return;
+    this.values.set(key, String(value));
+    this.onSetItem?.(key, String(value));
+  }
   removeItem(key) { this.values.delete(key); }
   clear() { this.values.clear(); }
 }
@@ -67,6 +73,64 @@ test("onboarding and tutorial data remain private per account and reload from sc
     const restored = new OnboardingEngine();
     assert.deepEqual(restored.getProgress().starterSpaceSelections, ["personal", "work", "learning"]);
     assert.equal(restored.getCurrentStage(), "welcome");
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("tutorial mutations roll back on storage failure and discard results after an account switch", () => withStorage((storage) => {
+  const previousScope = "tutorial-persistence-previous";
+  setAccountScope(previousScope);
+  try {
+    setAccountScope("tutorial-persistence-owner");
+    const tutorial = new TutorialEngine();
+    tutorial.registerTutorial({ capabilityId: "first-tour", steps: ["one", "two"] });
+    tutorial.registerTutorial({ capabilityId: "switch-tour", steps: ["one"] });
+    const activeKey = getAccountStorageKey("hey_tutorial_progress");
+    const events = [];
+    const unsubs = ["tutorial.started", "tutorial.step_completed", "tutorial.skipped", "tutorial.completed"]
+      .map((name) => subscribeToEvent(name, () => events.push(name)));
+
+    storage.blockedWrites.add(activeKey);
+    const failedStart = tutorial.startTutorial("first-tour");
+    assert.deepEqual(failedStart, { error: "Could not safely save tutorial progress", status: "readback_failed" });
+    assert.equal(tutorial.getProgress("first-tour").startedAt, null);
+    assert.deepEqual(events, []);
+
+    storage.blockedWrites.delete(activeKey);
+    assert.ok(tutorial.startTutorial("first-tour").progress.startedAt);
+    storage.blockedWrites.add(activeKey);
+    const before = structuredClone(tutorial.getProgress("first-tour"));
+    assert.equal(tutorial.completeStep("first-tour", 0).status, "readback_failed");
+    assert.deepEqual(tutorial.getProgress("first-tour"), before);
+    assert.equal(tutorial.skipTutorial("first-tour").status, "readback_failed");
+    assert.deepEqual(tutorial.getProgress("first-tour"), before);
+    assert.deepEqual(events, ["tutorial.started"]);
+
+    storage.blockedWrites.delete(activeKey);
+    assert.equal(tutorial.completeStep("first-tour", 0).currentStep, 1);
+    assert.equal(tutorial.completeStep("first-tour", 1).currentStep, 2);
+    storage.blockedWrites.add(activeKey);
+    const completedSteps = structuredClone(tutorial.getProgress("first-tour"));
+    assert.equal(tutorial.completeTutorial("first-tour").status, "readback_failed");
+    assert.deepEqual(tutorial.getProgress("first-tour"), completedSteps);
+    assert.equal(tutorial.resetTutorial("first-tour").status, "readback_failed");
+    assert.deepEqual(tutorial.getProgress("first-tour"), completedSteps);
+    assert.deepEqual(events, ["tutorial.started", "tutorial.step_completed", "tutorial.step_completed"]);
+
+    storage.blockedWrites.delete(activeKey);
+    const nextScope = "tutorial-persistence-next-account";
+    const nextKey = getAccountStorageKey("hey_tutorial_progress", `account:${nextScope}`);
+    storage.onSetItem = (key) => {
+      if (key === activeKey) {
+        storage.onSetItem = null;
+        setAccountScope(nextScope);
+      }
+    };
+    const switched = tutorial.startTutorial("switch-tour");
+    assert.deepEqual(switched, { error: "Could not safely save tutorial progress", status: "account_scope_changed" });
+    assert.deepEqual(tutorial.getProgress("switch-tour"), { completedSteps: [], skipped: false, startedAt: null, completedAt: null });
+    assert.equal(storage.getItem(nextKey), null, "the old account's tutorial write must not populate the new account");
+    assert.deepEqual(events, ["tutorial.started", "tutorial.step_completed", "tutorial.step_completed"]);
+    unsubs.forEach((unsubscribe) => unsubscribe());
   } finally { setAccountScope(previousScope); }
 }));
 

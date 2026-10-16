@@ -640,21 +640,31 @@ export class TutorialEngine {
   constructor() {
     this.tutorials = new Map();
     this.progress = new Map();
+    this.accountScope = getAccountScope();
     this.load();
-    this.unsubscribeAccountScope = subscribeAccountScope(() => this.load());
+    this.unsubscribeAccountScope = subscribeAccountScope((_previousScope, nextScope) => {
+      this.accountScope = nextScope;
+      this.load();
+    });
   }
 
   load() {
+    const scope = getAccountScope();
+    this.accountScope = scope;
+    const progress = new Map();
     try {
-      this.progress.clear();
-      const stored = safeStorage.getItem(getAccountStorageKey(TUTORIAL_STORAGE_KEY));
+      const stored = safeStorage.getItem(getAccountStorageKey(TUTORIAL_STORAGE_KEY, scope));
+      if (scope !== getAccountScope() || scope !== this.accountScope) return;
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          this.progress = progress;
+          return;
+        }
         Object.entries(parsed).forEach(([key, value]) => {
           if (!/^[a-z0-9][a-z0-9_.:-]{0,99}$/i.test(key) || !value || typeof value !== "object" || Array.isArray(value)) return;
           const completedSteps = Array.isArray(value.completedSteps) ? value.completedSteps.filter((step) => Number.isInteger(step) && step >= 0 && step < 1000) : [];
-          this.progress.set(key, {
+          progress.set(key, {
             capabilityId: key,
             startedAt: typeof value.startedAt === "string" ? value.startedAt.slice(0, 64) : null,
             completedAt: typeof value.completedAt === "string" ? value.completedAt.slice(0, 64) : null,
@@ -664,17 +674,43 @@ export class TutorialEngine {
           });
         });
       }
+      if (scope === getAccountScope() && scope === this.accountScope) this.progress = progress;
     } catch (err) {
+      if (scope === getAccountScope() && scope === this.accountScope) this.progress = progress;
       console.warn("Failed to load tutorial progress:", err);
     }
   }
 
   save() {
+    const scope = this.accountScope;
+    if (scope !== getAccountScope()) return { success: false, status: "account_scope_changed" };
     try {
-      safeStorage.setItem(getAccountStorageKey(TUTORIAL_STORAGE_KEY), JSON.stringify(Object.fromEntries(this.progress)));
+      const serialized = JSON.stringify(Object.fromEntries(this.progress));
+      if (serialized.length > MAX_ONBOARDING_STORAGE_CHARS) return { success: false, status: "too_large" };
+      const key = getAccountStorageKey(TUTORIAL_STORAGE_KEY, scope);
+      safeStorage.setItem(key, serialized);
+      if (scope !== getAccountScope() || scope !== this.accountScope) return { success: false, status: "account_scope_changed" };
+      if (safeStorage.getItem(key) !== serialized) return { success: false, status: "readback_failed" };
+      if (scope !== getAccountScope() || scope !== this.accountScope) return { success: false, status: "account_scope_changed" };
+      return { success: true };
     } catch (err) {
       console.warn("Failed to save tutorial progress:", err);
+      return { success: false, status: "storage_error" };
     }
+  }
+
+  persistMutation(previousProgress, scope, failureMessage) {
+    const result = this.save();
+    if (result.success) return null;
+    if (scope === this.accountScope && scope === getAccountScope()) this.progress = previousProgress;
+    return { error: failureMessage, status: result.status };
+  }
+
+  snapshotProgress() {
+    return new Map([...this.progress].map(([capabilityId, progress]) => [capabilityId, {
+      ...progress,
+      completedSteps: [...progress.completedSteps],
+    }]));
   }
 
   registerTutorial(tutorial) {
@@ -692,6 +728,9 @@ export class TutorialEngine {
   startTutorial(capabilityId) {
     const tutorial = this.tutorials.get(capabilityId);
     if (!tutorial) return { error: "Tutorial not found" };
+    const scope = this.accountScope;
+    if (scope !== getAccountScope()) return { error: "Account scope changed; reload before starting the tutorial", status: "account_scope_changed" };
+    const previousProgress = this.snapshotProgress();
     
     const prog = { 
       capabilityId, 
@@ -701,7 +740,8 @@ export class TutorialEngine {
       skipped: false,
     };
     this.progress.set(capabilityId, prog);
-    this.save();
+    const failure = this.persistMutation(previousProgress, scope, "Could not safely save tutorial progress");
+    if (failure) return failure;
     
     publish("tutorial.started", { capabilityId, tutorial });
     return { tutorial, progress: prog };
@@ -710,12 +750,16 @@ export class TutorialEngine {
   completeStep(capabilityId, stepIndex) {
     const prog = this.progress.get(capabilityId);
     if (!prog) return { error: "Tutorial not started" };
+    const scope = this.accountScope;
+    if (scope !== getAccountScope()) return { error: "Account scope changed; reload before updating the tutorial", status: "account_scope_changed" };
+    const previousProgress = this.snapshotProgress();
     
     if (!prog.completedSteps.includes(stepIndex)) {
       prog.completedSteps.push(stepIndex);
     }
     prog.currentStep = Math.max(prog.currentStep, stepIndex + 1);
-    this.save();
+    const failure = this.persistMutation(previousProgress, scope, "Could not safely save tutorial progress");
+    if (failure) return failure;
     
     publish("tutorial.step_completed", { capabilityId, stepIndex, progress: prog });
     return prog;
@@ -724,10 +768,14 @@ export class TutorialEngine {
   skipTutorial(capabilityId) {
     const prog = this.progress.get(capabilityId);
     if (!prog) return { error: "Tutorial not started" };
+    const scope = this.accountScope;
+    if (scope !== getAccountScope()) return { error: "Account scope changed; reload before skipping the tutorial", status: "account_scope_changed" };
+    const previousProgress = this.snapshotProgress();
     
     prog.skipped = true;
     prog.completedAt = new Date().toISOString();
-    this.save();
+    const failure = this.persistMutation(previousProgress, scope, "Could not safely save tutorial progress");
+    if (failure) return failure;
     
     publish("tutorial.skipped", { capabilityId, progress: prog });
     return prog;
@@ -736,14 +784,18 @@ export class TutorialEngine {
   completeTutorial(capabilityId) {
     const prog = this.progress.get(capabilityId);
     if (!prog) return { error: "Tutorial not started" };
+    const scope = this.accountScope;
+    if (scope !== getAccountScope()) return { error: "Account scope changed; reload before completing the tutorial", status: "account_scope_changed" };
     
     const tutorial = this.tutorials.get(capabilityId);
     if (tutorial && prog.completedSteps.length < tutorial.steps.length) {
       return { error: "Not all steps completed" };
     }
     
+    const previousProgress = this.snapshotProgress();
     prog.completedAt = new Date().toISOString();
-    this.save();
+    const failure = this.persistMutation(previousProgress, scope, "Could not safely save tutorial completion");
+    if (failure) return failure;
     
     publish("tutorial.completed", { capabilityId, progress: prog });
     recordAudit({ action: "tutorial.completed", status: "completed", metadata: { capabilityId } });
@@ -751,8 +803,11 @@ export class TutorialEngine {
   }
 
   resetTutorial(capabilityId) {
+    const scope = this.accountScope;
+    if (scope !== getAccountScope()) return { error: "Account scope changed; reload before resetting tutorials", status: "account_scope_changed" };
+    const previousProgress = this.snapshotProgress();
     this.progress.delete(capabilityId);
-    this.save();
+    return this.persistMutation(previousProgress, scope, "Could not safely reset tutorial progress");
   }
 }
 
