@@ -22,12 +22,22 @@ test("Fusion permission, configuration, and disagreement responses stay visible 
   assert.match(getHEYChatError({ status: 499 }, {}, true), /cancelled before a verified response/i);
   assert.equal(getHEYChatError({ status: 409 }, { error: "x".repeat(300) }, true).length, 240);
   const interruptedReceipt = {
-    fusion: { cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1 } },
+    fusion: { cost: { providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1, providerAttempts: [
+      { providerId: "openai", modelId: "gpt-fixture", role: "primary", usageStatus: "reported" },
+      { providerId: "gemini", modelId: "gemini-fixture", role: "checker", usageStatus: "unknown" },
+    ] } },
   };
   const interruptedMessage = getHEYChatError({ status: 409 }, { error: "The independent provider check timed out.", ...interruptedReceipt }, true);
   assert.match(interruptedMessage, /Provider-reported usage: \$0\.0030 from 1 metered call/);
   assert.match(interruptedMessage, /Usage for 1 interrupted or unmetered call.*unknown/i);
   assert.match(interruptedMessage, /final billing is unconfirmed/i);
+  assert.match(interruptedMessage, /OpenAI gpt-fixture \(primary; usage reported\)/);
+  assert.match(interruptedMessage, /Gemini gemini-fixture \(checker; usage unknown\)/);
+  const unsafeAttempts = getHEYChatError({ status: 409 }, { error: "Timed out.", fusion: { cost: {
+    providerReportedUsd: 0.003, reservedUsd: 0.04, requestCapUsd: 0.05, callsDispatched: 2, callsMetered: 1,
+    providerAttempts: [{ providerId: "private diagnostic", modelId: "secret-key", role: "primary", usageStatus: "reported" }],
+  } } }, true);
+  assert.doesNotMatch(unsafeAttempts, /secret-key|private diagnostic/);
   const notDispatched = getHEYChatError({ status: 409 }, {
     error: "The request exceeded its cost budget.",
     fusion: { cost: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: 0.05, callsDispatched: 0, callsMetered: 0 } },

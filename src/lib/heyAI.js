@@ -86,6 +86,28 @@ function isPlainDataRecord(value) {
   });
 }
 
+const FUSION_PROVIDER_LABELS = Object.freeze({ openai: "OpenAI", gemini: "Gemini", openrouter: "OpenRouter", groq: "Groq" });
+
+function parseFusionProviderAttempts(value, callsDispatched, callsMetered) {
+  if (!Array.isArray(value) || value.length !== callsDispatched || value.length > 4) return null;
+  const attempts = [];
+  for (const attempt of value) {
+    if (!isPlainDataRecord(attempt) || !Object.hasOwn(FUSION_PROVIDER_LABELS, attempt.providerId) ||
+      typeof attempt.modelId !== "string" || attempt.modelId.length < 1 || attempt.modelId.length > 120 ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/_-]*$/.test(attempt.modelId) ||
+      !["primary", "checker", "fallback"].includes(attempt.role) ||
+      !["reported", "unknown"].includes(attempt.usageStatus)) return null;
+    attempts.push(Object.freeze({
+      providerId: attempt.providerId,
+      modelId: attempt.modelId,
+      role: attempt.role,
+      usageStatus: attempt.usageStatus,
+    }));
+  }
+  if (attempts.filter((attempt) => attempt.usageStatus === "reported").length !== callsMetered) return null;
+  return Object.freeze(attempts);
+}
+
 async function sha256Hex(value) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -150,12 +172,16 @@ function getFusionFailureCostSummary(details) {
     if (cost.callsDispatched === 0) {
       return ` No provider call was dispatched; $0.0000 of the $${cost.requestCapUsd.toFixed(2)} request budget was reserved.`;
     }
+    const attempts = parseFusionProviderAttempts(cost.providerAttempts, cost.callsDispatched, cost.callsMetered);
     const unknownCalls = cost.callsDispatched - cost.callsMetered;
     const usage = ` Provider-reported usage: $${cost.providerReportedUsd.toFixed(4)} from ${cost.callsMetered} metered call(s).`;
     const reserve = ` Up to $${cost.reservedUsd.toFixed(4)} was reserved from the $${cost.requestCapUsd.toFixed(2)} request cap.`;
+    const attemptSummary = attempts
+      ? ` Provider attempts: ${attempts.map((attempt) => `${FUSION_PROVIDER_LABELS[attempt.providerId]} ${attempt.modelId} (${attempt.role}; usage ${attempt.usageStatus})`).join("; ")}.`
+      : "";
     return unknownCalls > 0
-      ? `${usage}${reserve} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
-      : `${usage}${reserve} Final provider billing may differ.`;
+      ? `${usage}${reserve}${attemptSummary} Usage for ${unknownCalls} interrupted or unmetered call(s) is unknown; final billing is unconfirmed.`
+      : `${usage}${reserve}${attemptSummary} Final provider billing may differ.`;
   } catch {
     return "";
   }

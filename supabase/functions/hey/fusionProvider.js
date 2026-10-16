@@ -359,7 +359,7 @@ export async function runFusionChatRequest({
     status: "budget_exhausted",
     reason: "request_cannot_fit_provider_price_cap",
     calls: 0,
-    costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0 }),
+    costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0, providerAttempts: Object.freeze([]) }),
   };
   const selectedProviders = pricedProviders.slice(0, 2);
   if (selectedProviders.reduce((total, provider) => total + provider.reservedCostUsd, 0) > pricingConfig.budgetUsd) {
@@ -367,7 +367,7 @@ export async function runFusionChatRequest({
       status: "budget_exhausted",
       reason: "independent_calls_exceed_server_budget",
       calls: 0,
-      costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0 }),
+      costReceipt: Object.freeze({ providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricingConfig.budgetUsd, callsDispatched: 0, callsMetered: 0, providerAttempts: Object.freeze([]) }),
     };
   }
   if (getCurrentEntitlements !== undefined && typeof getCurrentEntitlements !== "function") {
@@ -389,6 +389,7 @@ export async function runFusionChatRequest({
   let callsMetered = 0;
   let providerReportedUsd = 0;
   let reservedUsd = 0;
+  const providerAttempts = [];
   const result = await runProviderFusion({
     prompt: "Authenticated server-side HEY chat fusion request.",
     intent: "conversation",
@@ -411,18 +412,22 @@ export async function runFusionChatRequest({
     },
     maxCostUsd: pricingConfig.budgetUsd,
     minConfidence: pricingConfig.minConfidence,
-    invoke: async ({ providerId, candidate, maxCostUsd, signal: providerSignal }) => {
+    invoke: async ({ providerId, candidate, maxCostUsd, role, signal: providerSignal }) => {
       const provider = selectedProviders.find((item) => item.id === providerId);
       const attempt = attempts.find((item) => item.id === providerId && item.model === provider?.model && item.key);
       if (!provider || !attempt || !Array.isArray(messages)) throw new Error("Provider configuration is unavailable");
+      let attemptReceipt;
       const onDispatch = () => {
         callsDispatched += 1;
         reservedUsd += maxCostUsd;
+        attemptReceipt = { providerId, modelId: provider.model, role, usageStatus: "unknown" };
+        providerAttempts.push(attemptReceipt);
       };
       if (typeof getCurrentEntitlements !== "function") {
         const output = await requestProvider({ provider, attempt, messages, candidate, signal: providerSignal, fetchImpl, onDispatch });
         callsMetered += 1;
         providerReportedUsd += output.costUsd;
+        attemptReceipt.usageStatus = "reported";
         return output;
       }
 
@@ -472,6 +477,7 @@ export async function runFusionChatRequest({
         }
         callsMetered += 1;
         providerReportedUsd += result.costUsd;
+        attemptReceipt.usageStatus = "reported";
         return result;
       } catch (error) {
         if (authorityFailure) {
@@ -491,6 +497,7 @@ export async function runFusionChatRequest({
     requestCapUsd: pricingConfig.budgetUsd,
     callsDispatched,
     callsMetered,
+    providerAttempts: Object.freeze(providerAttempts.map((attempt) => Object.freeze({ ...attempt }))),
   });
   if (result.status !== "complete") return { ...result, costReceipt };
   if (getCurrentEntitlements !== undefined) {

@@ -461,6 +461,7 @@ test("fusion disagreement returns no answer and stale account scope cancels befo
       requestCapUsd: pricing.budgetUsd,
       callsDispatched: 0,
       callsMetered: 0,
+      providerAttempts: [],
     });
   });
 });
@@ -649,6 +650,7 @@ test("server budget prevents the independent provider call when its reservation 
     requestCapUsd: constrainedPricing.budgetUsd,
     callsDispatched: 0,
     callsMetered: 0,
+    providerAttempts: [],
   });
 });
 
@@ -663,6 +665,10 @@ test("a failed checker returns a bounded cost receipt with unknown usage marked 
   assert.equal(result.costReceipt.providerReportedUsd, 0.00009);
   assert.equal(result.costReceipt.callsDispatched, 2);
   assert.equal(result.costReceipt.callsMetered, 1);
+  assert.deepEqual(result.costReceipt.providerAttempts, [
+    { providerId: "gemini", modelId: "fixture-gemini", role: "primary", usageStatus: "unknown" },
+    { providerId: "openai", modelId: "fixture-openai", role: "fallback", usageStatus: "reported" },
+  ]);
   assert.equal(result.costReceipt.requestCapUsd, pricing.budgetUsd);
   assert.ok(result.costReceipt.reservedUsd >= result.costReceipt.providerReportedUsd);
   assert.ok(result.costReceipt.reservedUsd <= pricing.budgetUsd);
@@ -812,7 +818,7 @@ test("provider grants are revalidated after provider work before a fused answer 
       reason: "authorization_revalidation_failed",
       calls: 0,
       reservedCostUsd: 0,
-      costReceipt: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricing.budgetUsd, callsDispatched: 0, callsMetered: 0 },
+      costReceipt: { providerReportedUsd: 0, reservedUsd: 0, requestCapUsd: pricing.budgetUsd, callsDispatched: 0, callsMetered: 0, providerAttempts: [] },
     });
     assert.equal(calls, 0);
   });
