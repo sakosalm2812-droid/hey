@@ -213,6 +213,26 @@ test("a rewrite result arriving after account change is discarded", async () => 
   setAccountScope(null);
 });
 
+test("account change settles a provider that ignores abort without waiting for its timeout", async () => {
+  setAccountScope("edit-account-f");
+  let resolveRewrite;
+  let providerSignal;
+  const runtime = createDictationEditSession({ rewriteTimeoutMs: 5000, rewriteProvider: { proposeRewrite(input) {
+    providerSignal = input.signal;
+    return new Promise((resolve) => { resolveRewrite = resolve; });
+  } } });
+  const pending = runtime.propose(proposalInput({ sourceText: "private note", utterance: "Rewrite this clearly" }));
+  while (!resolveRewrite) await Promise.resolve();
+
+  setAccountScope("edit-account-g");
+  assert.equal(providerSignal.aborted, true);
+  const result = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve("still_pending"), 100))]);
+  assert.equal(result.status, "session_ended");
+  resolveRewrite({ text: "late result after sign-out" });
+  runtime.destroy();
+  setAccountScope(null);
+});
+
 test("a stalled rewrite provider is aborted and returns a recoverable timeout without a proposal", async () => {
   let resolveRewrite;
   let providerSignal;

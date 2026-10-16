@@ -170,6 +170,7 @@ export function createDictationEditSession(options = {}) {
   const startingScope = getAccountScope();
   const proposals = new WeakMap();
   const controllers = new Set();
+  const sessionEndWaiters = new Set();
   const rewrite = readRewriteMethod(rewriteProvider);
   let closed = false;
   let generation = 0;
@@ -187,6 +188,8 @@ export function createDictationEditSession(options = {}) {
     generation += 1;
     controllers.forEach((controller) => controller.abort());
     controllers.clear();
+    sessionEndWaiters.forEach((notify) => notify());
+    sessionEndWaiters.clear();
     unsubscribe();
   }
 
@@ -251,6 +254,10 @@ export function createDictationEditSession(options = {}) {
         if (typeof AbortController !== "function") return fail("provider_unavailable", "cancellation_unavailable");
         const controller = new AbortController();
         controllers.add(controller);
+        let rejectSessionEnd;
+        const sessionEnded = new Promise((_, reject) => { rejectSessionEnd = reject; });
+        const notifySessionEnded = () => rejectSessionEnd(new Error("Dictation edit session ended."));
+        sessionEndWaiters.add(notifySessionEnded);
         let cancelled = false;
         let rejectCancellation;
         const cancellation = new Promise((_, reject) => { rejectCancellation = reject; });
@@ -281,7 +288,7 @@ export function createDictationEditSession(options = {}) {
               reject(new Error("Rewrite provider timed out."));
             }, rewriteTimeoutMs);
           });
-          proposedText = readProviderText(await Promise.race([rewriteRequest, timeout, cancellation]));
+          proposedText = readProviderText(await Promise.race([rewriteRequest, timeout, cancellation, sessionEnded]));
         } catch {
           if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
           if (cancelled) return fail("cancelled", "rewrite_cancelled_by_user");
@@ -291,6 +298,7 @@ export function createDictationEditSession(options = {}) {
         } finally {
           if (timeoutId !== undefined) clearTimeout(timeoutId);
           request.cancelSignal?.removeEventListener("abort", cancelRewrite);
+          sessionEndWaiters.delete(notifySessionEnded);
           controllers.delete(controller);
         }
         if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");

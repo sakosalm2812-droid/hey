@@ -17,6 +17,8 @@ This branch owns the edit-proposal contract and its failure behavior. The shared
 
 The selection digest is a host-computed binding token; do not treat it as authorization. Confirmation still requires an explicit user action and fresh account/app/target/text/digest checks. The caller owns editor mutation and must verify the resulting selection text before reporting success.
 
+If the account-scoped edit session closes while a rewrite is pending, the runtime aborts the provider signal and settles the caller with `session_ended` immediately, even when the provider ignores abort. A late provider result cannot create a preview. Hosts should discard the pending edit and require fresh selection/context after sign-in or session recovery.
+
 Aborting `cancelSignal` during provider work aborts the provider signal and returns `status: "cancelled"` with no preview. A pre-aborted signal prevents provider invocation, and late provider completion cannot revive a cancelled proposal. Cancellation leaves the selected source unchanged and does not insert or submit text. Account changes continue to close the session and return `session_ended`.
 
 ## Verification and current limit
