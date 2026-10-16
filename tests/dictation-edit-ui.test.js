@@ -66,6 +66,19 @@ test("voice edit UI fences account changes, supports cancel, and never submits",
   assert.match(dictation, /if \(!onCapture\) setStatus\(translateRef\.current\("chat\.dictation\.inserted"\)\)/);
 });
 
+test("visible cancellation aborts in-flight edit work before and during provider calls", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  assert.match(control, /const editAbortControllerRef = useRef\(null\)/);
+  assert.match(control, /editAbortControllerRef\.current\?\.abort\(\)/);
+  assert.match(control, /cancelSignal: editAbortController\.signal/);
+  assert.match(control, /if \(editAbortController\.signal\.aborted \|\| generationRef\.current !== generation\) return/);
+  assert.match(control, /onClick=\{\(\) => discard\("Edit cancelled\. Your draft is unchanged\."\)\}/);
+  assert.match(control, /editAbortControllerRef\.current\?\.abort\(\)[\s\S]*setSelection\(null\)/);
+  const runtimeTests = await source("./dictation-edit-proposals.test.js");
+  assert.match(runtimeTests, /a user AbortSignal aborts provider work and late output cannot create a preview/);
+  assert.match(runtimeTests, /pre-aborted rewrite requests never disclose source text to the provider/);
+});
+
 test("voice edit does not mutate draft until the separate insertion action", async () => {
   const control = await source("../src/components/chat/DictationEditControl.jsx");
   const insertion = control.slice(control.indexOf("async function insertConfirmed()"), control.indexOf("useEffect(() => {\n    const onSelection"));

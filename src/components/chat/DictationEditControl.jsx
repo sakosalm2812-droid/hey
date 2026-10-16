@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createDictationEditSession } from "../../lib/dictationEditProposals.js";
 import { dictationPreferenceStore } from "../../lib/dictationPreferences.js";
 import { getAccountScope, subscribeAccountScope } from "../../core/accountScope.js";
@@ -18,17 +18,20 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const sessionRef = useRef(null);
+  const editAbortControllerRef = useRef(null);
   const accountRef = useRef(getAccountScope());
   const generationRef = useRef(0);
 
-  function refreshSelection() {
+  const refreshSelection = useCallback(() => {
     const next = readSelectionSnapshot(inputRef.current);
     setSelection(next);
     return next;
-  }
+  }, [inputRef]);
 
-  function discard(message = "") {
+  const discard = useCallback((message = "") => {
     generationRef.current += 1;
+    editAbortControllerRef.current?.abort();
+    editAbortControllerRef.current = null;
     sessionRef.current?.destroy();
     sessionRef.current = null;
     setProposal(null);
@@ -36,13 +39,15 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setBusy(false);
     setStatus(message);
     refreshSelection();
-  }
+  }, [refreshSelection]);
 
   useEffect(() => {
     accountRef.current = getAccountScope();
     const unsubscribe = subscribeAccountScope((_previous, next) => {
       accountRef.current = next;
       generationRef.current += 1;
+      editAbortControllerRef.current?.abort();
+      editAbortControllerRef.current = null;
       sessionRef.current?.destroy();
       sessionRef.current = null;
       setSelection(null);
@@ -53,6 +58,8 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     });
     return () => {
       unsubscribe();
+      editAbortControllerRef.current?.abort();
+      editAbortControllerRef.current = null;
       sessionRef.current?.destroy();
       sessionRef.current = null;
     };
@@ -60,7 +67,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
 
   useEffect(() => {
     if (disabled) discard();
-  }, [disabled]);
+  }, [disabled, discard]);
 
   async function createPreview(instruction) {
     const input = inputRef.current;
@@ -71,12 +78,16 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       return;
     }
     const generation = ++generationRef.current;
+    editAbortControllerRef.current?.abort();
+    const editAbortController = new AbortController();
+    editAbortControllerRef.current = editAbortController;
     setBusy(true);
     setStatus("Preparing a preview…");
     try {
       const digest = await digestSelection(snapshot.targetId, snapshot.sourceText);
       if (!digest) throw new Error("Secure selection checks are unavailable in this browser.");
-      if (generationRef.current !== generation || getAccountScope() !== scope || !selectionStillMatches(inputRef.current, snapshot)) {
+      if (editAbortController.signal.aborted || generationRef.current !== generation) return;
+      if (getAccountScope() !== scope || !selectionStillMatches(inputRef.current, snapshot)) {
         discard("The selection changed. Select the text again and retry.");
         return;
       }
@@ -92,6 +103,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         utterance: instruction,
         targetId: snapshot.targetId,
         selectionDigest: digest,
+        cancelSignal: editAbortController.signal,
       });
       if (generationRef.current !== generation || getAccountScope() !== scope) {
         session.destroy();
@@ -119,6 +131,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         setStatus(error?.message || "Could not prepare a preview. Your draft is unchanged.");
       }
     } finally {
+      if (editAbortControllerRef.current === editAbortController) editAbortControllerRef.current = null;
       if (generationRef.current === generation) setBusy(false);
     }
   }
@@ -198,7 +211,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       input?.removeEventListener("keyup", onSelection);
       input?.removeEventListener("mouseup", onSelection);
     };
-  }, [inputRef, proposal, selection]);
+  }, [discard, inputRef, proposal, refreshSelection, selection]);
 
   if (!userId || !selection || disabled) return null;
   return (
