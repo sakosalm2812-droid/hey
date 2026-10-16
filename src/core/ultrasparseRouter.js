@@ -14,6 +14,7 @@ const MAX_QUERY_LENGTH = 4096;
 const MAX_EXPERTS = 3;
 const MAX_CATALOG_EXPERTS = 10_000;
 const MAX_CATALOG_TERMS = 250_000;
+export const ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS = 4_000_000;
 const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
 const TOKEN_EXPERT_INDEX = new Map();
 const TOKEN_EXPERT_MASK_INDEX = new Map();
@@ -88,10 +89,16 @@ function readCatalogExpert(value) {
   const id = idDescriptor.value;
   if (typeof id !== "string" || /^[a-z0-9][a-z0-9._-]{0,63}$/i.exec(id)?.[0] !== id) throw new TypeError("Invalid expert id");
   const terms = readCatalogArray(termsDescriptor.value, "expert terms", 31);
+  let termCharacterCount = 0;
+  for (const term of terms) {
+    if (typeof term !== "string") throw new TypeError("Invalid expert terms");
+    termCharacterCount += term.length;
+    if (termCharacterCount > ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS) throw new TypeError("Invalid expert terms");
+  }
   if (terms.some((term) => typeof term !== "string" || /^[a-z0-9]+$/.exec(term)?.[0] !== term) || new Set(terms).size !== terms.length) {
     throw new TypeError("Invalid expert terms");
   }
-  return Object.freeze({ id, terms: Object.freeze(terms) });
+  return Object.freeze({ id, terms: Object.freeze(terms), termCharacterCount });
 }
 
 /**
@@ -103,10 +110,13 @@ function readCatalogExpert(value) {
 export function createUltraSparseSelector(catalog) {
   const definitions = readCatalogArray(catalog, "expert catalog", MAX_CATALOG_EXPERTS);
   let totalTerms = 0;
+  let totalTermCharacters = 0;
   const experts = definitions.map((definition) => {
     const expert = readCatalogExpert(definition);
     totalTerms += expert.terms.length;
     if (totalTerms > MAX_CATALOG_TERMS) throw new TypeError("Invalid expert catalog");
+    totalTermCharacters += expert.termCharacterCount;
+    if (totalTermCharacters > ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS) throw new TypeError("Invalid expert catalog");
     return expert;
   });
   const ids = new Set(experts.map(({ id }) => id));

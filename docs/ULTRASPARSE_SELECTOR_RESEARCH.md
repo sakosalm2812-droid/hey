@@ -138,3 +138,9 @@ The same fingerprint benchmark ran on the early-stop implementation and retained
 | 2,000 | 115,948.9 | 4,729.6 | 225.7 / 215 / 236.9 | 17,584.3 / 17,855.5 / 16,308.3 |
 
 The benchmark marked warmed selection below 1 ms in that run. The large catalog-construction and cold-call outliers are unexplained because host load is not recorded. Cold maxima are individual observations across six cases per trial, not cold p95. No inference or end-to-end claim follows from these measurements.
+
+## Vocabulary character budget
+
+The catalog now has a cumulative vocabulary limit of 4,000,000 ASCII characters in addition to its expert and term-count caps. `readCatalogExpert` totals term lengths before regex validation and rejects a single expert over the same cap; catalog creation accumulates the validated lengths and stops after the first expert that exceeds the total. This bounds retained term text and limits regex work on accepted or rejected catalogs. Tests cover two individually valid 31-term experts whose combined vocabulary exceeds the cap, plus a single token longer than the cap.
+
+The full benchmark reports `catalogTermCharacters` and the configured limit alongside catalog construction, index preparation, first selection and warmed p95. On workload `80a5cb5f9ce90c0b547220e0a3450abc8014ba2f7f8e0936b9fc509a1cdf024e`, exact parity passed for 60,000 calls each of linear, indexed and masked selectors, and the warmed sub-millisecond flag was true. Across 5/20/100/500/2,000 experts the generated catalog term characters were 300/1,260/6,540/35,340/149,340. At 2,000 experts, construction measured 22,591.8 μs, index preparation 50,734.3 μs, warmed p95 by trial 206.3/211.4/200.3 μs, and first-selection maxima 34,068.6/11,649.8/9,769.9 μs. The setup and cold tails varied substantially and are not p95 performance claims; host load is not recorded. No inference or end-to-end performance is measured.

@@ -5,6 +5,7 @@ import {
   selectUltraSparseExperts,
   selectUltraSparseExpertsIndexed,
   selectUltraSparseExpertsMasked,
+  ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS,
 } from "../src/core/ultrasparseRouter.js";
 
 const workload = [
@@ -105,6 +106,10 @@ function benchmarkScaling() {
   const expertCounts = smokeMode ? [5, 20, 100] : [5, 20, 100, 500, 2_000];
   return expertCounts.map((expertCount) => {
     const { catalog, cases } = createScalingWorkload(expertCount);
+    const catalogTermCharacters = catalog.reduce(
+      (total, expert) => total + expert.terms.reduce((length, term) => length + term.length, 0),
+      0,
+    );
     const preparationStarted = process.hrtime.bigint();
     const selector = createUltraSparseSelector(catalog);
     const catalogConstructionMicroseconds = Number(process.hrtime.bigint() - preparationStarted) / 1e3;
@@ -231,6 +236,9 @@ function benchmarkScaling() {
       maximumTermIndex,
       maximumPackedPostingValue,
       packedPostingFitsUint32: maximumPackedPostingValue <= 0xffff_ffff,
+      catalogTermCharacters,
+      catalogTermCharacterBudget: ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS,
+      catalogTermCharacterBudgetRespected: catalogTermCharacters <= ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS,
       selectorStrategy: selector.strategy,
       catalogConstructionMicroseconds,
       indexedCandidatePreparationMicroseconds,

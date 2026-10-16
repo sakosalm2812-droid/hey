@@ -8,6 +8,7 @@ import {
   selectUltraSparseExperts,
   selectUltraSparseExpertsIndexed,
   selectUltraSparseExpertsMasked,
+  ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS,
 } from "../src/core/ultrasparseRouter.js";
 import { clearProviders } from "../src/core/providerRegistry.js";
 
@@ -224,6 +225,20 @@ test("catalog term budget stops deep reads at the first over-budget expert", () 
   assert.equal(inspectedTermArrays, Math.floor(250_000 / 31) + 1);
 });
 
+test("catalog vocabulary character budget rejects pathological token shapes", () => {
+  const longTerms = Array.from({ length: 31 }, (_, index) => `t${index}${"x".repeat(64_514)}`);
+  const catalog = [
+    { id: "large-a", terms: longTerms },
+    { id: "large-b", terms: longTerms },
+  ];
+  assert.ok(longTerms.reduce((total, term) => total + term.length, 0) < ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS);
+  assert.throws(() => createUltraSparseSelector(catalog), /Invalid expert catalog/);
+
+  assert.throws(() => createUltraSparseSelector([
+    { id: "oversized-token", terms: ["x".repeat(ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS + 1)] },
+  ]), /Invalid expert terms/);
+});
+
 test("catalog selector fails closed on hostile, duplicate, sparse, and oversized definitions", () => {
   assert.throws(() => createUltraSparseSelector(null), /Invalid expert catalog/);
   assert.throws(() => createUltraSparseSelector([new Array(1)]), /Invalid expert definition/);
@@ -386,6 +401,9 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
     assert.equal(scaling.maximumTermIndex, scaling.termsPerExpert - 1);
     assert.equal(scaling.maximumPackedPostingValue, ((scaling.expertCount - 1) << 5) | (scaling.termsPerExpert - 1));
     assert.equal(scaling.packedPostingFitsUint32, true);
+    assert.ok(Number.isFinite(scaling.catalogTermCharacters));
+    assert.equal(scaling.catalogTermCharacterBudget, ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS);
+    assert.equal(scaling.catalogTermCharacterBudgetRespected, true);
     assert.equal(scaling.coldAdaptiveFirstSelection.selectorConstructionIncluded, false);
     assert.equal(scaling.coldAdaptiveFirstSelection.lazyIndexPreparationIncluded, scaling.expertCount >= 20);
     assert.equal(scaling.coldAdaptiveFirstSelection.samplesPerCasePerTrial, 1);
