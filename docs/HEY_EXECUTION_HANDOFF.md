@@ -1,6 +1,6 @@
 ## Current execution checkpoint — 2026-10-16, integrated specialist wave 2
 
-This checkpoint supersedes the older checkpoint below. Coordinator branch `codex/resume-emergency-2026-10-14` is at `13b90be54a02c3571f3d17aa3f998b4f29d2036f` before this documentation commit. Eleven existing specialist chats were resumed concurrently using GPT-6 Luna where selectable; each implementation stayed in an isolated worktree and only reviewed commits were cherry-picked. Current coordinator tree preserves the untracked `docs/requirements/v3-agent-pack/` extraction because a path exceeds Windows Git limits; do not stage or delete it. User-supplied V3 source files/ZIP remain committed under `docs/requirements/v3-source/`.
+This checkpoint supersedes the older checkpoint below. Coordinator branch `codex/resume-emergency-2026-10-14` is at `a8f5b47f8b01e9e4772593ea11891614e1168281` before this documentation commit; latest pushed coordinator checkpoint is `8276bd0daab2cb0f9dfd7ba8514c21320302b8ca`. Eleven existing specialist chats were resumed concurrently using GPT-6 Luna where selectable; each implementation stayed in an isolated worktree and only reviewed commits were cherry-picked. Current coordinator tree preserves the untracked `docs/requirements/v3-agent-pack/` extraction because a path exceeds Windows Git limits; do not stage or delete it. User-supplied V3 source files/ZIP remain committed under `docs/requirements/v3-source/`.
 
 ### Newly integrated implementations
 
@@ -15,10 +15,11 @@ This checkpoint supersedes the older checkpoint below. Coordinator branch `codex
 - `087747a` adds per-Space favorite tool/widget/shortcut preferences with revision-checked saves and stale-edit review; account-local simulated storage only.
 - `13b90be` compacts UltraSparse numeric postings; two same-workload runs reported warm adaptive p95 208–248 microseconds and reduced 2,000-expert preparation from 6.36 ms baseline to 4.69/5.23 ms. Cold first-selection observations varied 14.5–35.3 ms after change; this is not cold p95 or inference evidence.
 - `4d35757` fences Tool Library retries to the failed session ID.
+- `a8f5b47` adds a per-request accessible exact-model selector. It only sends provider/model pairs from the current entitled catalog using `providerSelection`; Automatic and Lower cost remain profile choices, stale selections block send, and Fusion stays separate.
 
 ### Verification and actual app evidence
 
-- After these integrations, `npm test` **619/619 passed**; `npm run build` passed (2,767 modules); changed-file ESLint passed; `git diff --check` passed. Build still skips sitemap without `SITE_URL` and reports the pre-existing `src/core/contextManager.js` mixed-import warning. ESLint does not configure Edge `.ts`; Deno/Supabase CLI are unavailable.
+- After these integrations, `npm test` **623/623 passed**; `npm run build` passed (2,767 modules); changed-file ESLint passed; `git diff --check` passed. Build still skips sitemap without `SITE_URL` and reports the pre-existing `src/core/contextManager.js` mixed-import warning. ESLint does not configure Edge `.ts`; Deno/Supabase CLI are unavailable.
 - Browser opened the real local app at `http://127.0.0.1:5175/login`. It displays “Authentication is not configured in this local build. Sign-in and password reset need the HEY Supabase URL and public anon key”; Enter HEY is disabled. This proves local route/UI rendering only. Authenticated journeys, real DB/RLS, provider discovery/inference, microphone/camera permission, native runtime and production deployment remain **UNVERIFIED**. No production-readiness claim.
 - All 47 program steps remain In progress/Incomplete; none is production-certified complete.
 
@@ -26,7 +27,7 @@ This checkpoint supersedes the older checkpoint below. Coordinator branch `codex
 
 | # | Existing task reference | Worker branch / SHA | State |
 |---:|---|---|---|
-| 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/chat-exact-model-selector` / uncommitted isolated UI changes on `99f6ae5` | Active; finish checks/commit. Uses exact `providerSelection`, profile `providerProfile`. |
+| 01 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/chat-exact-model-selector` `92595b5` | Completed; integrated as `a8f5b47`; focused UI/catalog suite 15/15, full suite 623/623. No signed-in browser/provider verification. |
 | 02 | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/spaces-preferences-ui` `55d474b`; `codex/next-02-onboarding-spaces` `2fe21b3` | Idle/completed; integrated as `087747a` and `78323df`. |
 | 03 | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/next-03-retry-fencing` `3d86310` | Idle/completed; integrated `4d35757`. |
 | 04 | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/edge-auth-recovery-99f6` `5c5c09f` | Idle/completed; integrated `f75a585`; Deno/live Edge unverified. |
@@ -38,7 +39,7 @@ This checkpoint supersedes the older checkpoint below. Coordinator branch `codex
 | 10 | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/ultrasparse-prewarm-99f6ae5` `e7e3547` | Idle/completed; integrated `13b90be`; synthetic benchmark only. |
 | 11 | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/fusion-recovery-99f6ae5` `57ddc67` | Idle/completed; integrated `63b3294`; no live inference. |
 
-**Next:** finish/review Chat 01's exact-model UI commit; run full suite/build/lint again after integration; update this file; commit and fast-forward push. Continue implementing vertical product journeys while leaving live service/device requirements explicitly unverified until their exact credentials and devices are available.
+**Next:** commit and fast-forward push this handoff; resume the existing specialist chats concurrently on isolated worktrees from this checkpoint, assigning distinct missing user journeys from the V3 status map. Review every branch before cherry-picking, keep actual service/device gaps explicit, and run combined verification after each integration batch.
 
 ---
 
