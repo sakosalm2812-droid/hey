@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
+import { readProviderJson } from "./providerResponse.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
 import {
   filterEntitledProviderAttempts,
@@ -133,19 +134,25 @@ async function callProvider(
           body: JSON.stringify({ model: provider.model, messages, temperature: 0.7, max_tokens: maxTokens }),
         }, remaining);
 
-      const data = await response.json();
+      const parsedResponse = await readProviderJson(response);
+      if (parsedResponse.status !== "ok") {
+        lastError = `${provider.id}: ${parsedResponse.status === "too_large" ? "response too large" : "invalid response"}`;
+        console.error("HEY provider response rejected", provider.id, parsedResponse.status);
+        continue;
+      }
+      const data = parsedResponse.data;
       if (response.ok) {
         if (authorizeProvider && !await authorizeProvider(provider)) {
           throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
         }
         return { data, providerId: provider.id, model: provider.model };
       }
-      lastError = `${provider.id}: ${String(data?.error?.message || response.status)}`;
-      console.error("HEY provider error", lastError);
+      lastError = `${provider.id}: HTTP ${response.status}`;
+      console.error("HEY provider returned an error", provider.id, response.status);
     } catch (error) {
       if (error?.providerEntitlementDenied || error?.providerAuthorizationUnavailable) throw error;
-      lastError = `${provider.id}: ${String(error)}`;
-      console.error("HEY provider request error", lastError);
+      lastError = `${provider.id}: request failed`;
+      console.error("HEY provider request failed", provider.id);
     }
   }
 
