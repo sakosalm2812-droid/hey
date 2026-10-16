@@ -89,6 +89,8 @@ function modelEvaluation(modelRecord, { quality = 0.9, latencyP95Ms = 800, input
 test("evaluation reports derive content-free model quality, p95 latency, and measured token cost", async () => {
   const report = await createEvaluationReport(validEvaluationRun());
   assert.equal(report.modelId, "hey/qwen-candidate");
+  assert.equal(report.schemaVersion, 2);
+  assert.equal(report.measurementEvidenceStatus, "caller_supplied_unattested");
   assert.equal(report.evaluation.qualityScore, 0.9);
   assert.equal(report.evaluation.latencyP95Ms, 190);
   assert.equal(report.evaluation.runtime, "vllm-openai-compatible");
@@ -185,6 +187,17 @@ test("evaluation report digests bind provenance and exact measurement values wit
   assert.equal(await verifyEvaluationReport(tampered), false);
   const extended = { ...original, unboundField: "forged" };
   assert.equal(await verifyEvaluationReport(extended), false);
+  const forgedAttestation = structuredClone(original);
+  forgedAttestation.measurementEvidenceStatus = "independently_attested";
+  const canonicalJson = (value) => value === null || typeof value !== "object"
+    ? JSON.stringify(value)
+    : Array.isArray(value)
+      ? `[${value.map(canonicalJson).join(",")}]`
+      : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  const forgedBody = Object.fromEntries(Object.entries(forgedAttestation).filter(([key]) => key !== "reportDigest"));
+  const forgedDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(forgedBody)));
+  forgedAttestation.reportDigest = `sha256:${Array.from(new Uint8Array(forgedDigest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  assert.equal(await verifyEvaluationReport(forgedAttestation), false, "recomputing an unkeyed digest cannot promote caller input to attested evidence");
   let getterCalls = 0;
   const hostile = Object.defineProperty({ ...original }, "reportDigest", {
     enumerable: true,
@@ -194,7 +207,7 @@ test("evaluation report digests bind provenance and exact measurement values wit
   assert.equal(getterCalls, 0);
 });
 
-test("provider registry attaches only verified evaluation evidence for its exact pinned model", async () => {
+test("provider registry attaches digest-valid evaluation metadata without treating it as attested routing evidence", async () => {
   clearProviders();
   setAccountScope("evaluation-fixture-account");
   seedPermissions([
@@ -214,7 +227,8 @@ test("provider registry attaches only verified evaluation evidence for its exact
     const attached = await attachEvaluationReport(provider.id, input.model.id, report);
     assert.equal(attached.routingEvidence.evaluationReportDigest, report.reportDigest);
     assert.equal(listModels()[0].routingEvidence.qualityScore, report.evaluation.qualityScore);
-    assert.equal(selectModel({ profile: "fast", allowedProviders: [provider.id] }).selected.id, input.model.id);
+    assert.equal(selectModel({ profile: "fast", allowedProviders: [provider.id] }).selected, null,
+      "digest-valid caller observations do not authorize model routing without independent attestation");
 
     const mismatched = await createEvaluationReport({ ...validEvaluationRun(), model: { ...input.model, revision: "other-pinned-revision" } });
     await assert.rejects(attachEvaluationReport(provider.id, input.model.id, mismatched), /does not match/i);
@@ -319,7 +333,7 @@ test("Fast, Balanced, and Maximum Quality profiles are measurable constraints, n
   assert.ok(OPEN_MODEL_CANDIDATES.every((candidate) => candidate.licenseUrl.startsWith("https://")));
 });
 
-test("canonical provider router applies profile limits only to registered permitted models with fresh reports", async () => {
+test("canonical provider router refuses caller-supplied evaluation measurements as routing evidence", async () => {
   clearProviders();
   setAccountScope("model-fixture-account");
   try {
@@ -349,14 +363,15 @@ test("canonical provider router applies profile limits only to registered permit
     }
 
     const plan = createProviderPlan({ profile: "fast", budgetUsd: 0.002, allowedProviders: ["fixture"] });
-    assert.equal(plan.selected.id, "selected");
-    assert.deepEqual(plan.fallbacks.map(({ id }) => id), ["fallback", "local"]);
+    assert.equal(plan.selected, null, "caller-supplied measurements never authorize a profiled model");
+    assert.deepEqual(plan.fallbacks, []);
+    assert.deepEqual(plan.attempts, [], "unattested reports cannot enter the provider dispatch plan");
     assert.equal(plan.policy.profile, "fast");
     assert.equal(selectModel({ profile: "fast", budgetUsd: 0.0001, allowedProviders: ["fixture"] }).selected, null);
-    assert.equal(selectModel({ profile: "fast", privacyMode: "local_only", allowedProviders: ["fixture"] }).selected.id, "local");
+    assert.equal(selectModel({ profile: "fast", privacyMode: "local_only", allowedProviders: ["fixture"] }).selected, null);
     assert.equal(selectModel({ profile: "fast", privacyMode: "local_only", allowedProviders: ["fixture"] }).fallbacks.length, 0);
     assert.equal(selectModel({ profile: "maximum_quality", allowedProviders: ["fixture"] }).selected, null, "models without measured quality above the profile floor fail closed");
-    assert.equal(selectModel({ profile: "fast", privacyMode: "no_cloud", allowedProviders: ["fixture"] }).selected.id, "local");
+    assert.equal(selectModel({ profile: "fast", privacyMode: "no_cloud", allowedProviders: ["fixture"] }).selected, null);
     assert.equal(selectModel({ profile: "fast" }).selected, null, "a profile requires explicit provider permission");
     const spoofedProvider = { id: "spoofed", revision: "revision-spoofed", weightSha256: "9".repeat(64) };
     registerProvider({ id: "rogue-provider", name: "Rogue", capabilities: ["chat"], models: [spoofedProvider] });

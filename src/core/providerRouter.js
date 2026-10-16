@@ -5,7 +5,7 @@ import {
   isProviderEnabled,
   isRegisteredModelSnapshot,
 } from "./providerRegistry.js";
-import { INFERENCE_PROFILES, isVerifiedEvaluationReport } from "./modelPlatform.js";
+import { INFERENCE_PROFILES, isDigestVerifiedEvaluationReport } from "./modelPlatform.js";
 import { getProviderPermissionSnapshot, isProviderModelPermitted } from "./permissionManager.js";
 import { getAccountScope } from "./accountScope.js";
 
@@ -78,9 +78,11 @@ function profileRejection(model, { policy, privacyMode, budgetUsd, allowedProvid
   const evidence = model.routingEvidence;
   if (!evidence || typeof evidence !== "object") return "missing_routing_evidence";
   const report = model.evaluationReport;
-  if (!isVerifiedEvaluationReport(report) || report.reportDigest !== evidence.evaluationReportDigest
+  if (!isDigestVerifiedEvaluationReport(report) || report.reportDigest !== evidence.evaluationReportDigest
     || report.evaluation.runId !== evidence.evaluationRunId || report.modelId !== model.id
     || report.modelRevision !== model.revision || report.modelWeightSha256 !== model.weightSha256?.toLowerCase()) return "missing_or_stale_evaluation_provenance";
+  if (report.measurementEvidenceStatus !== "independently_attested"
+    || evidence.measurementEvidenceStatus !== report.measurementEvidenceStatus) return "evaluation_measurements_unattested";
   const { latencyP95Ms, qualityScore, inputUsdPerMillion, outputUsdPerMillion } = evidence;
   if (![latencyP95Ms, qualityScore, inputUsdPerMillion, outputUsdPerMillion].every(Number.isFinite)) return "incomplete_routing_evidence";
   if (latencyP95Ms <= 0 || qualityScore < 0 || qualityScore > 1 || inputUsdPerMillion < 0 || outputUsdPerMillion < 0) return "invalid_routing_evidence";

@@ -242,7 +242,8 @@ export async function createEvaluationReport(input) {
     measurementsDigest,
   });
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    measurementEvidenceStatus: "caller_supplied_unattested",
     modelId,
     modelRevision,
     modelWeightSha256,
@@ -265,18 +266,19 @@ export async function createEvaluationReport(input) {
 }
 
 /** Return a detached report snapshot only when its canonical digest is valid. */
-export async function getVerifiedEvaluationReport(input) {
+export async function getDigestVerifiedEvaluationReport(input) {
   try {
     const report = snapshotObject(input, "Evaluation report");
     requireExactKeys(report, [
-      "schemaVersion", "modelId", "modelRevision", "modelWeightSha256", "evaluation", "sampleCount", "passedCount", "failedCount",
+      "schemaVersion", "measurementEvidenceStatus", "modelId", "modelRevision", "modelWeightSha256", "evaluation", "sampleCount", "passedCount", "failedCount",
       "latencyP50Ms", "latencyP95Ms", "latencyP99Ms", "inputTokens", "outputTokens", "inputUsdPerMillion", "outputUsdPerMillion",
       "totalCostUsd", "averageCostUsd", "reportDigest",
     ], "Evaluation report");
     requireExactKeys(report.evaluation, [
       "suite", "suiteRevision", "datasetSha256", "evaluatedAt", "qualityScore", "latencyP95Ms", "hardware", "runtime", "runtimeVersion", "runId", "measurementsDigest",
     ], "Evaluation metadata");
-    if (report.schemaVersion !== 1 || !MODEL_ID_PATTERN.test(requireText(report.modelId, "Model id"))) return null;
+    if (report.schemaVersion !== 2 || report.measurementEvidenceStatus !== "caller_supplied_unattested"
+      || !MODEL_ID_PATTERN.test(requireText(report.modelId, "Model id"))) return null;
     requireText(report.modelRevision, "Model revision");
     if (/^(main|master|latest|stable)$/i.test(report.modelRevision)) return null;
     requireHash(report.modelWeightSha256, "Model weight hash");
@@ -313,13 +315,13 @@ export async function getVerifiedEvaluationReport(input) {
   }
 }
 
-/** Verify the canonical, content-free digest on a previously created report. */
+/** Verify canonical digest integrity; this does not authenticate measurement origin. */
 export async function verifyEvaluationReport(input) {
-  return Boolean(await getVerifiedEvaluationReport(input));
+  return Boolean(await getDigestVerifiedEvaluationReport(input));
 }
 
 /** True only for detached reports accepted by the canonical verifier in this runtime. */
-export function isVerifiedEvaluationReport(report) {
+export function isDigestVerifiedEvaluationReport(report) {
   return Boolean(report && typeof report === "object" && verifiedEvaluationReports.has(report));
 }
 

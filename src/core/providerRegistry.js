@@ -1,4 +1,4 @@
-import { getVerifiedEvaluationReport } from "./modelPlatform.js";
+import { getDigestVerifiedEvaluationReport } from "./modelPlatform.js";
 
 const providers = new Map();
 
@@ -38,7 +38,7 @@ export function registerProvider(provider) {
   return normalized;
 }
 
-/** Attach routing evidence only after a report digest and pinned model identity verify. */
+/** Attach digest-valid metadata to a pinned model while preserving its unattested status. */
 export async function attachEvaluationReport(providerId, modelId, reportInput) {
   if (typeof providerId !== "string" || !providerId.trim() || typeof modelId !== "string" || !modelId.trim()) {
     throw new TypeError("Provider and model ids are required.");
@@ -53,7 +53,7 @@ export async function attachEvaluationReport(providerId, modelId, reportInput) {
     throw new Error("Registered model must pin its revision and weight digest before evaluation can be attached.");
   }
 
-  const report = await getVerifiedEvaluationReport(reportInput);
+  const report = await getDigestVerifiedEvaluationReport(reportInput);
   if (!report) throw new Error("Evaluation report failed canonical digest verification.");
   if (report.modelId !== modelId || report.modelRevision !== revision || report.modelWeightSha256 !== weightSha256.toLowerCase()) {
     throw new Error("Evaluation report does not match the registered model revision and weight digest.");
@@ -67,6 +67,7 @@ export async function attachEvaluationReport(providerId, modelId, reportInput) {
     ...model,
     evaluationReport: report,
     routingEvidence: Object.freeze({
+      measurementEvidenceStatus: report.measurementEvidenceStatus,
       latencyP95Ms: report.evaluation.latencyP95Ms,
       qualityScore: report.evaluation.qualityScore,
       inputUsdPerMillion: report.inputUsdPerMillion,
