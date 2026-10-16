@@ -3,6 +3,7 @@ import { getAccountScope, subscribeAccountScope } from "../../core/accountScope.
 import { createDictationEditSession } from "../../lib/dictationEditProposals.js";
 import { dictationPreferenceStore } from "../../lib/dictationPreferences.js";
 import { rewriteHEYText } from "../../lib/heyAI.js";
+import { focusDictationEditTarget } from "../../lib/dictationEditFocus.js";
 import {
   CHAT_EDIT_APPLICATION_ID,
   captureEditOperationFence,
@@ -35,6 +36,8 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   const abortRef = useRef(null);
   const accountRef = useRef(getAccountScope());
   const generationRef = useRef(0);
+  const flowHeadingRef = useRef(null);
+  const statusRef = useRef(null);
 
   const refreshSelection = useCallback(() => {
     const next = readSelectionSnapshot(inputRef.current);
@@ -103,6 +106,13 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   useEffect(() => {
     if (disabled && stage !== "idle") resetFlow();
   }, [disabled, resetFlow, stage]);
+
+  useEffect(() => {
+    focusDictationEditTarget(stage, status, {
+      flowHeading: flowHeadingRef.current,
+      statusMessage: statusRef.current,
+    });
+  }, [stage, status]);
 
   async function beginEdit() {
     setStatus("");
@@ -299,6 +309,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       )}
       {stage === "capture" && (
         <div className="hey-dictation-edit__flow">
+          <h3 ref={flowHeadingRef} tabIndex={-1}>Voice edit: capture instruction</h3>
           <p>Speak the edit instruction. The transcript stays here until you choose to use it.</p>
           <DictationControl applicationId={CHAT_EDIT_APPLICATION_ID} onCapture={(text) => { setInstruction(text); setStage("consent"); }} captureLabel="Use as edit instruction" disabled={disabled} />
           <button type="button" className="hey-dictation__quiet" onClick={() => resetFlow("Edit cancelled. Your draft is unchanged.")}>Cancel</button>
@@ -306,6 +317,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       )}
       {stage === "consent" && (
         <div className="hey-dictation-edit__flow">
+          <h3 ref={flowHeadingRef} tabIndex={-1}>Review privacy before sending</h3>
           <p>{REWRITE_DISCLOSURE.retentionSummary} The selected model choice applies to this rewrite preview. Fusion is separate and does not run for edit previews.</p>
           {fusionEnabled && <p>Fusion remains enabled only for the chat message you send.</p>}
           <label><input type="checkbox" checked={consented} onChange={(event) => setConsented(event.target.checked)} /> I agree to send the selected text and edit instruction for a rewrite preview.</label>
@@ -316,13 +328,15 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         </div>
       )}
       {stage === "previewing" && (
-        <div className="hey-dictation-edit__flow" role="status" aria-live="polite">
-          <span>Preparing preview…</span>
+        <div className="hey-dictation-edit__flow">
+          <h3 ref={flowHeadingRef} tabIndex={-1}>Preparing preview</h3>
+          <span role="status" aria-live="polite">Preparing preview…</span>
           <button type="button" className="hey-dictation__quiet" onClick={() => { abortRef.current?.abort(); resetFlow("Edit cancelled. Your draft is unchanged."); }}>Cancel request</button>
         </div>
       )}
       {stage === "review" && proposal && (
         <div className="hey-dictation-edit__flow">
+          <h3 ref={flowHeadingRef} tabIndex={-1}>Review proposed edit</h3>
           <p><strong>Proposed edit</strong></p>
           <blockquote>{proposal.proposedText}</blockquote>
           <div className="hey-dictation__actions">
@@ -333,6 +347,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       )}
       {stage === "confirmed" && (
         <div className="hey-dictation-edit__flow">
+          <h3 ref={flowHeadingRef} tabIndex={-1}>Confirm replacement</h3>
           <p><strong>Confirmed replacement</strong></p>
           <blockquote>{confirmedText}</blockquote>
           <div className="hey-dictation__actions">
@@ -341,7 +356,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
           </div>
         </div>
       )}
-      {status && <p role="status" aria-live="polite" className="hey-dictation__status">{status}</p>}
+      {status && <p ref={statusRef} tabIndex={-1} role="status" aria-live="polite" className="hey-dictation__status">{status}</p>}
     </section>
   );
 }

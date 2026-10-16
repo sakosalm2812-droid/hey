@@ -10,6 +10,7 @@ import {
   replaceSelection,
   selectionStillMatches,
 } from "../src/lib/dictationEditSelection.js";
+import { focusDictationEditTarget } from "../src/lib/dictationEditFocus.js";
 
 const source = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
@@ -159,4 +160,39 @@ test("voice edit does not mutate draft until the separate insertion action", asy
   assert.match(insertion, /setValue\(nextValue\)/);
   assert.match(insertion, /requestAnimationFrame/);
   assert.match(insertion, /inputRef\.current\?\.value !== nextValue/);
+});
+
+test("keyboard focus follows selected-text edit stages and returns to spoken status feedback", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  const styles = await source("../src/styles/chat.css");
+  assert.match(control, /focusDictationEditTarget\(stage, status/);
+  assert.match(control, /\}, \[stage, status\]\);/);
+  for (const heading of [
+    "Voice edit: capture instruction",
+    "Review privacy before sending",
+    "Preparing preview",
+    "Review proposed edit",
+    "Confirm replacement",
+  ]) {
+    assert.ok(control.includes(`>${heading}</h3>`), `stage has a focusable heading: ${heading}`);
+  }
+  assert.match(control, /<h3 ref=\{flowHeadingRef\} tabIndex=\{-1\}>/);
+  assert.match(control, /<p ref=\{statusRef\} tabIndex=\{-1\} role="status"/);
+  assert.match(styles, /\.hey-dictation-edit :focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent\)/);
+  const previewStage = control.slice(control.indexOf('{stage === "previewing"'), control.indexOf('{stage === "review"'));
+  assert.doesNotMatch(previewStage, /<div[^>]*role="status"/);
+  assert.match(previewStage, /<span role="status" aria-live="polite">Preparing preview…<\/span>[\s\S]*Cancel request/);
+});
+
+test("focus helper avoids initial focus theft and survives missing or throwing targets", () => {
+  const calls = [];
+  const flowHeading = { focus: () => calls.push("heading") };
+  const statusMessage = { focus: () => calls.push("status") };
+  assert.equal(focusDictationEditTarget("idle", "", { flowHeading, statusMessage }), false);
+  assert.equal(focusDictationEditTarget("capture", "", { flowHeading, statusMessage }), true);
+  assert.equal(focusDictationEditTarget("idle", "Edit cancelled.", { flowHeading, statusMessage }), true);
+  assert.equal(focusDictationEditTarget("previewing", "", { statusMessage }), false);
+  assert.equal(focusDictationEditTarget("unknown", "", { flowHeading, statusMessage }), false);
+  assert.equal(focusDictationEditTarget("review", "", { flowHeading: { focus() { throw new Error("detached target"); } } }), false);
+  assert.deepEqual(calls, ["heading", "status"]);
 });

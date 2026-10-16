@@ -256,6 +256,8 @@
 .hey-chat-drawer-backdrop { display: none; }
 .hey-dictation-edit { width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-2); color: var(--text-secondary); font-size: 12px; }
 .hey-dictation-edit > p { margin: 4px 0 10px; }
+.hey-dictation-edit__flow > h3 { margin: 0 0 8px; color: var(--text-primary); font-size: 13px; }
+.hey-dictation-edit :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 .hey-dictation-edit__preview { display: grid; gap: 8px; }
 .hey-dictation-edit__preview blockquote { margin: 0; padding: 10px 12px; white-space: pre-wrap; border-left: 2px solid var(--accent); background: var(--surface-1); color: var(--text-primary); }
 
