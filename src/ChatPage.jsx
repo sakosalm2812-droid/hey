@@ -97,12 +97,17 @@ function ChatWorkspace() {
   const [executionStatus, setExecutionStatus] = useState("");
   const [pendingComputerPreview, setPendingComputerPreview] = useState(null);
   const [previewChecking, setPreviewChecking] = useState(false);
+  const [previewRefreshActive, setPreviewRefreshActive] = useState(false);
   const pendingComputerPreviewRef = useRef(null);
+  const previewRefreshControllerRef = useRef(null);
   const previewRequestInFlightRef = useRef(false);
   const skipNextDraftPersistenceRef = useRef(false);
   const activeRequestControllerRef = useRef(null);
 
-  useEffect(() => () => activeRequestControllerRef.current?.abort(), []);
+  useEffect(() => () => {
+    activeRequestControllerRef.current?.abort();
+    previewRefreshControllerRef.current?.abort();
+  }, []);
 
   const [mode, setMode] = useState("text");
   const [voiceState, setVoiceState] = useState("idle");
@@ -149,6 +154,10 @@ function ChatWorkspace() {
 
   useEffect(() => subscribeAccountScope((_previousScope, nextScope) => {
     const pending = pendingComputerPreviewRef.current;
+    if (pending && pending.accountScope !== nextScope) {
+      previewRefreshControllerRef.current?.abort();
+      setPreviewRefreshActive(false);
+    }
     if (!pending || pending.accountScope === nextScope) return;
     if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
     pendingComputerPreviewRef.current = null;
@@ -487,21 +496,38 @@ function ChatWorkspace() {
       return;
     }
     previewRequestInFlightRef.current = true;
+    const controller = new AbortController();
+    previewRefreshControllerRef.current = controller;
+    setPreviewRefreshActive(true);
     setPreviewChecking(true);
     let nextPreview;
     try {
-      nextPreview = await createSafeComputerPreview(pending.message);
+      nextPreview = await createSafeComputerPreview(pending.message, controller.signal);
     } catch {
       const current = pendingComputerPreviewRef.current;
-      if (current?.preview.previewId === pending.preview.previewId) {
+      if (controller.signal.aborted) {
+        if (current?.preview.previewId === pending.preview.previewId && current.accountScope === getAccountScope()) {
+          setExecutionStatus(t("chat.voiceOS.previewRefreshCancelled", "Preview refresh cancelled. The original request is still available; nothing was run."));
+        }
+      } else if (current?.preview.previewId === pending.preview.previewId) {
         storeComputerPreview(null);
         setMessage(pending.message);
         setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. Your request was restored so you can try again."));
       }
       return;
     } finally {
+      if (previewRefreshControllerRef.current === controller) previewRefreshControllerRef.current = null;
       previewRequestInFlightRef.current = false;
+      setPreviewRefreshActive(false);
       setPreviewChecking(false);
+    }
+    if (controller.signal.aborted) {
+      if (nextPreview?.preview?.previewId) cancelVoiceCommandPreview(nextPreview.preview.previewId);
+      const current = pendingComputerPreviewRef.current;
+      if (current?.preview.previewId === pending.preview.previewId && current.accountScope === getAccountScope()) {
+        setExecutionStatus(t("chat.voiceOS.previewRefreshCancelled", "Preview refresh cancelled. The original request is still available; nothing was run."));
+      }
+      return;
     }
     const current = pendingComputerPreviewRef.current;
     if (!current || current.preview.previewId !== pending.preview.previewId || current.accountScope !== getAccountScope()) {
@@ -516,6 +542,13 @@ function ChatWorkspace() {
     }
     storeComputerPreview({ ...nextPreview, source: pending.source });
     setExecutionStatus(t("chat.voiceOS.previewFreshReady", "A fresh preview is ready. Review it before proceeding; nothing was run."));
+  }
+
+  function cancelComputerPreviewRefresh() {
+    const controller = previewRefreshControllerRef.current;
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    setExecutionStatus(t("chat.voiceOS.previewRefreshCancelled", "Preview refresh cancelled. The original request is still available; nothing was run."));
   }
 
   function cancelComputerPreview() {
@@ -535,7 +568,10 @@ function ChatWorkspace() {
 
   function renderComputerPreview() {
     if (previewChecking) {
-      return <p className="hey-chat-execution-status" role="status">{t("chat.voiceOS.checking", "Checking whether this request can be shown as a safe preview. Nothing has been sent or run.")}</p>;
+      return <>
+        <p className="hey-chat-execution-status" role="status">{t("chat.voiceOS.checking", "Checking whether this request can be shown as a safe preview. Nothing has been sent or run.")}</p>
+        {pendingComputerPreview?.expired && previewRefreshActive && <button type="button" onClick={cancelComputerPreviewRefresh}>{t("chat.voiceOS.cancelRefresh", "Cancel refresh")}</button>}
+      </>;
     }
     if (!pendingComputerPreview) return null;
     const { summary, reviewed, expired } = pendingComputerPreview;
