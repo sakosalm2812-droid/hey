@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SupabaseDeviceCommandQueueStore } from "../../../src/core/supabaseDeviceCommandQueueStore.js";
 import { readBoundedJson } from "../hey/requestSafety.js";
-import { createDeviceTransportRequestScope, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "./dispatch.js";
+import { classifyDeviceTransportRequest, createDeviceTransportRequestScope, handleDeviceTransport, issueDeviceCredential, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "./dispatch.js";
 
 const allowedOrigin = Deno.env.get("APP_URL") || "http://localhost:5173";
 function corsHeaders(origin: string | null) {
@@ -38,18 +38,25 @@ Deno.serve(async (request: Request) => {
       return reply(parsed.tooLarge ? 413 : 400, { ok: false, reason: "Device transport request is invalid or too large." });
     }
     const scopedFetch: typeof fetch = (input, init = {}) => fetch(input, { ...init, signal: scope.signal });
-    const userClient = createClient(url, anonKey, {
-      global: { headers: { Authorization: authorization }, fetch: scopedFetch },
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: userData, error: authError } = await scope.race(userClient.auth.getUser());
-    const accountId = userData?.user?.id;
+    const classification = classifyDeviceTransportRequest(parsed.value);
+    if (classification.kind === "invalid") return reply(400, { ok: false, reason: "Device transport request is invalid." });
+    let accountId: string | undefined;
+    let authError: unknown = null;
+    if (classification.kind === "account") {
+      const userClient = createClient(url, anonKey, {
+        global: { headers: { Authorization: authorization }, fetch: scopedFetch },
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data: userData, error } = await scope.race(userClient.auth.getUser());
+      accountId = userData?.user?.id;
+      authError = error;
+    }
     const serviceClient = createClient(url, serviceKey, {
       global: { fetch: scopedFetch },
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const accountRequest = normalizeAccountDeviceRequest(parsed.value);
+    const accountRequest = classification.kind === "account" ? classification.request : null;
     if (accountRequest?.operation === "revoke") {
       if (authError || !accountId) return reply(401, { ok: false, reason: "An authenticated account is required." });
       const result = await scope.race(revokeOwnedDeviceTransport({

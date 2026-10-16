@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createDeviceTransportRequestScope, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
+import { classifyDeviceTransportRequest, createDeviceTransportRequestScope, digestDeviceCredential, handleDeviceTransport, issueDeviceCredential, normalizeAccountDeviceRequest, normalizeTransportRequest, resolveDeviceTransportCorsOrigin, revokeOwnedDeviceTransport } from "../supabase/functions/hey-device-transport/dispatch.js";
 
 const accountId = "2e4a81a4-2da8-4ae0-bfd6-719484a37795";
 const otherAccountId = "10e7b9e4-765b-4e88-b5d4-5eafc0f39f40";
@@ -75,6 +75,25 @@ test("transport request contract remains claim, renew, ack and fail", () => {
   assert.ok(normalizeTransportRequest({ operation: "fail", deviceId, commandId, leaseToken }));
   assert.equal(normalizeTransportRequest({ operation: "begin", deviceId, commandId, leaseToken }), null);
   assert.equal(normalizeTransportRequest({ operation: "complete", deviceId, commandId, leaseToken }), null);
+});
+
+test("device credentials avoid account JWT lookup while account mutations remain account-authenticated", async () => {
+  for (const body of [
+    { operation: "claim", deviceId },
+    { operation: "renew", deviceId, commandId, leaseToken, idempotencyKey: "renew" },
+    { operation: "ack", deviceId, commandId, leaseToken },
+    { operation: "fail", deviceId, commandId, leaseToken },
+  ]) assert.equal(classifyDeviceTransportRequest(body).kind, "device");
+  for (const operation of ["rotate", "revoke"]) {
+    assert.equal(classifyDeviceTransportRequest({ operation, deviceId }).kind, "account");
+  }
+  for (const operation of ["begin", "complete", "unknown"]) {
+    assert.equal(classifyDeviceTransportRequest({ operation, deviceId, commandId, leaseToken }).kind, "invalid");
+  }
+
+  const source = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
+  assert.match(source, /if \(classification\.kind === "account"\) \{[\s\S]*?scope\.race\(userClient\.auth\.getUser\(\)\)/);
+  assert.equal((source.match(/auth\.getUser\(\)/g) || []).length, 1);
 });
 
 test("credential rotation is owner-bound, one-time, random and persists only a digest", async () => {
@@ -213,7 +232,7 @@ test("credential migration stores only hashes, requires trusted service role and
 test("edge stop route authenticates the account JWT and never accepts caller-supplied account scope", async () => {
   const edge = await readFile(new URL("../supabase/functions/hey-device-transport/index.ts", import.meta.url), "utf8");
   assert.match(edge, /userClient\.auth\.getUser\(\)/);
-  assert.match(edge, /normalizeAccountDeviceRequest\(parsed\.value\)/);
+  assert.match(edge, /const accountRequest = classification\.kind === "account" \? classification\.request : null/);
   assert.match(edge, /revokeOwnedDeviceTransport\(\{\s*authenticatedAccountId: accountId,[\s\S]*?deviceId: accountRequest\.deviceId/);
   assert.match(edge, /rpc\("revoke_hey_device_transport", \{ p_account_id: userId, p_device_id: deviceId \}\)/);
 });

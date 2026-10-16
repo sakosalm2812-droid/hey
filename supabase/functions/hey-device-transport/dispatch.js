@@ -95,6 +95,14 @@ export function normalizeTransportRequest(body) {
   } catch { return null; }
 }
 
+export function classifyDeviceTransportRequest(body) {
+  const accountRequest = normalizeAccountDeviceRequest(body);
+  if (accountRequest) return { kind: "account", request: accountRequest };
+  const transportRequest = normalizeTransportRequest(body);
+  if (transportRequest) return { kind: "device", request: transportRequest };
+  return { kind: "invalid", request: null };
+}
+
 export function validDeviceCredential(value) { return typeof value === "string" && TOKEN.test(value); }
 
 export async function digestDeviceCredential(token) {
