@@ -42,6 +42,9 @@ jobs:
       - name: Run test suite
         run: npm test
 
+      - name: Run isolated backup and restore drill
+        run: npm run drill:backup-restore
+
       - name: Build production bundle
         run: npm run build
 
