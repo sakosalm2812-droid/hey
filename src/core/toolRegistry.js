@@ -12,6 +12,8 @@ const MAX_TOOL_ACTIVITY = 50;
 const MAX_ACTIVITY_ACCOUNTS = 64;
 const LIFECYCLE_START_CALLBACK = Symbol("lifecycleStartCallback");
 const invocationPlans = new WeakMap();
+let capabilityAvailabilityResolver = null;
+let capabilityAvailabilityResolverOwner = null;
 export const toolLibraryPreferenceStore = createToolLibraryPreferenceStore({
   isToolRegistered: (name) => tools.has(name),
 });
@@ -160,6 +162,18 @@ export function registerOwnedTool(name, handler, metadata, ownerToken) {
   return registerToolWithOwner(name, handler, metadata, ownerToken);
 }
 
+/** Bind catalog discovery to the trusted runtime adapter owner. */
+export function setToolCapabilityAvailabilityResolver(resolver, ownerToken) {
+  if (typeof resolver !== "function" || !ownerToken || (typeof ownerToken !== "object" && typeof ownerToken !== "function")) {
+    throw new TypeError("A capability resolver and opaque owner token are required.");
+  }
+  if (capabilityAvailabilityResolverOwner && capabilityAvailabilityResolverOwner !== ownerToken) {
+    throw new Error("The tool capability resolver is already owned by another runtime.");
+  }
+  capabilityAvailabilityResolver = resolver;
+  capabilityAvailabilityResolverOwner = ownerToken;
+}
+
 export function unregisterTool(name) {
   for (const [key, session] of activeToolSessions) {
     if (session.name === name) {
@@ -287,6 +301,12 @@ export function listToolCatalog({ platform = "web", adapter = null } = {}) {
           available: false,
           error: "Tool capability declaration is invalid.",
         };
+      }
+      if (!adapter && capabilityAvailabilityResolver) {
+        try { return capabilityAvailabilityResolver(capability, platform); }
+        catch {
+          return { capability, platform, status: CAPABILITY_STATUS.unsupported, available: false, error: "Runtime capability availability could not be verified." };
+        }
       }
       return getCapabilityAvailability(capability, platform, adapter);
     });

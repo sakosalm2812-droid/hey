@@ -5,7 +5,7 @@ import { setAccountScope } from "../src/core/accountScope.js";
 import { clearPermissions, seedPermissions } from "../src/core/permissionManager.js";
 import { executeRequest } from "../src/core/executionController.js";
 import { getComputerCapabilityAvailability, registerComputerTools } from "../src/core/computerTools.js";
-import { executeTool } from "../src/core/toolRegistry.js";
+import { executeTool, listToolCatalog, runToolLibraryEntry } from "../src/core/toolRegistry.js";
 
 test("natural URL execution uses the configured capability, requires approval, and reports browser failure", async () => {
   const accountId = "browser-capability-account";

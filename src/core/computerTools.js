@@ -1,4 +1,4 @@
-import { registerOwnedTool } from "./toolRegistry.js";
+import { registerOwnedTool, setToolCapabilityAvailabilityResolver } from "./toolRegistry.js";
 import { OS_CAPABILITIES, createBrowserOSAdapter, unsupportedCapability } from "./osAdapter.js";
 import { getCapability, getCapabilityAvailability } from "./capabilityRegistry.js";
 import { createTauriAdapter } from "../lib/tauriAdapter.js";
@@ -44,6 +44,7 @@ function browserTool(capability, input, context = {}) {
 }
 
 export function registerComputerTools() {
+  setToolCapabilityAvailabilityResolver((capability, platform) => getCapabilityAvailability(capability, platform, activeAdapter), COMPUTER_TOOL_OWNER);
   registerOwnedTool("computer.system_info", computerToolHandlers.get(OS_CAPABILITIES.systemInfo), {
     category: "system",
     description: "Check this browser's device readiness using its reported platform, language, connection hint, screen, and resource hints. Values depend on browser support and do not confirm internet reachability.",
