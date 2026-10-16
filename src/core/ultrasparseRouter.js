@@ -59,11 +59,19 @@ function selectionInput(input, limit) {
   };
 }
 
+function containsAdversarialRoutingText(input) {
+  // Normalize only the safety check so invisible format characters and
+  // compatibility forms cannot disguise a routing-policy override phrase.
+  // This explicit phrase rule is not a general prompt-injection detector.
+  const normalizedInput = input.normalize("NFKC").replace(/\p{Cf}/gu, "");
+  return ADVERSARIAL_ROUTING_TEXT.test(normalizedInput);
+}
+
 function getHintSuppressionReason(input, selection) {
   if (selection.status === "invalid_input") return "invalid_input";
   if (selection.status !== "selected") return "no_match";
   if (selection.truncated) return "query_truncated";
-  if (ADVERSARIAL_ROUTING_TEXT.test(input)) return "adversarial_policy_override_text";
+  if (containsAdversarialRoutingText(input)) return "adversarial_policy_override_text";
 
   // Deterministic abstention only; this is not a calibrated confidence score.
   const [primary, runnerUp] = selection.experts;
