@@ -537,7 +537,7 @@ export function stopToolLibraryEntry(name, sessionId, context = {}) {
 
 /** Retry a failed account-owned run by starting a fresh run through the same
  * canonical permission and capability policy checks as an ordinary start. */
-export function retryToolLibraryEntry(name, input, context = {}) {
+export function retryToolLibraryEntry(name, input, failedSessionId, context = {}) {
   const tool = tools.get(name);
   if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
   if (tool.metadata.lifecycle?.retry !== true) {
@@ -547,6 +547,10 @@ export function retryToolLibraryEntry(name, input, context = {}) {
   if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
   const key = sessionKey(identity.accountId, name);
   const session = activeToolSessions.get(key);
+  if (session && session.id !== failedSessionId) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "retry_stale", at: new Date().toISOString() });
+    return { success: false, status: "retry_stale", error: "The failed run has changed; refresh its status before retrying." };
+  }
   if (!session || !["failed", "failed_after_stop"].includes(session.status)) {
     appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "retry_unavailable", at: new Date().toISOString() });
     return { success: false, status: "retry_unavailable", error: "Only a failed run can be retried." };

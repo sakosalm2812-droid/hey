@@ -564,7 +564,7 @@ test("failed lifecycle runs can be retried only by the authorized account throug
   try {
     registerTool(name, async () => {
       attempts += 1;
-      if (attempts === 1) throw new Error("temporary failure");
+      if (attempts === 1 || attempts === 3) throw new Error("temporary failure");
       return { success: true };
     }, {
       capabilities: [capability],
@@ -573,26 +573,44 @@ test("failed lifecycle runs can be retried only by the authorized account throug
     });
     const owner = { platform: "web", user: { id: "lifecycle-retry-owner", plan: "elite", entitlements: ["elite"] } };
     assert.equal(getToolLifecycleContract(name, owner).actions.retry, true);
-    assert.equal(retryToolLibraryEntry(name, {}, owner).status, "retry_unavailable", "retry cannot launch a tool without a failed run");
+    assert.equal(retryToolLibraryEntry(name, {}, null, owner).status, "retry_unavailable", "retry cannot launch a tool without a failed run");
 
     const first = startToolLibraryEntry(name, {}, owner);
     assert.equal(first.success, true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(getToolLifecycleContract(name, owner).status, "failed");
 
-    assert.equal(retryToolLibraryEntry(name, {}, { ...owner, user: { ...owner.user, id: "attacker" } }).status, "denied");
-    assert.equal(retryToolLibraryEntry(name, {}, { ...owner, platform: "ios" }).status, CAPABILITY_STATUS.unsupported);
+    assert.equal(retryToolLibraryEntry(name, {}, first.sessionId, { ...owner, user: { ...owner.user, id: "attacker" } }).status, "denied");
+    assert.equal(retryToolLibraryEntry(name, {}, first.sessionId, { ...owner, platform: "ios" }).status, CAPABILITY_STATUS.unsupported);
     clearPermissions();
-    assert.equal(retryToolLibraryEntry(name, {}, owner).status, "denied", "revoked canonical permission blocks retry");
+    assert.equal(retryToolLibraryEntry(name, {}, first.sessionId, owner).status, "denied", "revoked canonical permission blocks retry");
     seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], "lifecycle-retry-owner");
 
-    const recovered = retryToolLibraryEntry(name, {}, owner);
+    const concurrent = [
+      retryToolLibraryEntry(name, {}, first.sessionId, owner),
+      retryToolLibraryEntry(name, {}, first.sessionId, owner),
+    ];
+    const recovered = concurrent.find(({ success }) => success);
+    assert.equal(concurrent.filter(({ success }) => success).length, 1, "only one concurrent retry can consume a failed session");
+    assert.equal(concurrent.find(({ status }) => status === "retry_stale")?.status, "retry_stale");
     assert.equal(recovered.success, true);
     assert.notEqual(recovered.sessionId, first.sessionId);
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(attempts, 2);
     assert.equal(getToolLifecycleContract(name, owner).status, "completed");
-    assert.deepEqual(getToolLifecycleContract(name, owner).activity.map(({ status }) => status), ["completed", "running", "starting", "denied", "unsupported", "failed", "running", "starting", "retry_unavailable"]);
+    const recoveredActivity = getToolLifecycleContract(name, owner).activity.map(({ status }) => status);
+    for (const status of ["completed", "running", "starting", "retry_stale", "denied", "unsupported", "failed", "retry_unavailable"]) {
+      assert.ok(recoveredActivity.includes(status), `activity keeps the ${status} lifecycle outcome`);
+    }
+
+    const nextFailure = startToolLibraryEntry(name, {}, owner);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(getToolLifecycleContract(name, owner).status, "failed");
+    setAccountScope("lifecycle-retry-other-account");
+    assert.equal(retryToolLibraryEntry(name, {}, nextFailure.sessionId, owner).status, "denied", "switching accounts revokes access to the pending retry");
+    setAccountScope("lifecycle-retry-owner");
+    assert.equal(getToolLifecycleContract(name, owner).status, "registered", "switching away clears the old account session");
+    assert.equal(retryToolLibraryEntry(name, {}, nextFailure.sessionId, owner).status, "retry_unavailable");
   } finally {
     unregisterTool(name);
     clearPermissions();
