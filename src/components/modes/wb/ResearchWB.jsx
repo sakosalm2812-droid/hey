@@ -12,6 +12,7 @@ export default function ResearchWB({ workspace }) {
   const [query, setQuery] = useState("");
   const [claimText, setClaimText] = useState("");
   const [expertPackText, setExpertPackText] = useState("");
+  const [researchJurisdiction, setResearchJurisdiction] = useState("");
   const [activePack, setActivePack] = useState(null);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -70,6 +71,15 @@ export default function ResearchWB({ workspace }) {
         setError(`Expert Pack manifest is invalid; no external search was started. ${validation.errors.slice(0, 4).join("; ")}`);
         return;
       }
+      const requestedJurisdiction = researchJurisdiction.trim();
+      if (!expertPack.jurisdictions.includes("*") && !requestedJurisdiction) {
+        setError("This Expert Pack requires a jurisdiction. Enter one of its declared jurisdictions before searching.");
+        return;
+      }
+      if (requestedJurisdiction && !expertPack.jurisdictions.includes("*") && !expertPack.jurisdictions.includes(requestedJurisdiction)) {
+        setError("The requested jurisdiction is not declared by this Expert Pack. Choose one from its jurisdiction list.");
+        return;
+      }
     }
     const controller = new AbortController();
     activeRequest.current = controller;
@@ -84,7 +94,10 @@ export default function ResearchWB({ workspace }) {
     patch({ payload: { ...state.payload, question: text }, stage: 1 });
     log(`Researching: "${text}"`);
     try {
-      const hits = await fetchResearchResults(text, { signal: controller.signal, ...(requestedPack ? { expertPack: requestedPack } : {}) });
+      const hits = await fetchResearchResults(text, {
+        signal: controller.signal,
+        ...(requestedPack ? { expertPack: requestedPack, ...(researchJurisdiction.trim() ? { jurisdiction: researchJurisdiction.trim() } : {}) } : {}),
+      });
       if (controller.signal.aborted || activeRequest.current !== controller || getAccountScope() !== requestScope) return;
       setResults(hits);
       log(hits.length ? `Found ${hits.length} candidate sources${requestedPack ? ` for unverified Expert Pack ${requestedPack.id}` : ""}.` : "No sources found.");
@@ -165,8 +178,11 @@ export default function ResearchWB({ workspace }) {
         <Field label="Expert Pack manifest (optional JSON)">
           <textarea className="hey-input w-full" value={expertPackText} onChange={(event) => setExpertPackText(event.target.value)} maxLength={MAX_EXPERT_PACK_TEXT_LENGTH} rows={5} aria-label="Expert Pack manifest JSON" aria-describedby="research-pack-limits" placeholder='Paste a hey.expert-pack.v1 manifest. Leave empty for normal research.' />
         </Field>
+        <Field label="Research jurisdiction (required by scoped packs)">
+          <input className="hey-input w-full" value={researchJurisdiction} onChange={(event) => setResearchJurisdiction(event.target.value)} maxLength={64} aria-label="Research jurisdiction" aria-describedby="research-pack-limits" placeholder="For example: US-CA; leave empty for a wildcard pack" />
+        </Field>
         <p id="research-pack-limits" className="text-xs leading-5 text-[var(--text-muted)]">
-          Expert Packs are syntax checked only. They are always unverified, uncertified, and grant no authority. Pack filtering uses the manifest declarations; this screen searches Wikipedia only, a tertiary reference. No result or advice is certified.
+          Expert Packs are syntax checked only. They are always unverified, uncertified, and grant no authority. Scoped packs require a declared jurisdiction; Wikipedia results have no jurisdiction metadata and are filtered out for scoped requests. This screen searches Wikipedia only, a tertiary reference. No result or advice is certified.
         </p>
         {activePack && <p role="status" className="text-xs text-[var(--gold)]">Using unverified, uncertified Expert Pack {activePack.id} v{activePack.version}. It grants no authority.</p>}
         <div className="flex gap-2">

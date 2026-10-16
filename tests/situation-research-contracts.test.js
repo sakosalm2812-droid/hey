@@ -252,6 +252,7 @@ test("expert pack evidence is bounded by declared source, jurisdiction, freshnes
   assert.equal(accepted.authorityGranted, false);
   assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, url: "https://blog.example.org/post" }, jurisdiction: "US-CA", now }).reason, "source_outside_pack_hierarchy");
   assert.equal(assessExpertPackEvidence({ manifest, source, jurisdiction: "US-NY", now }).reason, "pack_jurisdiction_mismatch");
+  assert.equal(assessExpertPackEvidence({ manifest, source, now }).reason, "required_jurisdiction_missing");
   assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, jurisdiction: "US-NY" }, jurisdiction: "US-CA", now }).reason, "source_jurisdiction_mismatch");
   assert.equal(assessExpertPackEvidence({ manifest, source: { ...source, retrievedAt: "2026-09-01T00:00:00.000Z" }, jurisdiction: "US-CA", now }).status, "stale");
   const expiredEvaluation = expertPackFixture({ evaluation: { ...manifest.evaluation, expiresAt: "2026-10-10T00:00:00.000Z" } });
@@ -287,6 +288,8 @@ test("expert pack research only retains sources declared by the pack and carries
   assert.equal(hits[0].expertPackAssessment.authorityGranted, false);
   let calls = 0;
   await assert.rejects(fetchResearchResults("climate", { expertPack: expertPackFixture({ contractVersion: "unsupported" }), fetchImpl: async () => { calls += 1; } }), /Invalid expert pack/);
+  await assert.rejects(fetchResearchResults("climate", { expertPack: expertPackFixture(), fetchImpl: async () => { calls += 1; } }), /jurisdiction is required/);
+  await assert.rejects(fetchResearchResults("climate", { expertPack: expertPackFixture(), jurisdiction: "US-NY", fetchImpl: async () => { calls += 1; } }), /outside this Expert Pack/);
   assert.equal(calls, 0);
 });
 

@@ -30,7 +30,7 @@ const fakeWikipedia = async () => ({
 test("Research screen preserves normal search when the optional manifest is empty", async () => {
   assert.match(page, /Expert Pack manifest \(optional JSON\)/);
   assert.match(page, /Leave empty for normal research/);
-  assert.match(page, /fetchResearchResults\(text, \{ signal: controller\.signal,/);
+  assert.match(page, /fetchResearchResults\(text, \{\s*signal: controller\.signal,/);
   const hits = await fetchResearchResults("climate", { fetchImpl: fakeWikipedia, now: () => "2026-10-16T00:00:00.000Z" });
   assert.equal(hits.length, 1);
   assert.equal(hits[0].sourceType, "tertiary_reference");
@@ -48,6 +48,14 @@ test("valid pack flow labels candidate assessments unverified, uncertified, and 
   assert.equal(hits[0].expertPackAssessment.status, "unverified");
   assert.equal(hits[0].expertPackAssessment.certificationStatus, "uncertified");
   assert.equal(hits[0].expertPackAssessment.authorityGranted, false);
+});
+
+test("scoped Expert Packs require a declared jurisdiction and explain Wikipedia metadata limits", () => {
+  assert.match(page, /Research jurisdiction \(required by scoped packs\)/);
+  assert.match(page, /requestedJurisdiction/);
+  assert.match(page, /jurisdictions\.includes\("\*"\)/);
+  assert.match(page, /jurisdiction: researchJurisdiction\.trim\(\)/);
+  assert.match(page, /Wikipedia results have no jurisdiction metadata and are filtered out for scoped requests/);
 });
 
 test("malformed, oversized, and invalid manifest input is rejected before fetchResearchResults", async () => {

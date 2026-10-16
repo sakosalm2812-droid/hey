@@ -148,6 +148,9 @@ function assessExpertPackEvidenceUnsafe({ manifest: rawManifest, source, jurisdi
   const manifest = rawManifest;
   const sourceRule = manifest.sourceHierarchy.find((item) => item.origins.some((origin) => canonicalHost(origin) === url.hostname.toLowerCase()));
   if (!sourceRule) return { status: "invalid", reason: "source_outside_pack_hierarchy" };
+  if (!manifest.jurisdictions.includes("*") && (jurisdiction === undefined || jurisdiction === null)) {
+    return { status: "invalid", reason: "required_jurisdiction_missing" };
+  }
   if (jurisdiction !== undefined && jurisdiction !== null) {
     if (!validText(jurisdiction, 64)) return { status: "invalid", reason: "invalid_required_jurisdiction" };
     if (!manifest.jurisdictions.includes("*") && !manifest.jurisdictions.includes(jurisdiction)) return { status: "invalid", reason: "pack_jurisdiction_mismatch" };

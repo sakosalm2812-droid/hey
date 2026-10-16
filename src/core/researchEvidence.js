@@ -16,7 +16,16 @@ export async function fetchResearchResults(query, { signal, fetchImpl = globalTh
   const safeQuery = String(query || "").trim();
   if (!safeQuery || safeQuery.length > 500) throw new RangeError("Research query must contain 1 to 500 characters.");
   if (containsSensitiveResearchText(safeQuery)) throw new Error("Sensitive research queries are blocked before external search.");
-  if (expertPack && !validateExpertPackManifest(expertPack).valid) throw new TypeError("Invalid expert pack manifest; research was not sent.");
+  if (expertPack) {
+    if (!validateExpertPackManifest(expertPack).valid) throw new TypeError("Invalid expert pack manifest; research was not sent.");
+    if (jurisdiction !== undefined && jurisdiction !== null && (typeof jurisdiction !== "string" || !jurisdiction.trim() || jurisdiction.length > 64)) {
+      throw new TypeError("Invalid research jurisdiction; research was not sent.");
+    }
+    if (!expertPack.jurisdictions.includes("*")) {
+      if (!jurisdiction) throw new TypeError("A jurisdiction is required by this Expert Pack; research was not sent.");
+      if (!expertPack.jurisdictions.includes(jurisdiction)) throw new TypeError("The requested jurisdiction is outside this Expert Pack; research was not sent.");
+    }
+  }
   const response = await fetchImpl(
     `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(safeQuery)}&format=json&origin=*&srlimit=5`,
     { signal },
