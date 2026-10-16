@@ -207,6 +207,19 @@ test("student worksheets require a matching authenticated class and cannot be ex
   assert.equal(authorizeTeacherArtifactWrite(worksheet, {}, student), false);
 });
 
+test("private answer-key evidence overrides a student-facing handout marker", () => {
+  const mixedHandout = {
+    content: { type: "teacher_activity_handout", activities: [{ prompt: "Try this", teacherAnswer: "Private answer" }] },
+    createdBy: "teacher-1",
+    metadata: { workflow: "teacher_activity_handout", accountScope: "account:teacher-1", classId: "class-1" },
+  };
+  const student = { id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  const author = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+  assert.equal(authorizeTeacherArtifactRead(mixedHandout, {}, student), false);
+  assert.equal(authorizeTeacherArtifactRead(mixedHandout, {}, author), true);
+  assert.equal(authorizeTeacherArtifactWrite(mixedHandout, {}, author), true);
+});
+
 test("teacher lesson content is not readable by student-role or cross-account users", () => {
   const lesson = {
     content: { learningObjectives: ["Objective"], activities: [], assessment: { prompt: "Check" }, durationMinutes: 30 },

@@ -62,3 +62,15 @@ test("activity handouts join the existing class-scoped student artifact boundary
   assert.match(activityHandoutMigration, /teacher artifact privacy scope cannot be removed or changed/);
   assert.match(activityHandoutMigration, /new\.metadata ->> 'classid' is distinct from old\.metadata ->> 'classid'/);
 });
+
+test("private answer-key markers override student-facing handout access", () => {
+  assert.match(activityHandoutMigration, /v_is_private_answer_key boolean := jsonb_path_exists\(coalesce\(p_content, '\{\}'::jsonb\), '\$\.\*\*\.teacheranswer'\)/);
+  assert.match(activityHandoutMigration, /or p_content ->> 'type' = 'teacher_assessment'/);
+  assert.match(activityHandoutMigration, /or p_metadata ->> 'workflow' = 'teacher_assessment'/);
+  assert.match(activityHandoutMigration, /or p_metadata ->> 'artifactcontract' = 'hey\.teacher\.assessment\.v1'/);
+  const privateAnswerCheck = activityHandoutMigration.indexOf("if v_is_private_answer_key then");
+  const studentFacingAllowance = activityHandoutMigration.indexOf("if v_is_student_facing then");
+  assert.ok(privateAnswerCheck >= 0 && privateAnswerCheck < studentFacingAllowance,
+    "private answer-key markers are checked before student-facing read access");
+  assert.match(activityHandoutMigration, /if v_is_private_answer_key then\s+return v_role = 'teacher' and p_created_by = v_uid/);
+});

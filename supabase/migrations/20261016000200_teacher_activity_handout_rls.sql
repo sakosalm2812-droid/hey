@@ -41,6 +41,10 @@ declare
   v_role text := v_claims ->> 'hey_role';
   v_uid uuid := auth.uid();
   v_class_id text := p_metadata ->> 'classId';
+  v_is_private_answer_key boolean := jsonb_path_exists(coalesce(p_content, '{}'::jsonb), '$.**.teacherAnswer')
+    or p_content ->> 'type' = 'teacher_assessment'
+    or p_metadata ->> 'workflow' = 'teacher_assessment'
+    or p_metadata ->> 'artifactContract' = 'hey.teacher.assessment.v1';
   v_is_student_facing boolean := p_content ->> 'type' in ('teacher_worksheet', 'teacher_activity_handout')
     or p_metadata ->> 'workflow' in ('teacher_worksheet', 'teacher_activity_handout')
     or p_metadata ->> 'artifactContract' in ('hey.teacher.worksheet.v1', 'hey.teacher.activity_handout.v1');
@@ -60,6 +64,11 @@ begin
   end if;
 
   if p_write then
+    return v_role = 'teacher' and p_created_by = v_uid;
+  end if;
+
+  -- Private answer-key evidence takes precedence over student-facing markers.
+  if v_is_private_answer_key then
     return v_role = 'teacher' and p_created_by = v_uid;
   end if;
 
