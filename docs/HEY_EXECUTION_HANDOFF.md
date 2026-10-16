@@ -1,3 +1,22 @@
+## Latest coordinator checkpoint — 2026-10-16, wave 6 continued
+
+Coordinator branch `codex/resume-emergency-2026-10-14` is at `62649e5` (ahead of origin by three commits at checkpoint time). Preserve the untracked `docs/requirements/v3-agent-pack/` directory. The isolated Tool Library port worktree is `work/hey-integration-tool-plan-v2`; it has a dependency junction to the coordinator `node_modules` for local verification and should not be treated as a separate source-of-truth checkout.
+
+### Newly integrated source and evidence
+
+- `b833e57` integrated bounded advisory UltraSparse expert hints into the ordinary HEY Brain path. Unavailable model/capability hints preserve the ordinary route and do not alter server authority. Focused tests **17/17**; same-source production Vite build transformed 2,773 modules. Root full test suite now passes **692/692** after later integrations.
+- `355798b` integrates the current-head Tool Library plan/capacity/activity port from worker 03's `6c4c57a` source lineage. It adds user-facing plan run/retry behavior and account-scoped activity while retaining typed inputs, permission checks and retryable-only recovery.
+- `62649e5` rejects accessor-bearing permissioned tool outputs before they can be spread or inspected by Tool Library UI code. The regression asserts an enumerable output getter is never invoked. Focused `tests/tool-invocation-plans.test.js`: **7/7**; changed-file ESLint passes; same-source production Vite build passes (2,773 modules). Root full suite: **692/692**. Sitemap generation is skipped without `SITE_URL`; existing mixed static/dynamic `contextManager.js` chunk warning remains.
+- Browser state remains genuinely testable at `http://127.0.0.1:5175/login`. The live local UI reports missing `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` and disables sign-in. Authenticated frontend/backend, live database/provider, native device and production journeys remain **UNVERIFIED**.
+
+### Current worker state and exact next actions
+
+Existing Codex tasks 01, 04 and 06 were resumed concurrently against coordinator `62649e5`; all three report Active. Current continuation turn IDs: 01 `01a1448a-4f45-79f2-a317-d42deacdb07c`, 04 `01a1448a-506d-7803-89fe-cac1dfdafb9b`, 06 `01a1448a-516c-73d2-8578-c4a8f3d69c55`. Their existing task references and original branch paths are in the worker table below. They are to preserve old histories, make a current-head port branch, and return SHAs/test evidence. 01 checks the reachable Teacher route/account-switch state; 04 narrowly denies direct native IPC and advertises zero unverified capabilities; 06 ports safe selected-text voice editing while preserving explicit consent, inert preview, target revalidation, explicit replace/undo, cancellation and account-switch fencing.
+
+Worker 03 task `01a14073-ae0b-7fa2-a145-2d4b3283f087` completed the current-head Tool Library port. Original candidate `6c4c57a`; coordinator integrations `355798b` and `62649e5`. Its continuation worktree has not been deleted. All other specialists are currently idle after their prior checkpoints; do not report them active unless a fresh app snapshot confirms it.
+
+Immediate coordinator actions: push `62649e5` after updating this handoff and step map; receive the three active worker checkpoints; review each diff against latest coordinator; integrate only compatible narrow changes; then rerun affected focused tests and full suite. Keep the in-repo V3 pack untracked and untouched. Do not claim production readiness or authenticated app functionality from this local login-only proof.
+
 ## Latest coordinator checkpoint — 2026-10-16, Asia/Baghdad, wave 5 integrated
 
 Wave 5 code checkpoint: `5fc8e784051f50fcb7e0badc39692f1957900c57`. The currently pushed coordinator branch `codex/resume-emergency-2026-10-14` is `4ddecdbae126d1666610d01fded9166ababc1016` before this wave 6 handoff update. Preserve untracked `docs/requirements/v3-agent-pack/` (the Windows path length prevents normal Git tracking); do not stage or delete it.
