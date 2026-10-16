@@ -167,3 +167,7 @@ Step 07 now exposes safe parsed computer requests in Chat as a bounded action/ta
 ## Next implementation assignment — 2026-10-16
 
 A separate local collaboration agent `/root/step45` is implementing a bounded Step 45 Expert Pack runtime seam from coordinator checkpoint `6cc7298` in an isolated worktree; target branch `codex/wave7-step45-expert-packs`, branch creation/commit pending. Scope: integrate with existing research evidence path, versioned manifest/freshness/jurisdiction/evaluation guards and adversarial tests. This is active work, not verified implementation. Preserve the source extraction and do not claim any pack certified or production ready without current primary-source and operational evidence.
+
+## Parallel UI localization assignment — 2026-10-16
+
+A second isolated local collaboration agent `/root/voiceos_i18n` is implementing Step 43/44 localization and accessibility for the new VoiceOS preview from coordinator `94ce445`, target branch `codex/wave7-voiceos-localization`. Branch/worktree creation is pending. It must use the existing LocaleContext/translations system, preserve preview-only/no-authority semantics, and add locale/accessibility evidence. Translation quality still requires human review; this assignment is active, not verified implementation.
