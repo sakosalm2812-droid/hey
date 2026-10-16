@@ -55,6 +55,7 @@ test("voice edit UI fences account changes, supports cancel, and never submits",
   assert.match(control, /setSelection\(null\)/);
   assert.match(control, /Edit cancelled\. Your draft is unchanged\./);
   assert.match(control, /provider_unavailable/);
+  assert.match(control, /Rewrite is unavailable in this screen, and selected text is not sent to a rewrite provider\./);
   assert.match(control, /sessionRef\.current\?\.confirm\(proposal,\s*\{\s*confirmed: true/s);
   assert.match(control, /<button type="button" onClick=\{confirmProposal\}>Confirm edit/);
   assert.match(control, /<button type="button" onClick=\{insertConfirmed\}>Insert into draft/);

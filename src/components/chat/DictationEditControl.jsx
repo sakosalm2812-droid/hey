@@ -203,7 +203,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   if (!userId || !selection || disabled) return null;
   return (
     <section className="hey-dictation-edit" aria-label="Edit selected draft text by voice">
-      <p>Voice edit is limited to selected text in this HEY draft. Punctuation and saved snippets are processed locally. Rewrite requests are unavailable until a provider is configured; no selected text is sent for rewriting.</p>
+      <p>Voice edit is limited to selected text in this HEY draft. Punctuation and saved snippets are processed locally. Rewrite is unavailable in this screen, and selected text is not sent to a rewrite provider.</p>
       {!proposal && !busy && <DictationControl applicationId={CHAT_EDIT_APPLICATION_ID} onCapture={createPreview} captureLabel="Use as edit instruction" disabled={disabled} />}
       {busy && <p role="status" aria-live="polite">Preparing preview…</p>}
       {busy && <button type="button" className="hey-dictation__quiet" onClick={() => discard("Edit cancelled. Your draft is unchanged.")}>Cancel</button>}
