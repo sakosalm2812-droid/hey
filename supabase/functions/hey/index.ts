@@ -96,7 +96,12 @@ function getProviderAttempts() {
     : configured;
 }
 
-async function callProvider(messages: Array<Record<string, string>>, maxTokens: number, orderedAttempts = getProviderAttempts()) {
+async function callProvider(
+  messages: Array<Record<string, string>>,
+  maxTokens: number,
+  orderedAttempts = getProviderAttempts(),
+  authorizeProvider?: (provider: ProviderAttempt) => Promise<boolean>,
+) {
   let lastError = "No AI provider is configured";
 
   const deadline = Date.now() + 35_000;
@@ -104,6 +109,9 @@ async function callProvider(messages: Array<Record<string, string>>, maxTokens: 
     if (Date.now() >= deadline) break;
     const remaining = Math.max(500, Math.min(18_000, deadline - Date.now()));
     try {
+      if (authorizeProvider && !await authorizeProvider(provider)) {
+        throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
+      }
       const response = provider.id === "gemini"
         ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent`, {
           method: "POST",
@@ -122,10 +130,16 @@ async function callProvider(messages: Array<Record<string, string>>, maxTokens: 
         }, remaining);
 
       const data = await response.json();
-      if (response.ok) return { data, providerId: provider.id, model: provider.model };
+      if (response.ok) {
+        if (authorizeProvider && !await authorizeProvider(provider)) {
+          throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
+        }
+        return { data, providerId: provider.id, model: provider.model };
+      }
       lastError = `${provider.id}: ${String(data?.error?.message || response.status)}`;
       console.error("HEY provider error", lastError);
     } catch (error) {
+      if (error?.providerEntitlementDenied || error?.providerAuthorizationUnavailable) throw error;
       lastError = `${provider.id}: ${String(error)}`;
       console.error("HEY provider request error", lastError);
     }
@@ -777,9 +791,30 @@ Deno.serve(async (request) => {
     };
   } else {
     let providerResult;
+    const authorizeChatProvider = async (provider: ProviderAttempt) => {
+      const { data: latestProfile, error: latestProfileError } = await supabase
+        .from("profiles")
+        .select("entitlements")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (latestProfileError || !latestProfile) {
+        throw Object.assign(new Error("Provider permissions could not be revalidated"), { providerAuthorizationUnavailable: true });
+      }
+      const latestEntitlements = normalizeProviderEntitlements(latestProfile.entitlements);
+      if (!latestEntitlements) {
+        throw Object.assign(new Error("Provider permissions could not be revalidated"), { providerAuthorizationUnavailable: true });
+      }
+      return latestEntitlements.includes("provider.remote") && latestEntitlements.includes(`provider:${provider.id}`);
+    };
     try {
-      providerResult = await callProvider(messages, 1200, chatProviderAttempts);
+      providerResult = await callProvider(messages, 1200, chatProviderAttempts, authorizeChatProvider);
     } catch (error) {
+      if (error?.providerEntitlementDenied) {
+        return jsonResponse({ error: "Your account is not permitted to use this provider", code: "provider_entitlement_required" }, 403);
+      }
+      if (error?.providerAuthorizationUnavailable) {
+        return jsonResponse({ error: "Your account permissions could not be verified", code: "account_permissions_unavailable" }, 503);
+      }
       console.error("HEY provider error", error);
       return jsonResponse({ error: "HEY could not reach an AI provider" }, 502);
     }
