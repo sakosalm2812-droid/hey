@@ -206,16 +206,18 @@ export function createDictationEditSession(options = {}) {
     if (!isCurrent()) return fail("session_ended", "account_changed");
     let request;
     try {
-      request = readDataRecord(input, "Dictation edit request", ["sourceText", "utterance", "targetId", "selectionDigest"]);
+      request = readDataRecord(input, "Dictation edit request", ["sourceText", "utterance", "targetId", "selectionDigest", "cancelSignal"]);
       request.sourceText = selectionText(request.sourceText);
       request.utterance = plainText(request.utterance, "Edit utterance");
       request.targetId = boundedIdentity(request.targetId, "Target ID", 160);
       request.selectionDigest = boundedIdentity(request.selectionDigest, "Selection digest", 256);
+      if (request.cancelSignal !== undefined && !(typeof AbortSignal === "function" && request.cancelSignal instanceof AbortSignal)) throw new TypeError("cancelSignal must be an AbortSignal.");
     } catch {
       return fail("invalid_request", "invalid_edit_request");
     }
 
     const currentGeneration = generation;
+    if (request.cancelSignal?.aborted) return fail("cancelled", "rewrite_cancelled_by_user");
     let instruction;
     let intent;
     let proposedText;
@@ -235,6 +237,7 @@ export function createDictationEditSession(options = {}) {
       if (classified?.type !== "Edit" || classified.status !== "preview_required" || classified.requiresConfirmation !== true) {
         return fail("edit_intent_required", "utterance_is_not_an_edit");
       }
+      if (request.cancelSignal?.aborted) return fail("cancelled", "rewrite_cancelled_by_user");
 
       instruction = plainText(classified.preview?.instruction, "Edit instruction");
       const punctuation = punctuationKind(instruction, language);
@@ -248,6 +251,16 @@ export function createDictationEditSession(options = {}) {
         if (typeof AbortController !== "function") return fail("provider_unavailable", "cancellation_unavailable");
         const controller = new AbortController();
         controllers.add(controller);
+        let cancelled = false;
+        let rejectCancellation;
+        const cancellation = new Promise((_, reject) => { rejectCancellation = reject; });
+        const cancelRewrite = () => {
+          cancelled = true;
+          controller.abort();
+          rejectCancellation(new Error("Rewrite cancelled by user."));
+        };
+        request.cancelSignal?.addEventListener("abort", cancelRewrite, { once: true });
+        if (request.cancelSignal?.aborted) cancelRewrite();
         const providerInput = Object.freeze({
           text: request.sourceText,
           instruction,
@@ -268,17 +281,20 @@ export function createDictationEditSession(options = {}) {
               reject(new Error("Rewrite provider timed out."));
             }, rewriteTimeoutMs);
           });
-          proposedText = readProviderText(await Promise.race([rewriteRequest, timeout]));
+          proposedText = readProviderText(await Promise.race([rewriteRequest, timeout, cancellation]));
         } catch {
           if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+          if (cancelled) return fail("cancelled", "rewrite_cancelled_by_user");
           return timedOut
             ? fail("provider_timeout", "rewrite_provider_timed_out")
             : fail("provider_failed", "rewrite_provider_failed");
         } finally {
           if (timeoutId !== undefined) clearTimeout(timeoutId);
+          request.cancelSignal?.removeEventListener("abort", cancelRewrite);
           controllers.delete(controller);
         }
         if (!isCurrent() || currentGeneration !== generation) return fail("session_ended", "account_changed");
+        if (request.cancelSignal?.aborted) return fail("cancelled", "rewrite_cancelled_by_user");
       }
     }
 

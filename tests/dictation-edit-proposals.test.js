@@ -233,6 +233,36 @@ test("a stalled rewrite provider is aborted and returns a recoverable timeout wi
   assert.throws(() => createDictationEditSession({ rewriteTimeoutMs: 120_001 }), /rewriteTimeoutMs/);
 });
 
+test("a user AbortSignal aborts provider work and late output cannot create a preview", async () => {
+  const cancellation = new AbortController();
+  let resolveRewrite;
+  let providerSignal;
+  const runtime = createDictationEditSession({ rewriteProvider: { proposeRewrite(input) {
+    providerSignal = input.signal;
+    return new Promise((resolve) => { resolveRewrite = resolve; });
+  } } });
+  const pending = runtime.propose(proposalInput({ sourceText: "private draft", utterance: "Rewrite this clearly", cancelSignal: cancellation.signal }));
+  while (!resolveRewrite) await Promise.resolve();
+  cancellation.abort();
+  const result = await pending;
+  assert.deepEqual(result, { success: false, status: "cancelled", reason: "rewrite_cancelled_by_user" });
+  assert.equal(providerSignal.aborted, true);
+  resolveRewrite({ text: "late result" });
+  assert.equal(runtime.confirm(result.proposal, confirmationInput("private draft")).status, "invalid_proposal");
+  runtime.destroy();
+});
+
+test("pre-aborted rewrite requests never disclose source text to the provider", async () => {
+  const cancellation = new AbortController();
+  cancellation.abort();
+  let calls = 0;
+  const runtime = createDictationEditSession({ rewriteProvider: { proposeRewrite() { calls += 1; return { text: "unexpected" }; } } });
+  const result = await runtime.propose(proposalInput({ sourceText: "private draft", utterance: "Rewrite this clearly", cancelSignal: cancellation.signal }));
+  assert.deepEqual(result, { success: false, status: "cancelled", reason: "rewrite_cancelled_by_user" });
+  assert.equal(calls, 0);
+  runtime.destroy();
+});
+
 test("rewrite concurrency is bounded per session", async () => {
   const releases = [];
   let started = 0;
