@@ -341,7 +341,7 @@ function ToolCard({
       <dl className="tool-library__details">
         <div><dt>Risk</dt><dd>{tool.riskLevel || "Not specified"}</dd></div>
         {interfaceLevel === "advanced" && <div><dt>Registry state</dt><dd>{tool.lifecycle}</dd></div>}
-        {interfaceLevel === "advanced" && <div><dt>Start / Stop</dt><dd>Not declared for this tool</dd></div>}
+        {interfaceLevel === "advanced" && <div><dt>Lifecycle controls</dt><dd>Not declared for this tool</dd></div>}
         {tool.requiresConfirmation && <div><dt>Confirmation</dt><dd>Required before execution</dd></div>}
       </dl>
       {tool.permissions.length > 0 && (
