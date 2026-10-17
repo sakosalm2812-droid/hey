@@ -31,7 +31,7 @@ import FirstRunPurposeSetup from "./components/chat/FirstRunPurposeSetup.jsx";
 import { subscribe } from "./core/eventBus.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { cancelVoiceCommandPreview, isVoiceCommandCancellation, reviewVoiceCommandPreview, understandVoiceCommand } from "./core/voiceCommandUnderstanding.js";
-import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview, shouldClearSubmittedComputerPreviewDraft } from "./core/voiceOSPreview.js";
+import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview, getComputerPreviewExpiryAction, shouldClearSubmittedComputerPreviewDraft } from "./core/voiceOSPreview.js";
 import {
   createBrowserSpeechProvider,
   createBrowserSpeechSynthesisProvider,
@@ -512,12 +512,17 @@ function ChatWorkspace() {
     if (!Number.isFinite(expiresAt)) return undefined;
     const timeout = window.setTimeout(() => {
       const current = pendingComputerPreviewRef.current;
-      if (!current || current.preview.previewId !== pending.preview.previewId || current.reviewed) return;
-      if (current.accountScope !== getAccountScope()) {
+      const expiryAction = getComputerPreviewExpiryAction({
+        scheduledPreviewId: pending.preview.previewId,
+        currentPreview: current,
+        currentAccountScope: getAccountScope(),
+      });
+      if (expiryAction === "stale") return;
+      cancelVoiceCommandPreview(pending.preview.previewId);
+      if (expiryAction === "clear") {
         storeComputerPreview(null);
         return;
       }
-      cancelVoiceCommandPreview(current.preview.previewId);
       storeComputerPreview({ ...current, expired: true });
       setExecutionStatus(t("chat.voiceOS.expiredRefresh", "This preview expired. Refresh it to review a new preview; nothing was run."));
     }, Math.max(0, expiresAt - Date.now()));

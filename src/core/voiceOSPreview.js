@@ -29,6 +29,41 @@ function parseSafeWebTarget(value) {
   }
 }
 
+/** Classify a delayed expiry callback against the live preview and account. */
+export function getComputerPreviewExpiryAction(input) {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return "stale";
+    const inputFields = Object.getOwnPropertyDescriptors(input);
+    if (Object.getPrototypeOf(input) !== Object.prototype
+      || Object.getOwnPropertySymbols(input).length
+      || Object.keys(inputFields).length !== 3
+      || ["scheduledPreviewId", "currentPreview", "currentAccountScope"].some((key) =>
+        !inputFields[key]?.enumerable || !Object.hasOwn(inputFields[key], "value"))) return "stale";
+    const { scheduledPreviewId, currentPreview, currentAccountScope } = Object.fromEntries(
+      Object.entries(inputFields).map(([key, descriptor]) => [key, descriptor.value]),
+    );
+    if (typeof scheduledPreviewId !== "string" || !scheduledPreviewId
+      || (currentAccountScope !== null && typeof currentAccountScope !== "string")) return "stale";
+    if (!currentPreview || typeof currentPreview !== "object" || Array.isArray(currentPreview)
+      || Object.getPrototypeOf(currentPreview) !== Object.prototype) return "stale";
+    const previewFields = Object.getOwnPropertyDescriptors(currentPreview);
+    for (const key of ["preview", "accountScope", "reviewed"]) {
+      if (!previewFields[key]?.enumerable || !Object.hasOwn(previewFields[key], "value")) return "stale";
+    }
+    const preview = previewFields.preview.value;
+    if (!preview || typeof preview !== "object" || Array.isArray(preview)
+      || Object.getPrototypeOf(preview) !== Object.prototype) return "stale";
+    const previewIdField = Object.getOwnPropertyDescriptor(preview, "previewId");
+    if (!previewIdField || !Object.hasOwn(previewIdField, "value")
+      || previewIdField.value !== scheduledPreviewId || previewFields.reviewed.value !== false) return "stale";
+    const accountScope = previewFields.accountScope.value;
+    if (typeof accountScope !== "string" || !accountScope) return "stale";
+    return accountScope === currentAccountScope ? "expire" : "clear";
+  } catch {
+    return "stale";
+  }
+}
+
 /** Clear a submitted typed request only if no newer composer draft replaced it. */
 export function shouldClearSubmittedComputerPreviewDraft(submittedDraft, currentDraft) {
   return typeof submittedDraft === "string" && submittedDraft.trim().length > 0

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
-import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview, shouldClearSubmittedComputerPreviewDraft } from "../src/core/voiceOSPreview.js";
+import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview, getComputerPreviewExpiryAction, shouldClearSubmittedComputerPreviewDraft } from "../src/core/voiceOSPreview.js";
 import { translations } from "../src/i18n/translations.js";
 
 test("safe computer previews expose only bounded target and capability labels", async () => {
@@ -98,6 +98,57 @@ test("typed preview completion clears only its unchanged submitted draft", async
   const previewBranch = submitHandler.slice(previewStart, previewEnd);
   assert.match(previewBranch, /shouldClearSubmittedComputerPreviewDraft\(userMessage, messageRef\.current\)\) setMessage\(""\)/);
   assert.doesNotMatch(previewBranch, /sendUserMessage|askHEY|executeRequest|invoke\(/);
+});
+
+test("delayed expiry callbacks recheck preview identity, review state, account scope, and hostile records", async () => {
+  const pending = { preview: { previewId: "preview-a" }, accountScope: "account:a", reviewed: false };
+  let live = pending;
+  let accountScope = "account:a";
+  const scheduleExpiry = () => Promise.resolve().then(() => getComputerPreviewExpiryAction({
+    scheduledPreviewId: "preview-a",
+    currentPreview: live,
+    currentAccountScope: accountScope,
+  }));
+
+  const replacedExpiry = scheduleExpiry();
+  live = { preview: { previewId: "preview-b" }, accountScope: "account:a", reviewed: false };
+  assert.equal(await replacedExpiry, "stale");
+
+  live = pending;
+  const reviewedExpiry = scheduleExpiry();
+  live = { ...pending, reviewed: true };
+  assert.equal(await reviewedExpiry, "stale");
+  assert.equal(getComputerPreviewExpiryAction({
+    scheduledPreviewId: "preview-a",
+    currentPreview: { ...pending, reviewed: "false" },
+    currentAccountScope: "account:a",
+  }), "stale");
+
+  live = pending;
+  const switchedExpiry = scheduleExpiry();
+  accountScope = "account:b";
+  assert.equal(await switchedExpiry, "clear");
+
+  accountScope = "account:a";
+  const currentExpiry = scheduleExpiry();
+  assert.equal(await currentExpiry, "expire");
+
+  let getterCalls = 0;
+  const hostile = { ...pending };
+  Object.defineProperty(hostile, "reviewed", { enumerable: true, get() { getterCalls += 1; throw new Error("do not read"); } });
+  assert.equal(getComputerPreviewExpiryAction({ scheduledPreviewId: "preview-a", currentPreview: hostile, currentAccountScope: "account:a" }), "stale");
+  assert.equal(getComputerPreviewExpiryAction(new Proxy({ scheduledPreviewId: "preview-a", currentPreview: pending, currentAccountScope: "account:a" }, { ownKeys() { throw new Error("hostile expiry state"); } })), "stale");
+  assert.equal(getterCalls, 0);
+
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const callbackStart = source.indexOf("const timeout = window.setTimeout(() => {");
+  const callbackEnd = source.indexOf("}, Math.max(0, expiresAt - Date.now()));", callbackStart);
+  assert.ok(callbackStart >= 0 && callbackEnd > callbackStart);
+  const callback = source.slice(callbackStart, callbackEnd);
+  assert.match(callback, /getComputerPreviewExpiryAction\(/);
+  assert.match(callback, /if \(expiryAction === "stale"\) return/);
+  assert.match(callback, /cancelVoiceCommandPreview\(pending\.preview\.previewId\)/);
+  assert.match(callback, /if \(expiryAction === "clear"\)/);
 });
 
 test("chat review UI is visibly inert and does not dispatch a confirmed action", async () => {
