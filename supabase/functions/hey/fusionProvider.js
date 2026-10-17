@@ -100,6 +100,21 @@ function cancelStreamQuietly(stream) {
   }
 }
 
+async function readProviderChunk(reader, signal) {
+  if (!signal) return await reader.read();
+  if (signal.aborted) throw new Error("Provider request cancelled");
+  let rejectAborted;
+  const aborted = new Promise((_, reject) => { rejectAborted = reject; });
+  const abortRead = () => rejectAborted(new Error("Provider request cancelled"));
+  signal.addEventListener("abort", abortRead, { once: true });
+  try {
+    if (signal.aborted) throw new Error("Provider request cancelled");
+    return await Promise.race([reader.read(), aborted]);
+  } finally {
+    signal.removeEventListener("abort", abortRead);
+  }
+}
+
 async function readBoundedResponseText(response, signal) {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_PROVIDER_RESPONSE_BYTES) {
@@ -111,7 +126,13 @@ async function readBoundedResponseText(response, signal) {
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
-  const cancelOnAbort = () => cancelStreamQuietly(reader);
+  let readerCancelled = false;
+  const cancelReader = () => {
+    if (readerCancelled) return;
+    readerCancelled = true;
+    cancelStreamQuietly(reader);
+  };
+  const cancelOnAbort = cancelReader;
   if (signal?.aborted) {
     cancelStreamQuietly(reader);
     throw new Error("Provider request cancelled");
@@ -119,19 +140,19 @@ async function readBoundedResponseText(response, signal) {
   signal?.addEventListener("abort", cancelOnAbort, { once: true });
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readProviderChunk(reader, signal);
       if (signal?.aborted) throw new Error("Provider request cancelled");
       if (done) break;
       size += value.byteLength;
       if (size > MAX_PROVIDER_RESPONSE_BYTES) {
-        cancelStreamQuietly(reader);
+        cancelReader();
         throw new Error("Provider response too large");
       }
       chunks.push(value);
     }
   } finally {
     signal?.removeEventListener("abort", cancelOnAbort);
-    if (signal?.aborted) cancelStreamQuietly(reader);
+    if (signal?.aborted) cancelReader();
   }
   const bytes = new Uint8Array(size);
   let offset = 0;
