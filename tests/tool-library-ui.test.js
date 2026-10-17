@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [appSource, layoutSource, pageSource, lifecycleActionSource] = await Promise.all([
+const [appSource, layoutSource, pageSource, lifecycleActionSource, lifecycleRecoverySource] = await Promise.all([
   readFile(new URL("../src/App.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/layout/AppLayout.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/ToolLibraryPage.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/lib/toolLibraryLifecycleAction.js", import.meta.url), "utf8"),
+  readFile(new URL("../src/lib/toolLibraryLifecycleRecovery.js", import.meta.url), "utf8"),
 ]);
 
 test("Tool Library is reachable through the protected app route and primary navigation", () => {
@@ -94,6 +95,13 @@ test("Tool Library distinguishes failed activity and session refreshes from empt
   assert.match(pageSource, /refreshStatus\?\.activityStatus === "ready"[\s\S]*?No Tool Library activity is recorded/);
   assert.match(pageSource, /Tool activity could not be refreshed\. Try again\./);
   assert.match(pageSource, /Session status could not be refreshed\. Try again\./);
+});
+
+test("Tool Library reconciles asynchronous lifecycle receipts against the fresh session identity", () => {
+  assert.match(pageSource, /reconcileToolLibraryLifecycleReceipt\([\s\S]*?snapshot\.lifecycle[\s\S]*?getAccountScope\(\)/);
+  assert.match(pageSource, /status: "stopping", message:[^\n]*sessionId: lifecycleView\.sessionId/);
+  assert.match(pageSource, /"stale_session", "failed", "failed_after_stop", "cancelled"/);
+  assert.match(lifecycleRecoverySource, /lifecycle\.sessionId !== receipt\.sessionId/);
 });
 
 test("Tool Library maps the V3 natural language dictation request to a truthful live entrypoint", () => {

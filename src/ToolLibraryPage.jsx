@@ -16,6 +16,7 @@ import { resolveRecentToolEntry } from "./lib/toolLibraryRecentEntry.js";
 import { scheduleRecentToolCardFocus } from "./lib/toolLibraryRecentFocus.js";
 import { refreshToolLibraryLifecycleSnapshot } from "./lib/toolLibraryLifecycleRefresh.js";
 import { invokeToolLibraryLifecycleAction } from "./lib/toolLibraryLifecycleAction.js";
+import { reconcileToolLibraryLifecycleReceipt } from "./lib/toolLibraryLifecycleRecovery.js";
 import { getToolLibraryPlatformMatrix, TOOL_LIBRARY_PLATFORMS } from "./lib/toolLibraryPlatformMatrix.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
@@ -154,6 +155,7 @@ function ToolCard({
   const setReceipt = useCallback((next) => {
     setReceiptState((current) => {
       const value = typeof next === "function" ? next(isToolLibraryRecordVisible(current, accountId, getAccountScope()) ? current : null) : next;
+      if (value === current) return current;
       return value ? scopeToolLibraryRecord(accountId, value) : null;
     });
   }, [accountId]);
@@ -182,13 +184,19 @@ function ToolCard({
         activityStatus: snapshot.activityStatus,
         lifecycleStatus: snapshot.lifecycleStatus,
       }));
+      setReceipt((current) => reconcileToolLibraryLifecycleReceipt(
+        current,
+        snapshot.lifecycle,
+        accountId,
+        getAccountScope(),
+      ) || current);
     } else if (snapshot.status === "account_changed" && refreshRequestRef.current === request) {
       setActivityState(null);
       setLifecycleState(null);
       setRefreshState(null);
     }
     if (refreshRequestRef.current === request) setRefreshingLifecycle(false);
-  }, [accountId, tool.name, user]);
+  }, [accountId, setReceipt, tool.name, user]);
 
   useEffect(() => {
     refreshActivity();
@@ -397,7 +405,7 @@ function ToolCard({
     if (!lifecycleView.canStop || !lifecycleView.sessionId || !accountId || getAccountScope() !== `account:${accountId}`) return;
     const response = invokeToolLibraryLifecycleAction(() => HEY.tools.stop(tool.name, lifecycleView.sessionId, { user }));
     if (response?.success && response.status === "stopping") {
-      setReceipt({ status: "stopping", message: "Stop requested. HEY will report the session’s actual final state." });
+      setReceipt({ status: "stopping", message: "Stop requested. HEY will report the session’s actual final state.", sessionId: lifecycleView.sessionId });
     } else {
       setReceipt({ status: response?.status || "error", message: safeToolError(response?.error) });
     }
@@ -645,8 +653,8 @@ function ToolCard({
           })}
           <div className="tool-library__run-actions">{canRun && <button type="submit" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`}><Play size={15} aria-hidden="true" /> Run</button>}{canStart && <button type="button" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`} onClick={submitLifecycleStart}><Play size={15} aria-hidden="true" /> Start session</button>}{canRetry && <button type="button" className="tool-library__run-button" disabled={running || !accountId || getAccountScope() !== `account:${accountId}`} onClick={submitLifecycleRetry}>Retry failed session</button>}{running && <button type="button" className="tool-library__deny-button" onClick={cancelRun}>Cancel</button>}</div>
         </form>}
-        {receipt && <div className={`tool-library__receipt tool-library__receipt--${receipt.status}`} role={["error", "denied"].includes(receipt.status) ? "alert" : "status"} aria-live="polite">
-          <div className="tool-library__receipt-heading">{receipt.status === "completed" ? <CheckCircle2 size={16} aria-hidden="true" /> : ["error", "denied"].includes(receipt.status) ? <CircleX size={16} aria-hidden="true" /> : <LockKeyhole size={16} aria-hidden="true" />}<strong>{receipt.status.replaceAll("_", " ")}</strong></div>
+        {receipt && <div className={`tool-library__receipt tool-library__receipt--${receipt.status}`} role={["error", "denied", "stale_session", "failed", "failed_after_stop", "cancelled"].includes(receipt.status) ? "alert" : "status"} aria-live="polite">
+          <div className="tool-library__receipt-heading">{receipt.status === "completed" ? <CheckCircle2 size={16} aria-hidden="true" /> : ["error", "denied", "stale_session", "failed", "failed_after_stop", "cancelled"].includes(receipt.status) ? <CircleX size={16} aria-hidden="true" /> : <LockKeyhole size={16} aria-hidden="true" />}<strong>{receipt.status.replaceAll("_", " ")}</strong></div>
           <p>{receipt.message}</p>{receipt.requestId && <small>Receipt {receipt.requestId}</small>}
           {receipt.retryable && receipt.retryRun && !running && <button type="button" className="tool-library__run-button" onClick={() => { const retryRun = { ...receipt.retryRun, requestId: crypto.randomUUID(), stepId: `retry-${crypto.randomUUID()}` }; setReceipt(null); void invokePlan(retryRun); }}>Retry this run</button>}
           {receipt.status === "authorization_required" && pendingRun && <div className="tool-library__run-actions"><button type="button" className="tool-library__run-button" onClick={allowPermission}>Allow account permission</button><button type="button" className="tool-library__deny-button" onClick={() => { setReceipt({ status: "denied", message: "You denied this tool run. HEY did not dispatch it.", requestId: pendingRun.requestId }); setPendingRun(null); }}>Deny</button></div>}
