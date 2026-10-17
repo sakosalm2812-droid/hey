@@ -264,6 +264,23 @@
   font-size: 11px;
 }
 
+.tool-library__recent-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gold-primary, #d6b66b);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-library__recent-open:hover,
+.tool-library__recent-open:focus-visible {
+  color: var(--text-primary, #f5f2ec);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .tool-library__tool-icon {
   display: grid;
   width: 38px;

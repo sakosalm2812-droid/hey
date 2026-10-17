@@ -12,6 +12,7 @@ import { formatToolLibraryReceipt, isToolLibraryRecordVisible, scopeToolLibraryR
 import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolLibrarySearch.js";
 import { getDictationReadiness } from "./lib/dictationReadiness.js";
 import { getToolLibraryLifecycleView } from "./lib/toolLibraryLifecycleView.js";
+import { resolveRecentToolEntry } from "./lib/toolLibraryRecentEntry.js";
 import { refreshToolLibraryLifecycleSnapshot } from "./lib/toolLibraryLifecycleRefresh.js";
 import { getToolLibraryPlatformMatrix, TOOL_LIBRARY_PLATFORMS } from "./lib/toolLibraryPlatformMatrix.js";
 import { Link } from "react-router-dom";
@@ -636,6 +637,7 @@ export default function ToolLibraryPage() {
   const [tools, setTools] = useState([]);
   const [platformCatalogs, setPlatformCatalogs] = useState({});
   const [query, setQuery] = useState("");
+  const [recentToolName, setRecentToolName] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeView, setActiveView] = useState("all");
@@ -765,9 +767,35 @@ export default function ToolLibraryPage() {
     updatePreference(tool.name, "pinned");
   }
 
+  function openRecentTool(name) {
+    const entry = resolveRecentToolEntry({
+      name,
+      accountId,
+      activeScope: getAccountScope(),
+      recent: preferences.recent,
+      catalog: tools,
+    });
+    if (!preferenceReady || entry.status !== "ready") {
+      setPreferenceError(entry.status === "account_required"
+        ? "Your account changed. Reload Tools before opening a recent tool."
+        : "This recent tool is no longer available in the current catalog. Reload Tools to refresh it.");
+      return;
+    }
+    setPreferenceError("");
+    setActiveView("all");
+    setRecentToolName(entry.name);
+    setQuery(entry.name);
+  }
+
+  function clearRecentToolFocus() {
+    if (recentToolName) setQuery("");
+    setRecentToolName(null);
+  }
+
   const filteredTools = useMemo(() => {
+    if (typeof recentToolName === "string") return tools.filter((tool) => tool.name === recentToolName);
     return searchToolLibraryCatalog(tools, query);
-  }, [query, tools]);
+  }, [query, recentToolName, tools]);
   const dictationDiscovery = isDictationDiscoveryQuery(query);
   const [dictationReadiness, setDictationReadiness] = useState({ status: "idle", supported: null, permission: "unknown" });
 
@@ -827,7 +855,7 @@ export default function ToolLibraryPage() {
         <label className="tool-library__search">
           <Search size={18} aria-hidden="true" />
           <span className="tool-library__sr-only">Search tools, permissions, and capabilities</span>
-          <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools or permissions" />
+          <input type="search" value={query} onChange={(event) => { setRecentToolName(null); setQuery(event.target.value); }} placeholder="Search tools or permissions" />
         </label>
         <p>Platform catalog: <strong>Web</strong></p>
       </div>
@@ -842,9 +870,9 @@ export default function ToolLibraryPage() {
         <div className="tool-library__preference-toolbar">
           <h2 id="tool-library-views-title">Your tool views</h2>
           <div className="tool-library__view-tabs" role="group" aria-label="Filter tools">
-            <button type="button" aria-pressed={displayedView === "all"} onClick={() => setActiveView("all")}>All <span>{tools.length}</span></button>
-            <button type="button" aria-pressed={displayedView === "favorites"} disabled={!preferenceReady} onClick={() => setActiveView("favorites")}>Favorites <span>{preferences.favorites.length}</span></button>
-            <button type="button" aria-pressed={displayedView === "pinned"} disabled={!preferenceReady} onClick={() => setActiveView("pinned")}>Pinned <span>{preferences.pinned.length}</span></button>
+            <button type="button" aria-pressed={displayedView === "all"} onClick={() => { clearRecentToolFocus(); setActiveView("all"); }}>All <span>{tools.length}</span></button>
+            <button type="button" aria-pressed={displayedView === "favorites"} disabled={!preferenceReady} onClick={() => { clearRecentToolFocus(); setActiveView("favorites"); }}>Favorites <span>{preferences.favorites.length}</span></button>
+            <button type="button" aria-pressed={displayedView === "pinned"} disabled={!preferenceReady} onClick={() => { clearRecentToolFocus(); setActiveView("pinned"); }}>Pinned <span>{preferences.pinned.length}</span></button>
           </div>
         </div>
 
@@ -859,7 +887,7 @@ export default function ToolLibraryPage() {
             <ul>
               {recentEntries.map((entry) => (
                 <li key={entry.name}>
-                  <span>{describeName(entry.name)}</span>
+                  <button type="button" className="tool-library__recent-open" aria-label={`Show ${describeName(entry.name)} in the catalog`} onClick={() => openRecentTool(entry.name)}>{describeName(entry.name)}</button>
                   <time dateTime={entry.usedAt}>{formatRecentDate(entry.usedAt)}</time>
                 </li>
               ))}
