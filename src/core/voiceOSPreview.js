@@ -29,6 +29,12 @@ function parseSafeWebTarget(value) {
   }
 }
 
+/** Clear a submitted typed request only if no newer composer draft replaced it. */
+export function shouldClearSubmittedComputerPreviewDraft(submittedDraft, currentDraft) {
+  return typeof submittedDraft === "string" && submittedDraft.trim().length > 0
+    && typeof currentDraft === "string" && currentDraft === submittedDraft;
+}
+
 /** Return a bounded display summary for one inert, user-reviewed computer request. */
 export function describeSafeComputerActionPreview(preview) {
   try {
