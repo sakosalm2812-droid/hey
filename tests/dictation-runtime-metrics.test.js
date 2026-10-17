@@ -84,6 +84,40 @@ test("permission denial produces a stable failure metric without exposing provid
   session.destroy();
 });
 
+test("denied and revoked recognition can recover only through a fresh consented retry", async () => {
+  const callbacks = [];
+  const metrics = [];
+  let permissionRequests = 0;
+  let providerStarts = 0;
+  const session = createDictationSession({
+    speechProvider: { start(options) { providerStarts += 1; callbacks.push(options); return {}; }, stop() {} },
+    environment: environmentWithPermission(async () => {
+      permissionRequests += 1;
+      if (permissionRequests === 1) throw Object.assign(new Error("private denial detail"), { name: "NotAllowedError" });
+      return { getTracks: () => [] };
+    }),
+    onMetrics: (value) => metrics.push(value),
+  });
+
+  const denied = await session.start({ consentGiven: true });
+  assert.equal(denied.status, "permission_required");
+  assert.equal(providerStarts, 0);
+  assert.equal(metrics.at(-1).status, "permission_failed");
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  assert.equal(providerStarts, 1);
+  callbacks[0].onError("not-allowed");
+  assert.equal(session.snapshot().state, "error");
+  assert.equal(metrics.at(-1).status, "recognition_error");
+
+  assert.equal((await session.start({ consentGiven: true })).success, true);
+  assert.equal(permissionRequests, 3);
+  assert.equal(providerStarts, 2);
+  callbacks[0].onTranscript("late result after revoked permission");
+  assert.equal(session.snapshot().state, "listening");
+  session.destroy();
+});
+
 test("permission probe attempts every track and fails closed when release is incomplete", async () => {
   const stopped = [];
   let starts = 0;
@@ -282,6 +316,38 @@ test("a cancelled permission prompt can be retried without accepting its late st
   assert.deepEqual(stoppedStreams, ["new", "late-old"]);
   assert.equal(starts, 1);
   session.destroy();
+});
+
+test("an immediate retry after cancellation is isolated from the late permission result", async () => {
+  const permissionResolvers = [];
+  const stoppedStreams = [];
+  const metrics = [];
+  let starts = 0;
+  const session = createDictationSession({
+    speechProvider: { start() { starts += 1; return {}; }, stop() {} },
+    environment: environmentWithPermission(() => new Promise((resolve) => permissionResolvers.push(resolve))),
+    onMetrics: (value) => metrics.push(value),
+  });
+
+  const first = session.start({ consentGiven: true });
+  while (permissionResolvers.length < 1) await Promise.resolve();
+  session.stop();
+  const retry = session.start({ consentGiven: true });
+  while (permissionResolvers.length < 2) await Promise.resolve();
+  permissionResolvers[1]({ getTracks: () => [] });
+  assert.equal((await retry).success, true);
+  assert.equal(starts, 1);
+  assert.deepEqual(metrics.map(({ status }) => status), ["cancelled"]);
+
+  permissionResolvers[0]({ getTracks: () => [{ stop() { stoppedStreams.push("late-old"); } }] });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal((await first).status, "cancelled");
+  assert.deepEqual(stoppedStreams, ["late-old"]);
+  assert.deepEqual(metrics.map(({ status }) => status), ["cancelled"]);
+  assert.equal(session.snapshot().state, "listening");
+  session.destroy();
+  assert.deepEqual(metrics.map(({ status }) => status), ["cancelled", "stopped"]);
 });
 
 test("oversized recognition results are discarded with bounded diagnostics and a retryable session", async () => {
