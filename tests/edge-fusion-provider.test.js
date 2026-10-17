@@ -1441,3 +1441,83 @@ test("mid-checker authority revocation aborts the checker and withholds the cand
   assert.equal(calls.length, 2);
   assert.equal("answer" in result, false);
 });
+
+test("cancellation interrupts a stalled final authority check and preserves the spend receipt", async () => {
+  const controller = new AbortController();
+  const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+  let authorityChecks = 0;
+  let finalLookupAborted = false;
+  let markFinalLookupStarted;
+  const finalLookupStarted = new Promise((resolve) => { markFinalLookupStarted = resolve; });
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    signal: controller.signal,
+    fetchImpl,
+    getCurrentEntitlements: async (_accountId, authoritySignal) => {
+      authorityChecks += 1;
+      if (authorityChecks === 5) {
+        markFinalLookupStarted();
+        await new Promise((resolve) => authoritySignal.addEventListener("abort", () => {
+          finalLookupAborted = true;
+          resolve();
+        }, { once: true }));
+      }
+      return entitlements;
+    },
+  });
+
+  await finalLookupStarted;
+  controller.abort(new Error("user cancelled"));
+  const result = await resultPromise;
+  assert.equal(result.status, "cancelled");
+  assert.equal("answer" in result, false);
+  assert.equal(finalLookupAborted, true);
+  assert.equal(calls.length, 2);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal(result.costReceipt.callsMetered, 2);
+  assert.equal(result.costReceipt.providerReportedUsd, 0.00018);
+});
+
+test("a final authority check timeout fails closed with the complete spend receipt", async () => {
+  const { calls, fetchImpl } = mockProviderFetch(() => ["42", 0.9]);
+  let authorityChecks = 0;
+  let finalLookupAborted = false;
+  let markFinalLookupStarted;
+  const finalLookupStarted = new Promise((resolve) => { markFinalLookupStarted = resolve; });
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    fetchImpl,
+    getCurrentEntitlements: async (_accountId, authoritySignal) => {
+      authorityChecks += 1;
+      if (authorityChecks === 5) {
+        markFinalLookupStarted();
+        await new Promise((resolve) => authoritySignal.addEventListener("abort", () => {
+          finalLookupAborted = true;
+          resolve();
+        }, { once: true }));
+      }
+      return entitlements;
+    },
+  });
+
+  await finalLookupStarted;
+  const result = await resultPromise;
+  assert.equal(result.status, "unconfigured");
+  assert.equal(result.reason, "authorization_revalidation_failed");
+  assert.equal("answer" in result, false);
+  assert.equal(finalLookupAborted, true);
+  assert.equal(calls.length, 2);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal(result.costReceipt.callsMetered, 2);
+  assert.equal(result.costReceipt.providerReportedUsd, 0.00018);
+});

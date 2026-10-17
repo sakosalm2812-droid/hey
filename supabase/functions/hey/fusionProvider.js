@@ -143,6 +143,33 @@ async function readBoundedResponseText(response, signal) {
   return new TextDecoder().decode(bytes);
 }
 
+async function readCurrentEntitlementsBounded(getCurrentEntitlements, accountId, signal) {
+  const controller = new AbortController();
+  let timeoutId;
+  let rejectStopped;
+  const stopped = new Promise((_, reject) => { rejectStopped = reject; });
+  const stop = (reason) => {
+    if (controller.signal.aborted) return;
+    controller.abort(reason);
+    rejectStopped(new Error("Authorization revalidation stopped"));
+  };
+  const abortFromCaller = () => stop(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  timeoutId = setTimeout(() => stop(new Error("Authorization revalidation timed out")), AUTHORITY_RECHECK_INTERVAL_MS);
+  try {
+    if (controller.signal.aborted) throw new Error("Authorization revalidation stopped");
+    return await Promise.race([
+      Promise.resolve().then(() => getCurrentEntitlements(accountId, controller.signal)),
+      stopped,
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortFromCaller);
+    if (!controller.signal.aborted) controller.abort(new Error("Authorization revalidation finished"));
+  }
+}
+
 async function sha256Hex(value) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -522,8 +549,9 @@ export async function runFusionChatRequest({
     if (typeof getCurrentEntitlements !== "function") return { status: "unconfigured", reason: "authorization_revalidation_failed", costReceipt };
     let currentEntitlements;
     try {
-      currentEntitlements = await getCurrentEntitlements(accountId, signal);
+      currentEntitlements = await readCurrentEntitlementsBounded(getCurrentEntitlements, accountId, signal);
     } catch {
+      if (signal?.aborted || !isCurrent(accountId)) return { status: "cancelled", costReceipt };
       return { status: "unconfigured", reason: "authorization_revalidation_failed", costReceipt };
     }
     if (signal?.aborted || !isCurrent(accountId)) return { status: "cancelled", costReceipt };
