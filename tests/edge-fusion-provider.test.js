@@ -318,6 +318,108 @@ test("a recovered answer is withheld when its checker grant is revoked during pr
   assert.equal("answer" in result, false);
 });
 
+function createRecoveredFusionHashRaceFixture() {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") return new Response("private checker outage", { status: 503 });
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  return {
+    calls,
+    fetchImpl,
+    run: (extra = {}) => runFusionChatRequest({
+      requested: true,
+      accountId: "account-a",
+      entitlements: threeProviderEntitlements,
+      attempts: threeProviderAttempts,
+      pricingConfig: threeProviderPricing,
+      messages,
+      fetchImpl,
+      ...extra,
+    }),
+  };
+}
+
+function assertSameSpendReceiptExceptElapsed(actual, expected) {
+  const { fusionElapsedMs: actualElapsedMs, ...actualSpend } = actual;
+  const { fusionElapsedMs: expectedElapsedMs, ...expectedSpend } = expected;
+  assert.deepEqual(actualSpend, expectedSpend);
+  for (const elapsedMs of [actualElapsedMs, expectedElapsedMs]) {
+    assert.ok(Number.isSafeInteger(elapsedMs));
+    assert.ok(elapsedMs >= 0 && elapsedMs <= 40_000);
+  }
+}
+
+test("a recovered answer is withheld when account scope becomes stale during provenance hashing", async () => {
+  const fixture = createRecoveredFusionHashRaceFixture();
+  const control = await fixture.run();
+  assert.equal(control.status, "complete");
+
+  let accountCurrent = true;
+  const digestPrototype = Object.getPrototypeOf(globalThis.crypto.subtle);
+  const originalDigest = digestPrototype.digest;
+  let digestCalls = 0;
+  digestPrototype.digest = function (...args) {
+    digestCalls += 1;
+    if (digestCalls === 1) accountCurrent = false;
+    return originalDigest.apply(this, args);
+  };
+  let result;
+  try {
+    result = await fixture.run({ isCurrent: () => accountCurrent });
+  } finally {
+    digestPrototype.digest = originalDigest;
+  }
+
+  assert.equal(digestCalls, 2);
+  assert.equal(result.status, "cancelled");
+  assert.equal("answer" in result, false);
+  assert.deepEqual(fixture.calls, ["openai", "gemini", "groq", "openai", "gemini", "groq"]);
+  assertSameSpendReceiptExceptElapsed(result.costReceipt, control.costReceipt);
+});
+
+test("a recovered answer is withheld when cancellation occurs during provenance hashing", async () => {
+  const fixture = createRecoveredFusionHashRaceFixture();
+  const control = await fixture.run();
+  assert.equal(control.status, "complete");
+
+  const controller = new AbortController();
+  const digestPrototype = Object.getPrototypeOf(globalThis.crypto.subtle);
+  const originalDigest = digestPrototype.digest;
+  let digestCalls = 0;
+  digestPrototype.digest = function (...args) {
+    digestCalls += 1;
+    if (digestCalls === 1) controller.abort();
+    return originalDigest.apply(this, args);
+  };
+  let result;
+  try {
+    result = await fixture.run({ signal: controller.signal });
+  } finally {
+    digestPrototype.digest = originalDigest;
+  }
+
+  assert.equal(digestCalls, 2);
+  assert.equal(result.status, "cancelled");
+  assert.equal("answer" in result, false);
+  assert.deepEqual(fixture.calls, ["openai", "gemini", "groq", "openai", "gemini", "groq"]);
+  assertSameSpendReceiptExceptElapsed(result.costReceipt, control.costReceipt);
+});
+
 test("a recovery checker reserves candidate context and meters its reported usage", async () => {
   const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
     ...JSON.parse(pricingText),
