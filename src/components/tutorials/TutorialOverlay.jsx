@@ -3,6 +3,7 @@ import { Check, ChevronRight, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { events, onboarding } from "../../core/index.js";
+import { closeTutorialOverlayForAccount, reconcileTutorialOverlayProgress } from "./tutorialOverlayProgress.js";
 
 const { subscribe } = events;
 const { getTutorial, getTutorialProgress, completeTutorialStep, skipTutorial, completeTutorial } = onboarding;
@@ -54,15 +55,9 @@ export default function TutorialOverlay() {
       }],
       ["tutorial.progress_synced", (payload) => {
         if (!payload?.capabilityId) return;
-        setActive((current) => {
-          if (!current || current.capabilityId !== payload.capabilityId) return current;
-          if (current.accountScope !== payload.accountScope) return null;
-          const tutorial = getTutorial(current.capabilityId);
-          const progress = payload.progress;
-          if (!tutorial?.steps?.length || !progress?.startedAt || progress.completedAt || progress.skipped) return null;
-          return { ...current, stepIndex: Math.min(progress.currentStep, tutorial.steps.length - 1) };
-        });
+        setActive((current) => reconcileTutorialOverlayProgress(current, payload, getTutorial(payload.capabilityId)));
       }],
+      ["tutorial.storage_unavailable", (payload) => setActive((current) => closeTutorialOverlayForAccount(current, payload?.accountScope))],
       ["tutorial.account_scope_changed", () => setActive(null)],
     ];
     const unsubs = events.map(([name, handler]) => subscribe(name, handler));

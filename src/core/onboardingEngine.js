@@ -685,7 +685,24 @@ export class TutorialEngine {
         if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== "function") return;
         // Storage events can be delayed behind a newer write. Apply the current
         // account's canonical bytes instead of replaying an older event payload.
-        const serialized = globalThis.localStorage.getItem(key);
+        let serialized;
+        try {
+          serialized = globalThis.localStorage.getItem(key);
+        } catch {
+          if (scope !== this.accountScope || scope !== getAccountScope()) return;
+          const previous = this.progress;
+          this.progress = new Map();
+          publish("tutorial.storage_unavailable", { accountScope: scope });
+          for (const capabilityId of previous.keys()) {
+            publish("tutorial.progress_synced", {
+              accountScope: scope,
+              capabilityId,
+              progress: this.getProgress(capabilityId),
+              status: "unavailable",
+            });
+          }
+          return;
+        }
         const nextProgress = parseTutorialProgress(serialized);
         if (!nextProgress || scope !== this.accountScope || scope !== getAccountScope()) return;
         const previous = this.progress;

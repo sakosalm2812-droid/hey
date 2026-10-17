@@ -3,15 +3,20 @@ import assert from "node:assert/strict";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
 import { subscribe as subscribeToEvent } from "../src/core/eventBus.js";
 import { OnboardingEngine, TutorialEngine } from "../src/core/onboardingEngine.js";
+import { closeTutorialOverlayForAccount, reconcileTutorialOverlayProgress } from "../src/components/tutorials/tutorialOverlayProgress.js";
 import { getSetting } from "../src/core/settingsRegistry.js";
 import { WorkspaceEngine } from "../src/core/workspaceEngine.js";
 
 class MemoryStorage {
   values = new Map();
   blockedReads = new Set();
+  unavailableReads = new Set();
   blockedWrites = new Set();
   onSetItem = null;
-  getItem(key) { return this.blockedReads.has(key) ? null : this.values.get(key) ?? null; }
+  getItem(key) {
+    if (this.unavailableReads.has(key)) throw new Error("storage unavailable");
+    return this.blockedReads.has(key) ? null : this.values.get(key) ?? null;
+  }
   setItem(key, value) {
     if (this.blockedWrites.has(key)) return;
     this.values.set(key, String(value));
@@ -134,13 +139,15 @@ test("tutorial mutations roll back on storage failure and discard results after 
   } finally { setAccountScope(previousScope); }
 }));
 
-test("tutorial progress synchronizes across same-account tabs and ignores malformed or foreign storage events", () => withStorage((storage, windowTarget) => {
+test("tutorial progress recovers from delayed, foreign, reset, and unavailable cross-tab storage events", () => withStorage((storage, windowTarget) => {
   const previousScope = "tutorial-sync-previous";
   setAccountScope(previousScope);
   const first = new TutorialEngine();
   const second = new TutorialEngine();
   const events = [];
   const unsubscribe = subscribeToEvent("tutorial.progress_synced", (payload) => events.push(payload));
+  const unavailableEvents = [];
+  const unsubscribeUnavailable = subscribeToEvent("tutorial.storage_unavailable", (payload) => unavailableEvents.push(payload));
   try {
     setAccountScope("tutorial-sync-owner");
     first.registerTutorial({ capabilityId: "shared-tour", steps: ["one", "two"] });
@@ -155,7 +162,8 @@ test("tutorial progress synchronizes across same-account tabs and ignores malfor
     assert.equal(events.at(-1).accountScope, "account:tutorial-sync-owner");
 
     first.completeStep("shared-tour", 0);
-    dispatch(key, storage.getItem(key));
+    const advancedSnapshot = storage.getItem(key);
+    dispatch(key, advancedSnapshot);
     assert.equal(second.getProgress("shared-tour").currentStep, 1);
     assert.deepEqual(second.getProgress("shared-tour").completedSteps, [0]);
 
@@ -171,17 +179,44 @@ test("tutorial progress synchronizes across same-account tabs and ignores malfor
     assert.equal(second.getProgress("shared-tour").startedAt, null);
     assert.equal(events.at(-1).progress.startedAt, null);
 
+    first.startTutorial("shared-tour");
+    dispatch(key, storage.getItem(key));
+    assert.ok(second.getProgress("shared-tour").startedAt);
+    storage.unavailableReads.add(key);
+    dispatch(key, storage.values.get(key));
+    assert.equal(second.getProgress("shared-tour").startedAt, null);
+    assert.equal(unavailableEvents.at(-1).accountScope, "account:tutorial-sync-owner");
+    assert.equal(events.at(-1).status, "unavailable");
+    storage.unavailableReads.delete(key);
+    dispatch(key, storage.getItem(key));
+    assert.ok(second.getProgress("shared-tour").startedAt, "a later available read restores the current persisted state");
+
     setAccountScope("tutorial-sync-other-owner");
     assert.equal(second.getProgress("shared-tour").startedAt, null);
     dispatch(key, JSON.stringify({ "shared-tour": { startedAt: "foreign" } }));
     assert.equal(second.getProgress("shared-tour").startedAt, null);
   } finally {
     unsubscribe();
+    unsubscribeUnavailable();
     first.destroy();
     second.destroy();
     setAccountScope(previousScope);
   }
 }));
+
+test("tutorial overlay sync closes on unavailable or foreign progress instead of displaying stale steps", () => {
+  const active = { accountScope: "account:overlay-owner", capabilityId: "shared-tour", stepIndex: 0 };
+  const tutorial = { steps: ["one", "two"] };
+  const currentProgress = { startedAt: "2026-10-17T00:00:00.000Z", currentStep: 1, completedAt: null, skipped: false };
+  assert.deepEqual(
+    reconcileTutorialOverlayProgress(active, { accountScope: "account:overlay-owner", capabilityId: "shared-tour", progress: currentProgress }, tutorial),
+    { ...active, stepIndex: 1 },
+  );
+  assert.equal(reconcileTutorialOverlayProgress(active, { accountScope: "account:overlay-owner", capabilityId: "shared-tour", progress: currentProgress, status: "unavailable" }, tutorial), null);
+  assert.equal(reconcileTutorialOverlayProgress(active, { accountScope: "account:other-owner", capabilityId: "shared-tour", progress: currentProgress }, tutorial), null);
+  assert.equal(closeTutorialOverlayForAccount(active, "account:overlay-owner"), null);
+  assert.equal(closeTutorialOverlayForAccount(active, "account:other-owner"), active);
+});
 
 test("onboarding synchronizes same-account storage updates and ignores foreign or malformed events", () => withStorage((storage, windowTarget) => {
   const previousScope = "spaces-test-previous";
