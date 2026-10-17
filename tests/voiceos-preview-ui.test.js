@@ -113,6 +113,19 @@ test("a rejected review revokes the stale token and restores the request only in
   assert.doesNotMatch(rejection, /sendUserMessage|askHEY|executeRequest|invoke\(/);
 });
 
+test("dismissing a reviewed inert preview restores its request only when its original context is still empty", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const dismissStart = source.indexOf("function dismissComputerPreview()");
+  const dismissEnd = source.indexOf("function renderComputerPreview()", dismissStart);
+  assert.ok(dismissStart >= 0 && dismissEnd > dismissStart);
+  const dismissHandler = source.slice(dismissStart, dismissEnd);
+  assert.match(dismissHandler, /if \(!pending\.reviewed\) cancelVoiceCommandPreview/);
+  assert.match(dismissHandler, /canRestorePendingComputerRequest\(pending\)/);
+  assert.match(dismissHandler, /storeComputerPreview\(null\)/);
+  assert.match(dismissHandler, /if \(restoreRequest\) setMessage\(pending\.message\)/);
+  assert.doesNotMatch(dismissHandler, /sendUserMessage|askHEY|executeRequest|invoke\(/);
+});
+
 test("VoiceOS preview labels and status copy are accessible and translated for every supported locale", async () => {
   const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
   const required = [
@@ -280,7 +293,7 @@ test("the preview remains cancellable while refresh is pending and discards any 
   assert.match(refreshHandler, /createSafeComputerPreview\(pending\.message, previewController\.signal\)/);
   assert.match(refreshHandler, /if \(previewController\.signal\.aborted\) \{/);
   assert.match(refreshHandler, /cancelVoiceCommandPreview\(nextPreview\.preview\.previewId\)/);
-  assert.match(refreshHandler, /canRestoreFailedPreviewRequest\(pending\)/);
+  assert.match(refreshHandler, /canRestorePendingComputerRequest\(pending\)/);
   assert.match(source, /currentDraft: messageRef\.current/);
   assert.match(source, /currentConversationId: conversationIdRef\.current/);
   assert.match(source, /expectedAccountScope: currentUserId \? `account:\$\{currentUserId\}` : null/);

@@ -434,7 +434,7 @@ function ChatWorkspace() {
     setPendingComputerPreview(nextPreview);
   }, []);
 
-  function canRestoreFailedPreviewRequest(pending) {
+  function canRestorePendingComputerRequest(pending) {
     const current = pendingComputerPreviewRef.current;
     const currentUserId = userIdRef.current;
     return canRestoreComputerPreviewRequest({
@@ -739,7 +739,7 @@ function ChatWorkspace() {
           setExecutionStatus(t("chat.voiceOS.previewRefreshCancelled", "Preview refresh cancelled. The original request is still available; nothing was run."));
         }
       } else if (current?.preview.previewId === pending.preview.previewId) {
-        const restoreRequest = canRestoreFailedPreviewRequest(pending);
+        const restoreRequest = canRestorePendingComputerRequest(pending);
         cancelVoiceCommandPreview(pending.preview.previewId);
         storeComputerPreview(null);
         if (restoreRequest) setMessage(pending.message);
@@ -779,7 +779,7 @@ function ChatWorkspace() {
       return;
     }
     if (!nextPreview || nextPreview.blocked) {
-      const restoreRequest = canRestoreFailedPreviewRequest(pending);
+      const restoreRequest = canRestorePendingComputerRequest(pending);
       cancelVoiceCommandPreview(pending.preview.previewId);
       storeComputerPreview(null);
       if (restoreRequest) setMessage(pending.message);
@@ -813,8 +813,11 @@ function ChatWorkspace() {
 
   function dismissComputerPreview() {
     const pending = pendingComputerPreviewRef.current;
-    if (pending && !pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
+    if (!pending) return;
+    const restoreRequest = canRestorePendingComputerRequest(pending);
+    if (!pending.reviewed) cancelVoiceCommandPreview(pending.preview.previewId);
     storeComputerPreview(null);
+    if (restoreRequest) setMessage(pending.message);
   }
 
   function renderComputerPreview() {
