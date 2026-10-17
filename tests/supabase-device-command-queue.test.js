@@ -286,3 +286,18 @@ test("latest command enqueue and claim serialize current authorization before qu
   assert.ok(sql.includes("grant execute on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) to service_role;"));
   assert.ok(sql.includes("revoke all on function public.claim_hey_device_command(uuid, uuid, integer) from public, anon, authenticated, service_role;"));
 });
+
+test("latest authorized enqueue requires enrollment before idempotency replay", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261017000200_enforce_enrollment_on_command_replay.sql", import.meta.url), "utf8");
+  const start = sql.indexOf("create or replace function public.enqueue_hey_device_command_authorized(");
+  const end = sql.indexOf("$$;", start) + 3;
+  const enqueue = sql.slice(start, end);
+  const enrollmentGate = enqueue.indexOf("d.status in ('online', 'offline')");
+  const idempotencyLookup = enqueue.indexOf("select * into v_command from public.hey_device_commands");
+  assert.ok(enrollmentGate >= 0 && idempotencyLookup > enrollmentGate, "enrollment must be checked before returning an existing idempotency result");
+  assert.ok(enqueue.includes("for update;"), "device status remains serialized with enrollment transitions");
+  assert.ok(!enqueue.includes("d.status <> 'revoked'"), "pending and unknown device states must not pass the SQL boundary");
+  assert.ok(enqueue.includes("select * into v_command"), "same-key replay remains supported for enrolled devices");
+  assert.ok(sql.includes("revoke all on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) from public, anon, authenticated;"));
+  assert.ok(sql.includes("grant execute on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) to service_role;"));
+});
