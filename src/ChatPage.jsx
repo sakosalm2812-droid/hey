@@ -31,7 +31,7 @@ import FirstRunPurposeSetup from "./components/chat/FirstRunPurposeSetup.jsx";
 import { subscribe } from "./core/eventBus.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { cancelVoiceCommandPreview, isVoiceCommandCancellation, reviewVoiceCommandPreview, understandVoiceCommand } from "./core/voiceCommandUnderstanding.js";
-import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview } from "./core/voiceOSPreview.js";
+import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview, shouldClearSubmittedComputerPreviewDraft } from "./core/voiceOSPreview.js";
 import {
   createBrowserSpeechProvider,
   createBrowserSpeechSynthesisProvider,
@@ -599,7 +599,7 @@ function ChatWorkspace() {
     }
     if (nextPreview) {
       replaceComputerPreview(nextPreview);
-      setMessage("");
+      if (shouldClearSubmittedComputerPreviewDraft(userMessage, messageRef.current)) setMessage("");
       setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
       return;
     }

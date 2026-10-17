@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
-import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview } from "../src/core/voiceOSPreview.js";
+import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview, shouldClearSubmittedComputerPreviewDraft } from "../src/core/voiceOSPreview.js";
 import { translations } from "../src/i18n/translations.js";
 
 test("safe computer previews expose only bounded target and capability labels", async () => {
@@ -77,6 +77,27 @@ test("failed refresh recovery rejects delayed results after cancel, account or c
     completeRefresh();
     assert.equal(await refresh, false, `late refresh cannot restore after ${name}`);
   }
+});
+
+test("typed preview completion clears only its unchanged submitted draft", async () => {
+  assert.equal(shouldClearSubmittedComputerPreviewDraft("open calculator", "open calculator"), true);
+  assert.equal(shouldClearSubmittedComputerPreviewDraft("open calculator", "keep my newer draft"), false);
+  assert.equal(shouldClearSubmittedComputerPreviewDraft("open calculator", ""), false);
+  assert.equal(shouldClearSubmittedComputerPreviewDraft("open calculator", "open calculator "), false);
+  assert.equal(shouldClearSubmittedComputerPreviewDraft(null, "open calculator"), false);
+  assert.equal(shouldClearSubmittedComputerPreviewDraft("   ", "   "), false);
+
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const typedStart = source.indexOf("async function sendUserMessage(");
+  const typedEnd = source.indexOf("function reviewComputerPreview()", typedStart);
+  assert.ok(typedStart >= 0 && typedEnd > typedStart);
+  const submitHandler = source.slice(typedStart, typedEnd);
+  const previewStart = submitHandler.indexOf("if (nextPreview) {");
+  const previewEnd = submitHandler.indexOf("const requestedFusion", previewStart);
+  assert.ok(previewStart >= 0 && previewEnd > previewStart);
+  const previewBranch = submitHandler.slice(previewStart, previewEnd);
+  assert.match(previewBranch, /shouldClearSubmittedComputerPreviewDraft\(userMessage, messageRef\.current\)\) setMessage\(""\)/);
+  assert.doesNotMatch(previewBranch, /sendUserMessage|askHEY|executeRequest|invoke\(/);
 });
 
 test("chat review UI is visibly inert and does not dispatch a confirmed action", async () => {
