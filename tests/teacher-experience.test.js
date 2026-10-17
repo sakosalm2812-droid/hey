@@ -545,6 +545,44 @@ test("answer-key and worksheet export APIs reject student identities", async () 
   } }, error: null });
 });
 
+test("worksheet and handout exports recheck teacher authorization after asynchronous verification", async () => {
+  const journey = await withForgeBatchPersistence(async () => HEY.teacher.createLessonWorksheetJourney({
+    lesson: lessonInput(), assessment: assessmentInput(), context: teacherContext(),
+    journeyId: "90b5cb24-d51a-45c3-881d-b98d3415a1c1",
+  }));
+  const lesson = journey.lesson;
+  const assessment = await buildTeacherAssessmentArtifact(lesson, assessmentInput(), teacherContext());
+  const worksheet = await buildTeacherWorksheetArtifact(assessment, teacherContext());
+  const handout = await buildTeacherActivityHandoutArtifact(lesson, 0, teacherContext());
+  const originalGetUser = supabaseClient.auth.getUser;
+  let calls = 0;
+  const switchAfterFirstCheck = async () => {
+    calls += 1;
+    const user = calls === 1
+      ? { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } }
+      : { id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] } };
+    return { data: { user }, error: null };
+  };
+  supabaseClient.auth.getUser = switchAfterFirstCheck;
+  try {
+    await assert.rejects(HEY.teacher.exportWorksheetMarkdown(worksheet, {
+      accountScope: "account:teacher-1", workspaceId: "school-space",
+    }), /Authenticated teacher access to this account and class is required to export the student worksheet/);
+    assert.equal(calls, 2, "worksheet authorization is checked before and after digest verification");
+    calls = 0;
+    await assert.rejects(HEY.teacher.exportActivityHandoutMarkdown(handout, {
+      ...teacherContext(),
+      safetyReview: {
+        accountScope: "account:teacher-1", workspaceId: "school-space", reviewerId: "teacher-1",
+        reviewedAt: "2026-10-17T12:00:00.000Z",
+      },
+    }), /Authenticated teacher access to this account and class is required to export the student activity handout/);
+    assert.equal(calls, 2, "handout authorization is checked before and after digest verification");
+  } finally {
+    supabaseClient.auth.getUser = originalGetUser;
+  }
+});
+
 test("verified lessons are stored through the shared Forge artifact contract with scope and review provenance", async () => {
   const lesson = await buildTeacherLessonArtifact(lessonInput());
   let saved;
