@@ -507,6 +507,17 @@ export async function runFusionChatRequest({
     fusionElapsedMs,
   });
   if (result.status !== "complete") return { ...result, costReceipt };
+  const boundAnswerProviders = new Set(result.evidence
+    .filter((item) => item.claimId.toLowerCase() === "answer" && item.value === result.answer)
+    .map((item) => item.providerId));
+  if (result.confidence < pricingConfig.minConfidence ||
+    boundAnswerProviders.size < 2 ||
+    result.providers.some((provider) => !boundAnswerProviders.has(provider.providerId))) {
+    return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer", costReceipt };
+  }
+  const provenance = await buildFusionProvenance(result, fusionRequestId, requestMessage);
+  if (signal?.aborted || !isCurrent(accountId)) return { status: "cancelled", costReceipt };
+  if (!provenance) return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer", costReceipt };
   if (getCurrentEntitlements !== undefined) {
     if (typeof getCurrentEntitlements !== "function") return { status: "unconfigured", reason: "authorization_revalidation_failed", costReceipt };
     let currentEntitlements;
@@ -525,16 +536,6 @@ export async function runFusionChatRequest({
       return { status: "denied", reason: "fusion_permission_revoked", costReceipt };
     }
   }
-  const boundAnswerProviders = new Set(result.evidence
-    .filter((item) => item.claimId.toLowerCase() === "answer" && item.value === result.answer)
-    .map((item) => item.providerId));
-  if (result.confidence < pricingConfig.minConfidence ||
-    boundAnswerProviders.size < 2 ||
-    result.providers.some((provider) => !boundAnswerProviders.has(provider.providerId))) {
-    return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer", costReceipt };
-  }
-  const provenance = await buildFusionProvenance(result, fusionRequestId, requestMessage);
-  if (!provenance) return { status: "inconclusive", reason: "independent_evidence_did_not_confirm_answer", costReceipt };
   return { ...result, provenance, requestCapUsd: pricingConfig.budgetUsd, costReceipt };
 }
 

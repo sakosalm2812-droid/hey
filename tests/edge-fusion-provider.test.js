@@ -265,6 +265,59 @@ test("Fusion recovers checker verification through a third permitted provider", 
   assert.equal(JSON.stringify(result).includes("private vendor error"), false);
 });
 
+test("a recovered answer is withheld when its checker grant is revoked during provenance hashing", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  let currentEntitlements = threeProviderEntitlements;
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") return new Response("private checker outage", { status: 503 });
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  const digestPrototype = Object.getPrototypeOf(globalThis.crypto.subtle);
+  const originalDigest = digestPrototype.digest;
+  let digestCalls = 0;
+  digestPrototype.digest = function (...args) {
+    digestCalls += 1;
+    if (digestCalls === 1) currentEntitlements = threeProviderEntitlements.filter((grant) => grant !== "provider:groq");
+    return originalDigest.apply(this, args);
+  };
+  let result;
+  try {
+    result = await runFusionChatRequest({
+      requested: true,
+      accountId: "account-a",
+      entitlements: threeProviderEntitlements,
+      attempts: threeProviderAttempts,
+      pricingConfig: threeProviderPricing,
+      messages,
+      fetchImpl,
+      getCurrentEntitlements: async () => currentEntitlements,
+    });
+  } finally {
+    digestPrototype.digest = originalDigest;
+  }
+  assert.equal(digestCalls, 2);
+  assert.equal(result.status, "denied");
+  assert.equal(result.reason, "fusion_permission_revoked");
+  assert.deepEqual(calls, ["openai", "gemini", "groq"]);
+  assert.equal(result.costReceipt.callsDispatched, 3);
+  assert.equal(result.costReceipt.callsMetered, 2);
+  assert.equal("answer" in result, false);
+});
+
 test("a recovery checker reserves candidate context and meters its reported usage", async () => {
   const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
     ...JSON.parse(pricingText),
