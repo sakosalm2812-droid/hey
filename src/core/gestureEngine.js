@@ -1377,7 +1377,7 @@ export class GestureEngine {
     }
 
     if (this.cameraPermissionStatus && this.cameraPermissionHandler) {
-      this.cameraPermissionStatus.removeEventListener?.("change", this.cameraPermissionHandler);
+      try { this.cameraPermissionStatus.removeEventListener?.("change", this.cameraPermissionHandler); } catch { /* Permission listener cleanup must not block camera and detector release. */ }
     }
     this.cameraPermissionStatus = null;
     this.cameraPermissionHandler = null;
@@ -1391,7 +1391,7 @@ export class GestureEngine {
     }
 
     if (this.visibilityTarget && this.visibilityHandler) {
-      this.visibilityTarget.removeEventListener?.("visibilitychange", this.visibilityHandler);
+      try { this.visibilityTarget.removeEventListener?.("visibilitychange", this.visibilityHandler); } catch { /* Visibility listener cleanup must not block camera and detector release. */ }
     }
     this.visibilityTarget = null;
     this.visibilityHandler = null;

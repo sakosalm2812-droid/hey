@@ -310,6 +310,97 @@ test("camera track listeners and tracks are released on stop and account switch"
   }
 });
 
+test("permission and visibility listener removal failures do not block full session cleanup", async () => {
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousDocument = globalThis.document;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
+  const previousCancelAnimationFrame = globalThis.cancelAnimationFrame;
+  const { engine, profile } = makeEngine();
+  const trackListeners = new Map();
+  const permissionListeners = new Map();
+  let permissionRemovalAttempts = 0;
+  let visibilityRemovalAttempts = 0;
+  let animationFrameCancelled = null;
+  let cameraStops = 0;
+  let adapterStops = 0;
+  let cameraTrack;
+  const video = { readyState: 1, srcObject: null, async play() {}, pause() {} };
+  const stream = {
+    getTracks: () => [cameraTrack],
+    getVideoTracks: () => [cameraTrack],
+  };
+  cameraTrack = {
+    readyState: "live",
+    addEventListener(name, listener) { trackListeners.set(name, listener); },
+    removeEventListener(name, listener) { if (trackListeners.get(name) === listener) trackListeners.delete(name); },
+    stop() { cameraStops += 1; this.readyState = "ended"; },
+  };
+  const permissionStatus = {
+    state: "granted",
+    addEventListener(name, listener) { permissionListeners.set(name, listener); },
+    removeEventListener() { permissionRemovalAttempts += 1; throw new Error("permission observer refused removal"); },
+  };
+  let visibilityChange;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { return stream; } },
+      permissions: { async query() { return permissionStatus; } },
+    },
+  });
+  globalThis.document = {
+    visibilityState: "visible",
+    hidden: false,
+    createElement: () => video,
+    addEventListener(_name, listener) { visibilityChange = listener; },
+    removeEventListener() { visibilityRemovalAttempts += 1; throw new Error("visibility observer refused removal"); },
+  };
+  globalThis.requestAnimationFrame = () => 41;
+  globalThis.cancelAnimationFrame = (frameId) => { animationFrameCancelled = frameId; };
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "test" })).success, true);
+    const stalePermissionChange = permissionListeners.get("change");
+    assert.equal(typeof stalePermissionChange, "function");
+    assert.equal(typeof visibilityChange, "function");
+
+    assert.doesNotThrow(() => engine.stopRecognition("user_stop"));
+
+    assert.equal(permissionRemovalAttempts, 1);
+    assert.equal(visibilityRemovalAttempts, 1);
+    assert.equal(animationFrameCancelled, 41);
+    assert.equal(cameraStops, 1);
+    assert.equal(adapterStops, 1);
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(engine.cameraPermissionGranted, false);
+    assert.equal(engine.cameraPermissionStatus, null);
+    assert.equal(engine.cameraPermissionHandler, null);
+    assert.equal(engine.visibilityTarget, null);
+    assert.equal(engine.visibilityHandler, null);
+    assert.equal(engine.cameraTrack, null);
+    assert.equal(engine.mediaStream, null);
+    assert.equal(engine.videoElement, null);
+    assert.equal(video.srcObject, null);
+
+    stalePermissionChange();
+    visibilityChange();
+    assert.equal(cameraStops, 1);
+    assert.equal(adapterStops, 1);
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  } finally {
+    if (engine.getRecognitionState() !== GESTURE_STATES.INACTIVE) engine.stopRecognition("test_cleanup");
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete globalThis.navigator;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousAnimationFrame;
+    if (previousCancelAnimationFrame === undefined) delete globalThis.cancelAnimationFrame;
+    else globalThis.cancelAnimationFrame = previousCancelAnimationFrame;
+  }
+});
+
 test("a disconnected profile camera reports actionable recovery without silently switching devices", async () => {
   for (const name of ["NotFoundError", "OverconstrainedError", "ConstraintNotSatisfiedError"]) {
     const { engine, profile } = makeEngine();
