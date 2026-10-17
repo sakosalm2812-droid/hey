@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [appSource, layoutSource, pageSource] = await Promise.all([
+const [appSource, layoutSource, pageSource, lifecycleActionSource] = await Promise.all([
   readFile(new URL("../src/App.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/layout/AppLayout.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/ToolLibraryPage.jsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/lib/toolLibraryLifecycleAction.js", import.meta.url), "utf8"),
 ]);
 
 test("Tool Library is reachable through the protected app route and primary navigation", () => {
@@ -77,6 +78,14 @@ test("Tool Library lifecycle controls use the declared canonical account session
   assert.match(pageSource, /requiresLifecycleConfirmation = tool\.requiresConfirmation \|\| \["high", "critical"\]/);
   assert.match(pageSource, /values\[name\] === "" \|\| values\[name\] === undefined \|\| values\[name\] === null/);
   assert.match(pageSource, /getAccountScope\(\) !== `account:\$\{accountId\}`/);
+});
+
+test("Tool Library lifecycle mutations and preflight reads use the guarded response boundary", () => {
+  for (const method of ["lifecycle", "start", "stop", "retry", "remove"]) {
+    assert.match(pageSource, new RegExp(`invokeToolLibraryLifecycleAction\\(\\(\\) => HEY\\.tools\\.${method}\\(`));
+  }
+  assert.match(pageSource, /if \(current\.status === "error"\)[\s\S]*?setPendingRun\(null\)/);
+  assert.match(lifecycleActionSource, /HEY could not complete this session action safely\./);
 });
 
 test("Tool Library distinguishes failed activity and session refreshes from empty history", () => {

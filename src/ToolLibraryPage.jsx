@@ -15,6 +15,7 @@ import { getToolLibraryLifecycleView } from "./lib/toolLibraryLifecycleView.js";
 import { resolveRecentToolEntry } from "./lib/toolLibraryRecentEntry.js";
 import { scheduleRecentToolCardFocus } from "./lib/toolLibraryRecentFocus.js";
 import { refreshToolLibraryLifecycleSnapshot } from "./lib/toolLibraryLifecycleRefresh.js";
+import { invokeToolLibraryLifecycleAction } from "./lib/toolLibraryLifecycleAction.js";
 import { getToolLibraryPlatformMatrix, TOOL_LIBRARY_PLATFORMS } from "./lib/toolLibraryPlatformMatrix.js";
 import { Link } from "react-router-dom";
 import "./ToolLibraryPage.css";
@@ -358,7 +359,13 @@ function ToolCard({
       setPendingRun(null);
       return;
     }
-    const current = HEY.tools.lifecycle(tool.name, { user, platform: "web" });
+    const current = invokeToolLibraryLifecycleAction(() => HEY.tools.lifecycle(tool.name, { user, platform: "web" }));
+    if (current.status === "error") {
+      setReceipt({ status: "error", message: safeToolError(current.error) });
+      setPendingRun(null);
+      refreshActivity();
+      return;
+    }
     if (!current?.success || current.actions?.start !== true || current.readiness === "unavailable") {
       setReceipt({ status: "denied", message: safeToolError(current?.availability?.reason || "This tool is not ready to launch on this platform.") });
       setPendingRun(null);
@@ -369,7 +376,7 @@ function ToolCard({
     setRunning(true);
     let response;
     try {
-      response = HEY.tools.start(tool.name, run.input, { platform: "web", user, confirmed });
+      response = invokeToolLibraryLifecycleAction(() => HEY.tools.start(tool.name, run.input, { platform: "web", user, confirmed }));
     } finally {
       runLock.current = false;
       setRunning(false);
@@ -388,7 +395,7 @@ function ToolCard({
 
   function stopLifecycle() {
     if (!lifecycleView.canStop || !lifecycleView.sessionId || !accountId || getAccountScope() !== `account:${accountId}`) return;
-    const response = HEY.tools.stop(tool.name, lifecycleView.sessionId, { user });
+    const response = invokeToolLibraryLifecycleAction(() => HEY.tools.stop(tool.name, lifecycleView.sessionId, { user }));
     if (response?.success && response.status === "stopping") {
       setReceipt({ status: "stopping", message: "Stop requested. HEY will report the session’s actual final state." });
     } else {
@@ -403,7 +410,7 @@ function ToolCard({
       refreshActivity();
       return;
     }
-    const response = HEY.tools.remove(tool.name, lifecycleView.sessionId, { user });
+    const response = invokeToolLibraryLifecycleAction(() => HEY.tools.remove(tool.name, lifecycleView.sessionId, { user }));
     setReceipt(response?.success && response.status === "removed"
       ? { status: "removed", message: "Session record removed. Recent activity remains available." }
       : { status: response?.status || "error", message: safeToolError(response?.error) });
@@ -449,7 +456,13 @@ function ToolCard({
       setPendingRun(null);
       return;
     }
-    const current = HEY.tools.lifecycle(tool.name, { user, platform: "web" });
+    const current = invokeToolLibraryLifecycleAction(() => HEY.tools.lifecycle(tool.name, { user, platform: "web" }));
+    if (current.status === "error") {
+      setReceipt({ status: "error", message: safeToolError(current.error), requestId: run.requestId });
+      setPendingRun(null);
+      refreshActivity();
+      return;
+    }
     if (!current?.success || current.actions?.retry !== true || !["failed", "failed_after_stop"].includes(current.status) || current.sessionId !== run.failedSessionId || current.readiness === "unavailable") {
       setReceipt({ status: "denied", message: safeToolError(current?.availability?.reason || "This failure is no longer eligible for retry under current policy.") });
       setPendingRun(null);
@@ -460,7 +473,7 @@ function ToolCard({
     setRunning(true);
     let response;
     try {
-      response = HEY.tools.retry(tool.name, run.input, run.failedSessionId, { platform: "web", user, confirmed });
+      response = invokeToolLibraryLifecycleAction(() => HEY.tools.retry(tool.name, run.input, run.failedSessionId, { platform: "web", user, confirmed }));
     } finally {
       runLock.current = false;
       setRunning(false);
