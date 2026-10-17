@@ -130,6 +130,24 @@ test("aborting a stalled provider body returns promptly and marks it as aborted"
   assert.equal(cancelRequested, true);
 });
 
+test("pre-aborted provider body reads cancel without pulling a response chunk", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let pullCount = 0;
+  let cancelRequested = false;
+  const body = new ReadableStream({
+    pull(streamController) {
+      pullCount += 1;
+      streamController.enqueue(new TextEncoder().encode('{"choices":[]}'));
+    },
+    cancel() { cancelRequested = true; return new Promise(() => {}); },
+  }, { highWaterMark: 0 });
+
+  assert.deepEqual(await readProviderJson(new Response(body), undefined, { signal: controller.signal }), { status: "aborted" });
+  assert.equal(pullCount, 0);
+  assert.equal(cancelRequested, true);
+});
+
 test("grant revocation during a provider response read invalidates the old exact-model snapshot", async () => {
   let finishBody;
   const body = new ReadableStream({

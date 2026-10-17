@@ -79,6 +79,10 @@ export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONS
   if (signal?.aborted) onAbort();
   else signal?.addEventListener("abort", onAbort, { once: true });
   try {
+    if (signal?.aborted) {
+      cancelBody(reader);
+      return { status: "aborted" };
+    }
     while (true) {
       const outcome = await Promise.race([
         reader.read().then((result) => ({ result }), () => ({ status: "invalid" })),
