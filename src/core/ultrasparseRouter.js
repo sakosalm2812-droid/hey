@@ -48,8 +48,9 @@ const routingTermPattern = (terms) => `(?:${terms.flatMap((term) => {
 }).join("|")})`;
 const ROUTING_OVERRIDE_PATTERN = routingTermPattern(ROUTING_OVERRIDE_TERMS);
 const ROUTING_POLICY_PATTERN = routingTermPattern(ROUTING_POLICY_TERMS);
+const ROUTING_NEGATION_MODIFIER_PATTERN = "(?:ever|actually|intentionally|deliberately|blindly|simply|just|silently|quietly|knowingly|directly|explicitly|actively|automatically)";
 const NEGATED_ROUTING_OVERRIDE = new RegExp(
-  `\\b(?:do\\s+not|don['’]t|never|should\\s+not|shouldn't|must\\s+not|mustn't|cannot|can['’]t)\\s+(?:${ROUTING_OVERRIDE_PATTERN})\\b`,
+  `\\b(?:do\\s+not|don['’]t|never|should\\s+not|shouldn't|must\\s+not|mustn't|cannot|can['’]t)(?:\\s+${ROUTING_NEGATION_MODIFIER_PATTERN}){0,2}\\s+(?:${ROUTING_OVERRIDE_PATTERN})\\b`,
   "giu",
 );
 const ADVERSARIAL_ROUTING_TEXT = new RegExp(
@@ -91,7 +92,8 @@ function containsAdversarialRoutingText(input) {
   // Normalize only the safety check so invisible format characters and
   // compatibility forms cannot disguise a routing-policy override phrase.
   // Match up to two internal punctuation characters or two combining marks
-  // per listed term, retaining the bounded phrase window and negation handling.
+  // per listed term. Negation accepts up to two listed adverbs before the
+  // override term; the bounded phrase window remains unchanged.
   // This stays a phrase heuristic, not a general prompt-injection detector.
   const normalizedInput = input.normalize("NFKC").replace(/\p{Cf}/gu, "");
   const unnegatedInput = normalizedInput.replace(NEGATED_ROUTING_OVERRIDE, " ");

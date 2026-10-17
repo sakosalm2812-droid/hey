@@ -100,6 +100,8 @@ test("explicitly negated safety overrides do not suppress a strong routing hint"
     { label: "do not disable", input: "Code debug; do not disable safety protections" },
     { label: "do not bypass", input: "Code debug; don't bypass security rules" },
     { label: "never disregard", input: "Code debug; never disregard policy guardrails" },
+    { label: "do not ever ignore", input: "Code debug; do not ever ignore safety protections" },
+    { label: "do not blindly ever ignore", input: "Code debug; do not blindly ever ign..ore safety protections" },
     { label: "do not ignore a punctuated verb", input: "Code debug; do not ign.ore safety protections" },
     { label: "do not ignore a multiply punctuated verb", input: "Code debug; do not ign..ore safety protections" },
   ];
@@ -554,14 +556,14 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
     version: 1,
     algorithm: "sha256",
     canonicalization: "UTF-8 bytes of JSON.stringify([{name,query,expectedSuppressedReason}, ...])",
-    caseCount: 13,
-    digest: "ce30b39bcfa38f6643b46c6829f18c39f460690ec8493f9d361bbc5593f9139d",
+    caseCount: 15,
+    digest: "945f935183d24440edffefae37b744b5ddd77d0d87d2fe7db5f5b015e43a44df",
   });
   assert.match(report.routingSafetyEvidence.workloadFingerprint.digest, /^[a-f0-9]{64}$/);
   assert.equal(report.routingSafetyEvidence.syntheticCasesOnly, true);
   assert.equal(report.routingSafetyEvidence.realLabeledQualityBenchmark, false);
   assert.equal(report.routingSafetyEvidence.qualityClaim, false);
-  assert.match(report.routingSafetyEvidence.matchingScope, /at most two internal Unicode punctuation characters or two combining marks per term/);
+  assert.match(report.routingSafetyEvidence.matchingScope, /at most two internal Unicode punctuation characters or two combining marks per term; 96-character phrase window; direct negation with up to two listed adverbs removed/);
   assert.deepEqual(report.routingSafetyEvidence.cases.map(({ name }) => name), [
     "ascii-punctuation-in-action-and-policy",
     "unicode-punctuation-in-action-and-policy",
@@ -572,18 +574,20 @@ test("benchmark smoke mode emits deterministic workload and environment metadata
     "multiply-punctuated-negated-override",
     "negated-combining-mark-override",
     "direct-negated-override",
+    "one-adverb-negated-override",
+    "two-adverb-punctuated-negated-override",
     "benign-safety-discussion",
     "negated-two-combining-mark-override",
     "benign-combining-mark-discussion",
     "plain-hostile-control",
   ]);
-  const [asciiPunctuation, unicodePunctuation, multiPunctuation, repeatedCombiningMarkHostile, combiningMarkHostile, punctuatedNegation, multiplyPunctuatedNegation, combiningMarkNegated, directNegation, benignSafety, repeatedCombiningMarkNegated, benignCombiningMark, plainHostile] = report.routingSafetyEvidence.cases;
+  const [asciiPunctuation, unicodePunctuation, multiPunctuation, repeatedCombiningMarkHostile, combiningMarkHostile, punctuatedNegation, multiplyPunctuatedNegation, combiningMarkNegated, directNegation, oneAdverbNegation, twoAdverbNegation, benignSafety, repeatedCombiningMarkNegated, benignCombiningMark, plainHostile] = report.routingSafetyEvidence.cases;
   for (const hostileCase of [asciiPunctuation, unicodePunctuation, multiPunctuation, combiningMarkHostile, repeatedCombiningMarkHostile, plainHostile]) {
     assert.equal(hostileCase.expectedSuppressedReason, "adversarial_policy_override_text");
     assert.equal(hostileCase.actualSuppressedReason, "adversarial_policy_override_text");
     assert.equal(hostileCase.ordinaryPlannerFallbackPreserved, true);
   }
-  for (const benignCase of [punctuatedNegation, multiplyPunctuatedNegation, combiningMarkNegated, directNegation, benignSafety, repeatedCombiningMarkNegated, benignCombiningMark]) {
+  for (const benignCase of [punctuatedNegation, multiplyPunctuatedNegation, combiningMarkNegated, directNegation, oneAdverbNegation, twoAdverbNegation, benignSafety, repeatedCombiningMarkNegated, benignCombiningMark]) {
     assert.equal(benignCase.expectedSuppressedReason, null);
     assert.equal(benignCase.actualSuppressedReason, null);
     assert.equal(benignCase.requestedCapability, "coding");
