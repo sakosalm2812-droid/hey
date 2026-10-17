@@ -1793,20 +1793,27 @@ test("gesture bindings cannot publish an action outside their active consented s
 test("stop during pending camera permission cancels startup and releases the late stream", async () => {
   const { engine, profile } = makeEngine();
   let resolveCamera;
-  const track = {
+  let cameraRequests = 0;
+  const failingTrack = {
+    readyState: "live",
+    stopCalls: 0,
+    stop() { this.stopCalls += 1; throw new Error("late track release failed"); },
+    addEventListener() {},
+  };
+  const remainingTrack = {
     readyState: "live",
     stopped: 0,
     stop() { this.stopped += 1; this.readyState = "ended"; },
-    addEventListener() {},
   };
-  const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+  const stream = { getTracks: () => [failingTrack, remainingTrack], getVideoTracks: () => [failingTrack] };
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { mediaDevices: { getUserMedia: () => new Promise((resolve) => { resolveCamera = resolve; }) } },
+    value: { mediaDevices: { getUserMedia: () => { cameraRequests += 1; return new Promise((resolve) => { resolveCamera = resolve; }); } } },
   });
   globalThis.document = { createElement: () => ({ async play() {}, pause() {} }) };
   globalThis.requestAnimationFrame = () => 1;
-  engine.setRecognitionAdapter({ async detect() { return null; } });
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
 
   const pending = engine.startRecognition(profile.id, { consent: true });
   await Promise.resolve(); // Let the read-only capability preflight reach getUserMedia.
@@ -1815,8 +1822,15 @@ test("stop during pending camera permission cancels startup and releases the lat
 
   const result = await pending;
   assert.equal(result.code, "cancelled");
-  assert.equal(track.stopped, 1);
+  assert.equal(failingTrack.stopCalls, 1);
+  assert.equal(remainingTrack.stopped, 1);
+  assert.equal(adapterStops, 1);
+  assert.equal(engine.cameraPermissionGranted, false);
+  assert.equal(engine.mediaStream, null);
+  assert.equal(engine.videoElement, null);
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal(cameraRequests, 1);
 });
 
 test("emergency stop releases video and detector when a camera track throws during cleanup", async () => {

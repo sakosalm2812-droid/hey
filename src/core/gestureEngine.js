@@ -236,6 +236,25 @@ function classifyCameraFailure(error, { selectedCamera = false } = {}) {
   return { status: "unavailable", code: "camera_unavailable" };
 }
 
+function stopMediaStreamTracks(stream) {
+  let tracks;
+  try {
+    const getTracks = stream?.getTracks;
+    if (typeof getTracks !== "function") return;
+    tracks = Reflect.apply(getTracks, stream, []);
+    if (!Array.isArray(tracks)) return;
+  } catch { return; }
+
+  let trackCount;
+  try { trackCount = tracks.length; } catch { return; }
+  for (let index = 0; index < trackCount; index += 1) {
+    let track;
+    try { track = tracks[index]; } catch { continue; }
+    if (!track) continue;
+    try { track.stop?.(); } catch { /* A failed track release must not skip the remaining tracks. */ }
+  }
+}
+
 function generateProfileId() {
   return `gesture_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -890,7 +909,7 @@ export class GestureEngine {
       });
 
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
+        stopMediaStreamTracks(stream);
         return cancellationResult();
       }
       const videoTrack = stream.getVideoTracks?.()[0];
@@ -924,7 +943,7 @@ export class GestureEngine {
         return { success: false, error: "The camera feed ended before recognition could start.", code: "camera_track_ended" };
       }
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
+        stopMediaStreamTracks(stream);
         video.pause?.();
         video.srcObject = null;
         if (this.mediaStream === stream) this.mediaStream = null;
@@ -935,7 +954,7 @@ export class GestureEngine {
 
       const permissionAllowed = await this.watchCameraPermission(generation);
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        stream.getTracks().forEach(track => { if (track.readyState !== "ended") track.stop(); });
+        stopMediaStreamTracks(stream);
         video.pause?.();
         video.srcObject = null;
         if (this.mediaStream === stream) this.mediaStream = null;
@@ -1398,11 +1417,7 @@ export class GestureEngine {
 
     const mediaStream = this.mediaStream;
     this.mediaStream = null;
-    try {
-      for (const track of mediaStream?.getTracks?.() || []) {
-        try { track.stop?.(); } catch { /* One broken track must not prevent releasing the others. */ }
-      }
-    } catch { /* Continue releasing the remaining recognition resources. */ }
+    stopMediaStreamTracks(mediaStream);
 
     const videoElement = this.videoElement;
     this.videoElement = null;
