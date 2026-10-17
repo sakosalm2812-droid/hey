@@ -20,6 +20,14 @@ export function resolveTeacherPageAccess(user, accountScope) {
   });
 }
 
+export function teacherArtifactOperationContextMatches(expected, active) {
+  return Boolean(expected && active
+    && expected.userId === active.userId
+    && expected.accountScope === active.accountScope
+    && expected.workspaceId === active.workspaceId
+    && expected.classId === active.classId);
+}
+
 export function hasTeacherAnswerKeyField(value, seen = new WeakSet(), depth = 0) {
   if (!value || typeof value !== "object") return false;
   if (depth > 32 || seen.has(value)) return true;

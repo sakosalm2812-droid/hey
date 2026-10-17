@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "../src/teacherExperiencePageContract.js";
+import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherArtifactOperationContextMatches, teacherJourneyPersistenceMatches } from "../src/teacherExperiencePageContract.js";
 import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount, readTeacherJourneyRecoveryHint, writeTeacherJourneyRecoveryHint } from "../src/teacherPageState.js";
 
 const readSource = (path) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
@@ -47,6 +47,19 @@ test("Forge confirmation must return three unique creator- and class-bound artif
   assert.equal(teacherJourneyPersistenceMatches({ ...result, saved: { ...result.saved, lesson: { ...result.saved.lesson, metadata: { ...result.saved.lesson.metadata, classId: "other-class" } } } }, expected), false);
   assert.equal(teacherJourneyPersistenceMatches({ ...result, saved: { ...result.saved, studentArtifact: { ...result.saved.studentArtifact, content: { type: "teacher_worksheet", question: { teacherAnswer: "leak" } } } } }, expected), false);
   assert.equal(teacherJourneyPersistenceMatches({ ...result, journeyId: "different-retry" }, expected), false);
+});
+
+test("in-flight artifact results are fenced to the exact active teacher class and project", () => {
+  const context = { userId: "teacher-1", accountScope: "account:teacher-1", workspaceId: "project-1", classId: "class-1" };
+  assert.equal(teacherArtifactOperationContextMatches(context, { ...context }), true);
+  assert.equal(teacherArtifactOperationContextMatches(context, { ...context, classId: "class-2" }), false);
+  assert.equal(teacherArtifactOperationContextMatches(context, { ...context, workspaceId: "project-2" }), false);
+  assert.equal(teacherArtifactOperationContextMatches(context, { ...context, userId: "teacher-2" }), false);
+  assert.equal(teacherArtifactOperationContextMatches(context, { ...context, accountScope: "account:teacher-2" }), false);
+  assert.match(page, /activeTeacherContextRef\.current = \{ \.\.\.activeTeacherContextRef\.current, classId: event\.target\.value \}/);
+  assert.match(page, /activeTeacherContextRef\.current = \{ \.\.\.activeTeacherContextRef\.current, workspaceId: event\.target\.value \}/);
+  assert.match(page, /teacherContextIsCurrent\(preview\.expected\)/);
+  assert.match(page, /teacherContextIsCurrent\(expected\)/);
 });
 
 test("worksheet answer-key classifier fails closed on cycles and scans nested data", () => {

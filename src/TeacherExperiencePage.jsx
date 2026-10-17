@@ -6,7 +6,7 @@ import { useAuth } from "./AuthContext.jsx";
 import { supabaseClient } from "./lib/supabase.js";
 import { listRecords } from "./lib/heyRecords.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
-import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherJourneyPersistenceMatches } from "./teacherExperiencePageContract.js";
+import { hasTeacherAnswerKeyField, resolveTeacherPageAccess, teacherArtifactOperationContextMatches, teacherJourneyPersistenceMatches } from "./teacherExperiencePageContract.js";
 import { shouldResetTeacherDraft, teacherPageStateMatchesAccount, teacherOperationCanStart, teacherOperationLockBelongsToAccount, readTeacherJourneyRecoveryHint, writeTeacherJourneyRecoveryHint } from "./teacherPageState.js";
 import { buildTeacherAssessmentQuestions, createTeacherQuestionDraft } from "./teacherQuestionDraft.js";
 import "./TeacherExperiencePage.css";
@@ -96,7 +96,21 @@ export default function TeacherExperiencePage() {
   const [safetyAcknowledged, setSafetyAcknowledged] = useState(false);
   const busyRef = useRef(null);
   const draftRevisionRef = useRef(0);
+  const activeTeacherContextRef = useRef(null);
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectId) || null, [projects, selectedProjectId]);
+
+  useLayoutEffect(() => {
+    activeTeacherContextRef.current = {
+      userId: accountId,
+      accountScope: `account:${accountId}`,
+      workspaceId: selectedProjectId,
+      classId: selectedClassId,
+    };
+  }, [accountId, selectedProjectId, selectedClassId]);
+
+  function teacherContextIsCurrent(expected) {
+    return teacherArtifactOperationContextMatches(expected, activeTeacherContextRef.current);
+  }
 
   const resetTransientJourney = useCallback(() => {
     setPreview(null);
@@ -121,6 +135,7 @@ export default function TeacherExperiencePage() {
     const nextAccountId = nextScope.startsWith("account:") ? nextScope.slice("account:".length) : "";
     previousAccountIdRef.current = nextAccountId;
     accountRef.current = nextAccountId;
+    activeTeacherContextRef.current = { userId: nextAccountId, accountScope: nextScope, workspaceId: "", classId: "" };
     draftRevisionRef.current += 1;
     resetTransientJourney();
     setRecoveryHint(null);
@@ -325,7 +340,8 @@ export default function TeacherExperiencePage() {
     try {
       const freshAccess = await readCurrentTeacherAccess(preview.expected.userId);
       if (freshAccess.userId !== preview.expected.userId
-        || !hasActiveContext(preview.expected, freshAccess.classIds)) {
+        || !hasActiveContext(preview.expected, freshAccess.classIds)
+        || !teacherContextIsCurrent(preview.expected)) {
         throw new Error("Teacher access or the selected class changed. Recheck access and prepare a fresh preview.");
       }
       const hint = {
@@ -349,13 +365,15 @@ export default function TeacherExperiencePage() {
       if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)) {
         throw new Error("The signed-in account changed before Forge confirmation could be shown. Reload Teacher Mode to check the saved journey.");
       }
-      if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+      if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope
+        || !teacherContextIsCurrent(preview.expected)) {
         throw new Error("Your account changed before the saved lesson could be shown.");
       }
       setSavedJourney(result);
       setStatus("saved");
     } catch (saveError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(preview.expected)) {
         setError(saveError?.recovery?.journeyId === preview.journeyId
           ? "Forge could not confirm this journey. Retry the same save to safely verify or complete it; the journey ID is unchanged."
           : saveError?.message || "Forge could not confirm the lesson set.");
@@ -381,7 +399,8 @@ export default function TeacherExperiencePage() {
       const freshAccess = await readCurrentTeacherAccess(operationAccountId);
       if (!teacherJourneyPersistenceMatches(savedJourney, { ...preview.expected, journeyId: preview.journeyId })
         || freshAccess.userId !== operationAccountId
-        || !hasActiveContext(preview.expected, freshAccess.classIds)) {
+        || !hasActiveContext(preview.expected, freshAccess.classIds)
+        || !teacherContextIsCurrent(preview.expected)) {
         throw new Error("Recheck your saved lesson and assigned class before preparing an activity handout.");
       }
       const context = {
@@ -396,13 +415,15 @@ export default function TeacherExperiencePage() {
       if (hasTeacherAnswerKeyField(artifact.content)) throw new Error("The activity handout failed its answer-key separation check.");
       const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
       if (confirmedAccess.userId !== operationAccountId || !hasActiveContext(preview.expected, confirmedAccess.classIds)
-        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope
+        || !teacherContextIsCurrent(preview.expected)) {
         throw new Error("Teacher access changed while preparing the activity handout. Recheck your class and try again.");
       }
       setActivityHandout({ artifact, activityIndex, expected: preview.expected });
       setActivityHandoutStatus("preview-ready");
     } catch (handoutError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(preview.expected)) {
         setActivityHandoutError(handoutError?.message || "The activity handout preview could not be prepared.");
         setActivityHandoutStatus("error");
       }
@@ -432,11 +453,12 @@ export default function TeacherExperiencePage() {
       };
       const freshAccess = await readCurrentTeacherAccess(operationAccountId);
       if (freshAccess.userId !== operationAccountId || !hasActiveContext(expected, freshAccess.classIds)
-        || !teacherJourneyPersistenceMatches(savedJourney, { ...expected, journeyId: preview.journeyId })) {
+        || !teacherJourneyPersistenceMatches(savedJourney, { ...expected, journeyId: preview.journeyId })
+        || !teacherContextIsCurrent(expected)) {
         throw new Error("Teacher access or the saved lesson changed. Recheck access and prepare a fresh handout.");
       }
       const verification = await HEY.teacher.verifyActivityHandoutArtifact(artifact, context);
-      if (!verification.valid || hasTeacherAnswerKeyField(artifact.content)) {
+      if (!verification.valid || hasTeacherAnswerKeyField(artifact.content) || !teacherContextIsCurrent(expected)) {
         throw new Error("The activity handout failed its account, class, source, or answer-key verification.");
       }
       const persisted = await HEY.teacher.saveActivityHandoutArtifact(artifact, context);
@@ -455,13 +477,15 @@ export default function TeacherExperiencePage() {
       }
       const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
       if (confirmedAccess.userId !== operationAccountId || !hasActiveContext(expected, confirmedAccess.classIds)
-        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope
+        || !teacherContextIsCurrent(expected)) {
         throw new Error("Teacher access changed before the saved handout could be shown. Reopen Forge to verify it.");
       }
       setSavedActivityHandout(persisted);
       setActivityHandoutStatus("saved");
     } catch (handoutError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(expected)) {
         setActivityHandoutError(handoutError?.message || "Forge could not confirm the activity handout save. Check Forge before retrying.");
         setActivityHandoutStatus("error");
       }
@@ -483,6 +507,7 @@ export default function TeacherExperiencePage() {
     try {
       const freshAccess = await readCurrentTeacherAccess(operationAccountId);
       if (freshAccess.userId !== operationAccountId || !hasActiveContext(expected, freshAccess.classIds)
+        || !teacherContextIsCurrent(expected)
         || !teacherJourneyPersistenceMatches(savedJourney, { ...expected, journeyId: preview.journeyId })
         || savedActivityHandout.createdBy !== operationAccountId
         || savedActivityHandout.projectId !== expected.workspaceId
@@ -512,13 +537,15 @@ export default function TeacherExperiencePage() {
       }
       const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
       if (confirmedAccess.userId !== operationAccountId || !hasActiveContext(expected, confirmedAccess.classIds)
-        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope
+        || !teacherContextIsCurrent(expected)) {
         throw new Error("Teacher access changed during export preparation. Check your class and try again.");
       }
       setActivityHandoutExport(exported);
       setActivityHandoutStatus("exported");
     } catch (exportError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(expected)) {
         setActivityHandoutError(exportError?.message || "Teacher access could not be verified for handout export.");
         setActivityHandoutStatus("error");
       }
@@ -531,18 +558,18 @@ export default function TeacherExperiencePage() {
     if (!recoveryHint || !teacherOperationCanStart(busyRef.current, accountId)) return;
     const operationAccountId = accountId;
     const operationAccountScope = recoveryHint.accountScope;
+    const expected = {
+      userId: recoveryHint.userId,
+      accountScope: recoveryHint.accountScope,
+      workspaceId: recoveryHint.workspaceId,
+      classId: recoveryHint.classId,
+    };
     busyRef.current = operationAccountId;
     setStatus("recovering");
     setError("");
     try {
       const freshAccess = await readCurrentTeacherAccess(operationAccountId);
-      const expected = {
-        userId: operationAccountId,
-        accountScope: `account:${operationAccountId}`,
-        workspaceId: recoveryHint.workspaceId,
-        classId: recoveryHint.classId,
-        journeyId: recoveryHint.journeyId,
-      };
+      Object.assign(expected, { journeyId: recoveryHint.journeyId });
       if (freshAccess.userId !== recoveryHint.userId || expected.accountScope !== operationAccountScope
         || !hasActiveContext(expected, freshAccess.classIds)) {
         throw new Error("This saved journey is outside your current Teacher account or class access.");
@@ -564,7 +591,8 @@ export default function TeacherExperiencePage() {
       }
       const confirmedAccess = await readCurrentTeacherAccess(operationAccountId);
       if (confirmedAccess.status !== "ready" || !hasActiveContext(expected, confirmedAccess.classIds)
-        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
+        || accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope
+        || !teacherContextIsCurrent(expected)) {
         throw new Error("Your account or class access changed while Forge reopened this journey.");
       }
       const recoveryPreview = {
@@ -580,7 +608,8 @@ export default function TeacherExperiencePage() {
       setExports(null);
       setStatus("saved");
     } catch (recoveryError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(expected)) {
         setError(recoveryError?.message || "Forge could not verify the saved Teacher journey.");
         setStatus("recovery-error");
       }
@@ -599,7 +628,8 @@ export default function TeacherExperiencePage() {
     try {
       const freshAccess = await readCurrentTeacherAccess(preview.expected.userId);
       if (freshAccess.userId !== preview.expected.userId
-        || !hasActiveContext(preview.expected, freshAccess.classIds)) {
+        || !hasActiveContext(preview.expected, freshAccess.classIds)
+        || !teacherContextIsCurrent(preview.expected)) {
         throw new Error("Teacher access changed. Sign in again with the assigned class before exporting.");
       }
       if (!teacherJourneyPersistenceMatches(savedJourney, { ...preview.expected, journeyId: preview.journeyId })) {
@@ -627,12 +657,14 @@ export default function TeacherExperiencePage() {
       ]);
       if (hasTeacherAnswerKeyField(savedJourney.studentArtifact.content)) throw new Error("Student worksheet answer-key check failed.");
       const confirmedAccess = await readCurrentTeacherAccess(preview.expected.userId);
-      if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)) throw new Error("Teacher access changed during export preparation.");
+      if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)
+        || !teacherContextIsCurrent(preview.expected)) throw new Error("Teacher access changed during export preparation.");
       if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) throw new Error("Your account changed during export preparation.");
       setExports({ lesson, answerKey, worksheet });
       setStatus("complete");
     } catch (exportError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(preview.expected)) {
         setError(exportError?.message || "Teacher access could not be verified for export.");
         setStatus("export-error");
       }
@@ -652,7 +684,8 @@ export default function TeacherExperiencePage() {
     setDifferentiatedExport(null);
     try {
       const freshAccess = await readCurrentTeacherAccess(preview.expected.userId);
-      if (freshAccess.userId !== preview.expected.userId || !hasActiveContext(preview.expected, freshAccess.classIds)) {
+      if (freshAccess.userId !== preview.expected.userId || !hasActiveContext(preview.expected, freshAccess.classIds)
+        || !teacherContextIsCurrent(preview.expected)) {
         throw new Error("Teacher access changed. Sign in again with the assigned class before exporting.");
       }
       if (!teacherJourneyPersistenceMatches(savedJourney, { ...preview.expected, journeyId: preview.journeyId })) {
@@ -689,13 +722,15 @@ export default function TeacherExperiencePage() {
       if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)) {
         throw new Error("Teacher access changed during differentiated export preparation.");
       }
+      if (!teacherContextIsCurrent(preview.expected)) throw new Error("The selected class or project changed during export preparation.");
       if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) {
         throw new Error("Your account changed during differentiated export preparation.");
       }
       setDifferentiatedExport(exported);
       setStatus("differentiated");
     } catch (exportError) {
-      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope) {
+      if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
+        && teacherContextIsCurrent(preview.expected)) {
         setError(exportError?.message || "Differentiated worksheets could not be prepared.");
         setStatus("differentiation-error");
       }
@@ -740,10 +775,10 @@ export default function TeacherExperiencePage() {
             <section className="teacher-experience__section" aria-labelledby="teacher-scope-heading">
               <div className="teacher-experience__section-heading"><span>01</span><div><h2 id="teacher-scope-heading">Verified class and project</h2><p>These choices are limited to your signed-in account’s assignments.</p></div></div>
               <div className="teacher-experience__grid">
-                <label>Class<select value={selectedClassId} onChange={(event) => { draftRevisionRef.current += 1; setSelectedClassId(event.target.value); resetTransientJourney(); }} required>
+                <label>Class<select value={selectedClassId} onChange={(event) => { draftRevisionRef.current += 1; activeTeacherContextRef.current = { ...activeTeacherContextRef.current, classId: event.target.value }; setSelectedClassId(event.target.value); resetTransientJourney(); }} required>
                   {currentAccess.classIds.map((classId) => <option key={classId} value={classId}>{classId}</option>)}
                 </select></label>
-                <label>Forge project<select value={selectedProjectId} onChange={(event) => { draftRevisionRef.current += 1; setSelectedProjectId(event.target.value); resetTransientJourney(); }} required>
+                <label>Forge project<select value={selectedProjectId} onChange={(event) => { draftRevisionRef.current += 1; activeTeacherContextRef.current = { ...activeTeacherContextRef.current, workspaceId: event.target.value }; setSelectedProjectId(event.target.value); resetTransientJourney(); }} required>
                   {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select></label>
               </div>
