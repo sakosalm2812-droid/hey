@@ -55,6 +55,28 @@ test("selection digest changes with target or selected text and rejects unavaila
   assert.equal(await digestSelection(CHAT_EDIT_TARGET_ID, ""), null);
 });
 
+test("selection digest failures fail closed without exposing crypto diagnostics", async () => {
+  const subtle = globalThis.crypto?.subtle;
+  assert.ok(subtle);
+  const previous = Object.getOwnPropertyDescriptor(subtle, "digest");
+  Object.defineProperty(subtle, "digest", {
+    configurable: true,
+    writable: true,
+    value: async () => { throw new Error("private crypto context"); },
+  });
+  try {
+    const target = input();
+    const snapshot = readSelectionSnapshot(target, "conversation-a");
+    await assert.doesNotReject(async () => {
+      assert.equal(await digestSelectionSnapshot(snapshot), null);
+      assert.equal(editTargetFenceIsCurrent(target, { ...snapshot, selectionDigest: "sha256:expected" }, "conversation-a", null), false);
+    });
+  } finally {
+    if (previous) Object.defineProperty(subtle, "digest", previous);
+    else delete subtle.digest;
+  }
+});
+
 test("selected-text bindings become stale when identical text moves to another conversation", async () => {
   const target = input();
   const first = readSelectionSnapshot(target, "conversation-one");

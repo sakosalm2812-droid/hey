@@ -83,12 +83,16 @@ export function dictationProviderRouteIdentity(profile) {
 }
 
 export async function digestSelection(targetId, selectedText, start, end) {
-  if (typeof targetId !== "string" || !targetId || typeof selectedText !== "string" || !selectedText) return null;
-  if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return null;
-  const range = Number.isInteger(start) && Number.isInteger(end) ? `${start}:${end}:` : "";
-  const bytes = new TextEncoder().encode(`${targetId}\u0000${range}${selectedText}`);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  try {
+    if (typeof targetId !== "string" || !targetId || typeof selectedText !== "string" || !selectedText) return null;
+    if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return null;
+    const range = Number.isInteger(start) && Number.isInteger(end) ? `${start}:${end}:` : "";
+    const bytes = new TextEncoder().encode(`${targetId}\u0000${range}${selectedText}`);
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
 }
 
 export function readSelectionSnapshot(input, conversationId = null) {
