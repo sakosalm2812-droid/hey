@@ -1,4 +1,5 @@
 const MAX_PROVIDER_RESPONSE_BYTES = 1_000_000;
+const MAX_PROVIDER_RESPONSE_CHUNKS = 4_096;
 
 function cancelQuietly(stream) {
   try {
@@ -70,8 +71,9 @@ export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONS
     cancelProviderResponse(response);
     return { status: "invalid" };
   }
-  const chunks = [];
+  let bytes = new Uint8Array(Math.min(maxBytes, 4_096));
   let totalBytes = 0;
+  let chunkCount = 0;
   let interrupt;
   const interrupted = new Promise((resolve) => { interrupt = resolve; });
   const onAbort = () => interrupt({ status: "aborted" });
@@ -98,12 +100,24 @@ export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONS
         cancelBody(reader);
         return { status: "invalid" };
       }
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
+      chunkCount += 1;
+      if (chunkCount > MAX_PROVIDER_RESPONSE_CHUNKS) {
+        cancelBody(reader);
+        return { status: "too_fragmented" };
+      }
+      const nextTotalBytes = totalBytes + value.byteLength;
+      if (nextTotalBytes > maxBytes) {
         cancelBody(reader);
         return { status: "too_large" };
       }
-      chunks.push(value);
+      if (nextTotalBytes > bytes.byteLength) {
+        const nextCapacity = Math.min(maxBytes, Math.max(nextTotalBytes, bytes.byteLength * 2));
+        const expanded = new Uint8Array(nextCapacity);
+        expanded.set(bytes.subarray(0, totalBytes));
+        bytes = expanded;
+      }
+      bytes.set(value, totalBytes);
+      totalBytes = nextTotalBytes;
     }
   } catch {
     cancelBody(reader);
@@ -114,14 +128,8 @@ export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONS
     try { reader.releaseLock(); } catch { /* A failed stream may retain its lock. */ }
   }
 
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
   try {
-    const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, totalBytes)));
     if (!data || typeof data !== "object" || Array.isArray(data)) return { status: "invalid" };
     return { status: "ok", data };
   } catch {

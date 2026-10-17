@@ -164,7 +164,10 @@ async function callProvider(
         throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
       }
       if (parsedResponse.status !== "ok") {
-        lastError = `${provider.id}: ${parsedResponse.status === "too_large" ? "response too large" : "invalid response"}`;
+        const reason = parsedResponse.status === "too_large" ? "response too large"
+          : parsedResponse.status === "too_fragmented" ? "response too fragmented"
+          : "invalid response";
+        lastError = `${provider.id}: ${reason}`;
         console.error("HEY provider response rejected", provider.id, parsedResponse.status);
         continue;
       }

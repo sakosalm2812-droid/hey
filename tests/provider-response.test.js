@@ -22,6 +22,42 @@ test("provider JSON reader accepts bounded object JSON and rejects malformed or 
   assert.deepEqual(await readProviderJson(new Response("{}", { headers: { "content-length": "99" } }), 8), { status: "too_large" });
 });
 
+test("provider JSON reader accepts fragmented valid JSON without retaining every chunk", async () => {
+  const encoded = new TextEncoder().encode('{"choices":[{"message":{"content":"ok"}}]}');
+  let offset = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      if (offset === encoded.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoded.slice(offset, offset + 1));
+      offset += 1;
+    },
+  }, { highWaterMark: 0 });
+
+  assert.deepEqual(await readProviderJson(new Response(body)), {
+    status: "ok",
+    data: { choices: [{ message: { content: "ok" } }] },
+  });
+});
+
+test("provider JSON reader cancels streams that send endless empty chunks", async () => {
+  let pullCount = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      pullCount += 1;
+      controller.enqueue(new Uint8Array(0));
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+
+  assert.deepEqual(await readProviderJson(new Response(body)), { status: "too_fragmented" });
+  assert.equal(pullCount, 4_097);
+  assert.equal(cancelled, true);
+});
+
 test("invalid limits and malformed response access cancel bodies without waiting for cleanup", async () => {
   const trackedBody = () => {
     let cancelRequested = false;
