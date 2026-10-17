@@ -797,6 +797,58 @@ test("aborting while a provider body is streaming cancels its reader and withhol
   assert.equal(JSON.stringify(result).includes("PRIVATE VENDOR RESPONSE BODY"), false);
 });
 
+test("aborting a non-settling provider body read releases its abort listeners", async () => {
+  const controller = new AbortController();
+  let cancelCount = 0;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const activeReadAbortListeners = new Set();
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    signal: controller.signal,
+    fetchImpl: async (_url, init) => {
+      const signal = init.signal;
+      const addEventListener = signal.addEventListener.bind(signal);
+      const removeEventListener = signal.removeEventListener.bind(signal);
+      signal.addEventListener = (type, listener, options) => {
+        if (type === "abort") activeReadAbortListeners.add(listener);
+        return addEventListener(type, listener, options);
+      };
+      signal.removeEventListener = (type, listener) => {
+        if (type === "abort") activeReadAbortListeners.delete(listener);
+        return removeEventListener(type, listener);
+      };
+      markFetchStarted();
+      const reader = {
+        read: () => new Promise(() => {}),
+        cancel: () => {
+          cancelCount += 1;
+          return new Promise(() => {});
+        },
+      };
+      return { ok: true, headers: new Headers(), body: { getReader: () => reader } };
+    },
+  });
+
+  await fetchStarted;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+  const result = await resultPromise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(result.status, "cancelled");
+  assert.equal(cancelCount, 1);
+  assert.equal(activeReadAbortListeners.size, 0);
+  assert.equal("answer" in result, false);
+  assert.equal(result.costReceipt.callsDispatched, 1);
+  assert.equal(result.costReceipt.callsMetered, 0);
+});
+
 test("a late provider response after abort is cancelled without fallback or partial output", async () => {
   const controller = new AbortController();
   let cancelCount = 0;
