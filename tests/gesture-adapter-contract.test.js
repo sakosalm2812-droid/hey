@@ -1622,6 +1622,46 @@ test("browser camera permission revocation stops the session and unregisters its
   assert.equal(engine.gestureCooldowns.size, 0);
 });
 
+test("synchronous permission changes during listener registration cannot strand a stale observer", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  const listeners = new Set();
+  const permissionStatus = {
+    state: "granted",
+    addEventListener(name, listener) {
+      if (name !== "change") return;
+      listeners.add(listener);
+      this.state = "prompt";
+      listener();
+    },
+    removeEventListener(name, listener) {
+      if (name === "change") listeners.delete(listener);
+    },
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      mediaDevices: { async getUserMedia() { return camera.stream; } },
+      permissions: { async query() { return permissionStatus; } },
+    },
+  });
+  let adapterStops = 0;
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+
+  const result = await engine.startRecognition(profile.id, { consent: true });
+
+  assert.equal(result.code, "cancelled");
+  assert.equal(listeners.size, 0);
+  assert.equal(engine.cameraPermissionStatus, null);
+  assert.equal(engine.cameraPermissionHandler, null);
+  assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+  assert.equal(engine.mediaStream, null);
+  assert.equal(engine.videoElement, null);
+  assert.equal(camera.video.srcObject, null);
+  assert.equal(camera.stopped, 1);
+  assert.equal(adapterStops, 1);
+});
+
 test("permission reset to prompt stops capture, permits a consented retry, and fences the old listener", async () => {
   const { engine, profile } = makeEngine();
   const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");

@@ -943,22 +943,30 @@ export class GestureEngine {
         return { success: false, error: "The camera feed ended before recognition could start.", code: "camera_track_ended" };
       }
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        stopMediaStreamTracks(stream);
-        video.pause?.();
-        video.srcObject = null;
-        if (this.mediaStream === stream) this.mediaStream = null;
-        if (this.videoElement === video) this.videoElement = null;
+        if (this.mediaStream === stream) {
+          stopMediaStreamTracks(stream);
+          this.mediaStream = null;
+        }
+        if (this.videoElement === video) {
+          try { video.pause?.(); } catch { /* Cancellation still clears the camera source. */ }
+          try { video.srcObject = null; } catch { /* Session references are cleared below. */ }
+          this.videoElement = null;
+        }
         return cancellationResult();
       }
 
 
       const permissionAllowed = await this.watchCameraPermission(generation);
       if (abortController.signal.aborted || generation !== this.recognitionGeneration) {
-        stopMediaStreamTracks(stream);
-        video.pause?.();
-        video.srcObject = null;
-        if (this.mediaStream === stream) this.mediaStream = null;
-        if (this.videoElement === video) this.videoElement = null;
+        if (this.mediaStream === stream) {
+          stopMediaStreamTracks(stream);
+          this.mediaStream = null;
+        }
+        if (this.videoElement === video) {
+          try { video.pause?.(); } catch { /* Cancellation still clears the camera source. */ }
+          try { video.srcObject = null; } catch { /* Session references are cleared below. */ }
+          this.videoElement = null;
+        }
         return cancellationResult();
       }
       if (!permissionAllowed) {
@@ -1053,9 +1061,17 @@ export class GestureEngine {
           this.stopRecognition("permission_revoked");
         }
       };
-      status.addEventListener?.("change", onChange);
       this.cameraPermissionStatus = status;
       this.cameraPermissionHandler = onChange;
+      try {
+        status.addEventListener?.("change", onChange);
+      } catch {
+        if (this.cameraPermissionStatus === status && this.cameraPermissionHandler === onChange) {
+          this.cameraPermissionStatus = null;
+          this.cameraPermissionHandler = null;
+        }
+        // Permission observation is best-effort; live capture remains authoritative.
+      }
       return true;
     } catch {
       // The Permissions API does not expose camera permission state in every browser.
