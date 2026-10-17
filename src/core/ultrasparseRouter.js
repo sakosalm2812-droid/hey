@@ -30,10 +30,19 @@ const ROUTING_POLICY_TERMS = Object.freeze([
   "guardrail", "guardrails", "rule", "rules", "restriction", "restrictions", "safeguard",
   "safeguards", "protection", "protections",
 ]);
-const punctuationTolerantTerms = (terms) => `(?:${terms.flatMap((term) => [
-  term,
-  ...Array.from({ length: term.length - 1 }, (_, index) => `${term.slice(0, index + 1)}\\p{P}${term.slice(index + 1)}`),
-]).join("|")})`;
+const punctuationTolerantTerms = (terms) => `(?:${terms.flatMap((term) => {
+  const variants = [term];
+  const boundaries = Array.from({ length: term.length - 1 }, (_, index) => index + 1);
+  for (const firstBoundary of boundaries) {
+    variants.push(`${term.slice(0, firstBoundary)}\\p{P}${term.slice(firstBoundary)}`);
+    variants.push(`${term.slice(0, firstBoundary)}\\p{P}{2}${term.slice(firstBoundary)}`);
+    for (const secondBoundary of boundaries) {
+      if (secondBoundary <= firstBoundary) continue;
+      variants.push(`${term.slice(0, firstBoundary)}\\p{P}${term.slice(firstBoundary, secondBoundary)}\\p{P}${term.slice(secondBoundary)}`);
+    }
+  }
+  return variants;
+}).join("|")})`;
 const ROUTING_OVERRIDE_PATTERN = punctuationTolerantTerms(ROUTING_OVERRIDE_TERMS);
 const ROUTING_POLICY_PATTERN = punctuationTolerantTerms(ROUTING_POLICY_TERMS);
 const NEGATED_ROUTING_OVERRIDE = new RegExp(
@@ -78,9 +87,9 @@ function selectionInput(input, limit) {
 function containsAdversarialRoutingText(input) {
   // Normalize only the safety check so invisible format characters and
   // compatibility forms cannot disguise a routing-policy override phrase.
-  // Match one internal punctuation character per listed term, while retaining
-  // the bounded phrase window and direct-negation handling. This stays a
-  // phrase heuristic, not a general prompt-injection detector.
+  // Match up to two internal punctuation characters per listed term, while
+  // retaining the bounded phrase window and direct-negation handling. This
+  // stays a phrase heuristic, not a general prompt-injection detector.
   const normalizedInput = input.normalize("NFKC").replace(/\p{Cf}/gu, "");
   const unnegatedInput = normalizedInput.replace(NEGATED_ROUTING_OVERRIDE, " ");
   return ADVERSARIAL_ROUTING_TEXT.test(unnegatedInput);
