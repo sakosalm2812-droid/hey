@@ -261,6 +261,7 @@ export class GestureEngine {
     this.videoElement = null;
     this.cameraTrack = null;
     this.cameraTrackEndedHandler = null;
+    this.animationFrameId = null;
     this.detector = null;
     this.recognitionAdapter = null;
     this.recognitionAbortController = null;
@@ -914,7 +915,11 @@ export class GestureEngine {
       video.srcObject = stream;
       video.muted = true;
       video.playsInline = true;
-      await video.play();
+      try {
+        await video.play();
+      } catch (error) {
+        throw Object.assign(new Error("The camera preview could not be started."), { code: "camera_play_failed", cause: error });
+      }
       if (cameraTrackEnded) {
         return { success: false, error: "The camera feed ended before recognition could start.", code: "camera_track_ended" };
       }
@@ -947,7 +952,9 @@ export class GestureEngine {
       this.setCameraCapabilityStatus("supported");
       this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "active", visible: true, processing: "local_adapter", mode });
       
-      this.startDetectionLoop(profileId);
+      if (!this.startDetectionLoop(profileId)) {
+        throw Object.assign(new Error("The camera frame loop could not be started."), { code: "frame_loop_start_failed" });
+      }
       
       publish("gesture.recognition_started", { profileId });
       recordAudit({ action: "gesture.recognition_started", status: "completed", metadata: { profileId } });
@@ -964,6 +971,10 @@ export class GestureEngine {
         this.recognitionState = GESTURE_STATES.ERROR;
         this.notify("recognition_state_changed", { state: this.recognitionState, profileId, camera: "inactive", error: "adapter_unavailable" });
         return { success: false, error: "The local hand detector could not be initialized.", code: "adapter_unavailable" };
+      }
+      if (["camera_play_failed", "frame_loop_start_failed"].includes(errorCode)) {
+        this.stopRecognition(errorCode);
+        return { success: false, error: error.message, code: errorCode };
       }
       const failure = classifyCameraFailure(error, { selectedCamera: Boolean(profile.cameraId) });
       this.setCameraCapabilityStatus(failure.status, failure.code);
@@ -1038,7 +1049,23 @@ export class GestureEngine {
     const profile = this.profiles.get(profileId);
     const generation = this.recognitionGeneration;
     const signal = this.recognitionAbortController?.signal;
-    if (!profile || !signal || typeof globalThis.requestAnimationFrame !== "function") return;
+    if (!profile || !signal || typeof globalThis.requestAnimationFrame !== "function") return false;
+    const schedule = () => {
+      if (generation !== this.recognitionGeneration || signal.aborted) return true;
+      try {
+        let frameId;
+        frameId = globalThis.requestAnimationFrame(() => {
+          if (generation !== this.recognitionGeneration || signal.aborted) return;
+          if (this.animationFrameId === frameId) this.animationFrameId = null;
+          void detect().catch(() => {
+            if (generation === this.recognitionGeneration && !signal.aborted) this.stopRecognition("frame_loop_failed");
+          });
+        });
+        if (frameId === undefined || frameId === null) return false;
+        this.animationFrameId = frameId;
+        return true;
+      } catch { return false; }
+    };
     let lastVideoTime = null;
     let lastDetectedVideoTime = null;
     let lastVideoProgressAt = Date.now();
@@ -1104,10 +1131,14 @@ export class GestureEngine {
         }
       }
 
-      if (generation === this.recognitionGeneration && !signal.aborted) globalThis.requestAnimationFrame(() => detect());
+      if (generation === this.recognitionGeneration && !signal.aborted) {
+        if (!schedule()) {
+          this.stopRecognition("frame_loop_failed");
+        }
+      }
     };
 
-    detect();
+    return schedule();
   }
 
   async detectGesture(video, profile, signal) {
@@ -1340,6 +1371,10 @@ export class GestureEngine {
     this.recognitionAbortController?.abort(reason);
     this.recognitionAbortController = null;
     this.recognitionState = GESTURE_STATES.INACTIVE;
+    if (this.animationFrameId !== null) {
+      try { globalThis.cancelAnimationFrame?.(this.animationFrameId); } catch { /* The generation fence still rejects a late frame callback. */ }
+      this.animationFrameId = null;
+    }
 
     if (this.cameraPermissionStatus && this.cameraPermissionHandler) {
       this.cameraPermissionStatus.removeEventListener?.("change", this.cameraPermissionHandler);

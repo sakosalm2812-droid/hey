@@ -76,6 +76,7 @@ export default function GestureStudioPage() {
         if (payload?.reason === "camera_track_ended") { setConsent(false); setError("The camera feed ended. Recognition stopped and camera tracks were released. Check the camera and restart when ready."); }
         if (payload?.reason === "camera_frame_stalled") { setConsent(false); setError("Camera frames stopped advancing. Recognition stopped and camera tracks were released. Check the camera connection, then give consent again to restart."); }
         if (payload?.reason === "page_hidden") { setConsent(false); setError("Gesture recognition stopped because this page became hidden. Camera access was released; give consent to start again."); }
+        if (["camera_play_failed", "frame_loop_start_failed", "frame_loop_failed"].includes(payload?.reason)) { setConsent(false); setError("Camera startup did not complete. Camera access was released; check the camera, then give consent and start again."); }
         if (payload?.reason === "account_changed") setError("The signed-in account changed. The session stopped and account data was cleared.");
       }
       if (event === "recognition_adapter_error") setError("The local detector stopped unexpectedly. Camera access has been released.");
@@ -98,9 +99,17 @@ export default function GestureStudioPage() {
     const stream = gestureEngine.getPreviewStream();
     if (video) {
       video.srcObject = stream;
-      if (stream) void video.play().catch(() => {});
+      if (stream) {
+        const stopCurrentSession = () => {
+          if (gestureEngine.getPreviewStream() === stream) gestureEngine.stopRecognition("camera_play_failed");
+        };
+        try {
+          const playback = video.play();
+          if (playback && typeof playback.catch === "function") void playback.catch(stopCurrentSession);
+        } catch { stopCurrentSession(); }
+      }
     }
-    return () => { if (video) video.srcObject = null; };
+    return () => { if (video) { video.pause?.(); video.srcObject = null; } };
   }, [sessionState]);
 
   useEffect(() => {
@@ -185,7 +194,7 @@ export default function GestureStudioPage() {
       setMessage(mode === "test" ? "Test mode is active. Gestures are observed locally; no actions are dispatched." : "Active mode is running locally. Only supported mapped actions can run.");
       setCapability(await gestureEngine.getRecognitionCapability());
     } catch (failure) {
-      if (["camera_permission_denied", "permission_denied"].includes(failure?.code)) setConsent(false);
+      if (["camera_permission_denied", "permission_denied", "camera_play_failed", "frame_loop_start_failed"].includes(failure?.code)) setConsent(false);
       setSessionState(gestureEngine.getRecognitionState()); setCapability(await gestureEngine.getRecognitionCapability()); setError(failure?.message || "Gesture recognition could not start.");
     } finally { setBusy(false); }
   }

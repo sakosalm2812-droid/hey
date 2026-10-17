@@ -66,7 +66,14 @@ test("Gesture Studio offers camera permission recovery for denied and revoked ac
 
 test("a denied camera start clears the prior consent before any retry", () => {
   assert.match(studioSource, /Object\.assign\(new Error\(result\.error[^\n]+\{ code: result\.code \}\)/);
-  assert.match(studioSource, /\["camera_permission_denied", "permission_denied"\]\.includes\(failure\?\.code\)\) setConsent\(false\)/);
+  assert.match(studioSource, /\["camera_permission_denied", "permission_denied", "camera_play_failed", "frame_loop_start_failed"\]\.includes\(failure\?\.code\)\) setConsent\(false\)/);
+});
+
+test("camera preview and frame-loop startup failures explain release and require fresh consent", () => {
+  assert.match(studioSource, /\["camera_play_failed", "frame_loop_start_failed", "frame_loop_failed"\]\.includes\(payload\?\.reason\)\) \{ setConsent\(false\); setError\("Camera startup did not complete/);
+  assert.match(studioSource, /"camera_play_failed", "frame_loop_start_failed"\]\.includes\(failure\?\.code\)\) setConsent\(false\)/);
+  assert.match(studioSource, /if \(gestureEngine\.getPreviewStream\(\) === stream\) gestureEngine\.stopRecognition\("camera_play_failed"\)/);
+  assert.match(studioSource, /playback\.catch\(stopCurrentSession\)/);
 });
 
 test("Gesture Studio explains profile-specific active mode recovery without granting action permission", () => {

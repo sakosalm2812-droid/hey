@@ -784,6 +784,75 @@ test("camera capture fails closed when this platform has no browser capture capa
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
 });
 
+test("camera preview and first frame scheduling failures release startup resources and require fresh consent", async () => {
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousDocument = globalThis.document;
+  const previousAnimationFrame = globalThis.requestAnimationFrame;
+
+  try {
+    for (const failurePoint of ["play", "frame_loop"]) {
+      const { engine, profile } = makeEngine();
+      let cameraRequests = 0;
+      let cameraStops = 0;
+      let adapterStops = 0;
+      let animationFrameRequests = 0;
+      const video = {
+        readyState: 1,
+        srcObject: null,
+        async play() {
+          if (failurePoint === "play") throw new Error("synthetic playback failure");
+        },
+        pause() {},
+      };
+      const track = {
+        readyState: "live",
+        stop() { cameraStops += 1; this.readyState = "ended"; },
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      const stream = { getTracks: () => [track], getVideoTracks: () => [track] };
+      Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: { mediaDevices: { async getUserMedia() { cameraRequests += 1; return stream; } } },
+      });
+      globalThis.document = {
+        createElement: () => video,
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      globalThis.requestAnimationFrame = () => {
+        animationFrameRequests += 1;
+        if (failurePoint === "frame_loop") throw new Error("synthetic animation frame failure");
+        return animationFrameRequests;
+      };
+      engine.setRecognitionAdapter({ async detect() { return null; }, stop() { adapterStops += 1; } });
+
+      const result = await engine.startRecognition(profile.id, { consent: true, mode: "test" });
+
+      assert.equal(result.success, false, failurePoint);
+      assert.equal(result.code, failurePoint === "play" ? "camera_play_failed" : "frame_loop_start_failed");
+      assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE, failurePoint);
+      assert.equal(cameraRequests, 1, failurePoint);
+      assert.equal(cameraStops, 1, failurePoint);
+      assert.equal(adapterStops, 1, failurePoint);
+      assert.equal(engine.cameraPermissionGranted, false, failurePoint);
+      assert.equal(engine.mediaStream, null, failurePoint);
+      assert.equal(engine.videoElement, null, failurePoint);
+      assert.equal(video.srcObject, null, failurePoint);
+      assert.equal(animationFrameRequests, failurePoint === "play" ? 0 : 1, failurePoint);
+      assert.equal((await engine.startRecognition(profile.id, { mode: "test" })).code, "consent_required", failurePoint);
+      assert.equal(cameraRequests, 1, failurePoint);
+    }
+  } finally {
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete globalThis.navigator;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousAnimationFrame;
+  }
+});
+
 test("supported adapter lifecycle is visible, pausable, revocable, and stopped without OS side effects", async () => {
   const { engine, profile } = makeEngine();
   const camera = installCamera();
@@ -882,6 +951,7 @@ test("browser camera journey requires consent, rejects a stale paused frame, the
   assert.equal(cameraRequests, 0); // No camera request before explicit consent.
   assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
   assert.equal(cameraRequests, 1);
+  scheduledFrames.shift()(); // The first animation frame starts local detection.
   await firstDetectionStarted;
   assert.equal(engine.pauseRecognition(), true);
   resolveStaleDetection({ id: "G01", confidence: 0.99 });
@@ -971,6 +1041,7 @@ test("a frozen camera frame resets gesture hold and stops capture for fresh cons
   try {
     Date.now = () => now;
     assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "active" })).success, true);
+    scheduledFrames.shift()();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(detectorCalls, 1);
 
@@ -1066,6 +1137,7 @@ test("browser detector errors release camera resources and report a stale-safe a
   };
   const createElement = globalThis.document.createElement;
   globalThis.document.createElement = (kind) => kind === "canvas" ? canvas : createElement(kind);
+  globalThis.requestAnimationFrame = (callback) => setTimeout(callback, 0);
   engine.setRecognitionAdapter({ async detect() { throw new Error("detector failed"); } });
   const adapterErrors = [];
   engine.subscribe((event, value) => { if (event === "recognition_adapter_error") adapterErrors.push(value); });
@@ -1083,7 +1155,7 @@ test("a detector that exceeds its frame deadline aborts the session and releases
   const { engine, profile } = makeEngine({ detectionTimeoutMs: 15 });
   const camera = installCamera();
   camera.video.readyState = 2;
-  globalThis.requestAnimationFrame = () => 1;
+  globalThis.requestAnimationFrame = (callback) => setTimeout(callback, 0);
   const previousOffscreenCanvas = globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas = class {
     getContext() {
@@ -1274,7 +1346,7 @@ test("a frame completing after pause and resume cannot trigger an action", async
   const { engine, profile } = makeEngine();
   const camera = installCamera();
   camera.video.readyState = 2;
-  globalThis.requestAnimationFrame = () => 1;
+  globalThis.requestAnimationFrame = (callback) => setTimeout(callback, 0);
   const previousOffscreenCanvas = globalThis.OffscreenCanvas;
   globalThis.OffscreenCanvas = class {
     getContext() {
@@ -1328,6 +1400,7 @@ test("hiding the page stops active gesture capture and rejects the in-flight det
     addEventListener(name, listener) { visibilityListeners.set(name, listener); },
     removeEventListener(name, listener) { if (visibilityListeners.get(name) === listener) visibilityListeners.delete(name); },
   };
+  globalThis.requestAnimationFrame = (callback) => setTimeout(callback, 0);
   globalThis.OffscreenCanvas = class {
     getContext() {
       return { drawImage() {}, getImageData() { return { data: new Uint8ClampedArray(4) }; } };
@@ -1588,6 +1661,7 @@ test("active camera track loss releases capture and suppresses the in-flight det
 
   try {
     assert.equal((await engine.startRecognition(profile.id, { consent: true, mode: "active" })).success, true);
+    scheduledFrames.shift()();
     await detectionStarted;
     assert.equal(engine.getRecognitionState(), GESTURE_STATES.ACTIVE);
     assert.equal(typeof listeners.get("ended"), "function");
