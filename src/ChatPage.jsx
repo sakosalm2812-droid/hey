@@ -699,13 +699,10 @@ function ChatWorkspace() {
         setExecutionStatus(t("chat.voiceOS.expiredRefresh", "This preview expired. Refresh it to review a new preview; nothing was run."));
         return;
       }
+      const restoreRequest = canRestorePendingComputerRequest(pending);
       cancelVoiceCommandPreview(pending.preview.previewId);
       storeComputerPreview(null);
-      if (pending.accountScope === getAccountScope()
-        && pending.conversationId === conversationId
-        && !message.trim()) {
-        setMessage(pending.message);
-      }
+      if (restoreRequest) setMessage(pending.message);
       setExecutionStatus(t("chat.voiceOS.expired", "This preview expired or changed. Create a new preview before proceeding."));
       return;
     }

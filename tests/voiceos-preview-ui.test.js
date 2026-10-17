@@ -176,13 +176,43 @@ test("a rejected review revokes the stale token and restores the request only in
   assert.ok(rejectionStart >= 0 && rejectionEnd > rejectionStart);
   const rejection = reviewHandler.slice(rejectionStart, rejectionEnd);
   assert.match(rejection, /reviewed\.status === "preview_expired"[\s\S]*?return;/);
+  assert.match(rejection, /const restoreRequest = canRestorePendingComputerRequest\(pending\)/);
   assert.match(rejection, /cancelVoiceCommandPreview\(pending\.preview\.previewId\)/);
   assert.match(rejection, /storeComputerPreview\(null\)/);
-  assert.match(rejection, /pending\.accountScope === getAccountScope\(\)/);
-  assert.match(rejection, /pending\.conversationId === conversationId/);
-  assert.match(rejection, /!message\.trim\(\)/);
-  assert.match(rejection, /setMessage\(pending\.message\)/);
+  assert.match(rejection, /if \(restoreRequest\) setMessage\(pending\.message\)/);
   assert.doesNotMatch(rejection, /sendUserMessage|askHEY|executeRequest|invoke\(/);
+});
+
+test("delayed rejected-review recovery stays closed after account, conversation, or draft changes", async () => {
+  const base = {
+    pendingPreviewId: "preview-current",
+    currentPreviewId: "preview-current",
+    pendingAccountScope: "account:owner",
+    currentAccountScope: "account:owner",
+    expectedAccountScope: "account:owner",
+    pendingConversationId: "conversation-a",
+    currentConversationId: "conversation-a",
+    currentDraft: "",
+  };
+
+  for (const [name, mutate] of [
+    ["user identity changed before account-scope propagation", (current) => { current.expectedAccountScope = "account:other"; }],
+    ["account scope changed", (current) => { current.currentAccountScope = "account:other"; }],
+    ["conversation changed", (current) => { current.currentConversationId = "conversation-b"; }],
+    ["newer draft appeared", (current) => { current.currentDraft = "keep this text"; }],
+    ["preview was replaced", (current) => { current.currentPreviewId = "preview-new"; }],
+  ]) {
+    const current = { ...base };
+    let restored = false;
+    const delayedRecovery = Promise.resolve().then(() => {
+      if (canRestoreComputerPreviewRequest({ ...base, ...current })) restored = true;
+    });
+    mutate(current);
+    await delayedRecovery;
+    assert.equal(restored, false, `rejected review cannot restore after ${name}`);
+  }
+
+  assert.equal(canRestoreComputerPreviewRequest(base), true, "recovery remains available in the original empty context");
 });
 
 test("dismissing a reviewed inert preview restores its request only when its original context is still empty", async () => {
