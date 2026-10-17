@@ -251,3 +251,38 @@ test("retry migration uses bounded backoff, terminal attempts, live scoped lease
   assert.match(sql, /grant execute on function public\.fail_hey_device_command\(uuid, uuid, uuid, uuid\) to service_role/i);
   assert.doesNotMatch(sql, /grant execute on function public\.fail_hey_device_command\([^;]+\) to [^;]*authenticated/i);
 });
+
+test("latest command enqueue and claim serialize current authorization before queue writes", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261017000100_atomic_device_command_permission_fence.sql", import.meta.url), "utf8");
+  const enqueueStart = sql.indexOf("create or replace function public.enqueue_hey_device_command_authorized(");
+  const enqueueEnd = sql.indexOf("$$;", enqueueStart) + 3;
+  const enqueue = sql.slice(enqueueStart, enqueueEnd);
+  const enqueuePermissionLock = enqueue.indexOf("perform 1 from public.hey_permissions p");
+  assert.ok(enqueuePermissionLock >= 0);
+  const enqueueLockBody = enqueue.slice(enqueuePermissionLock);
+  assert.ok(enqueueLockBody.includes("p.status = 'granted'"));
+  assert.ok(enqueueLockBody.includes("for share;"));
+  assert.ok(enqueuePermissionLock < enqueue.indexOf("select * into v_command"), "permission row lock must precede command lookup/insertion");
+
+  const claimStart = sql.indexOf("create or replace function public.claim_hey_device_command(p_account_id uuid, p_device_id uuid, p_lease_ms integer)");
+  const claimEnd = sql.indexOf("$$;", claimStart) + 3;
+  const claim = sql.slice(claimStart, claimEnd);
+  const claimPermissionLock = claim.indexOf("perform p.permission from public.hey_permissions p");
+  const claimEpochLock = claim.indexOf("perform 1 from public.hey_action_mandate_epochs e");
+  const claimMandateLock = claim.indexOf("perform m.mandate_id from public.hey_action_mandates m");
+  assert.ok(claimPermissionLock >= 0 && claimEpochLock > claimPermissionLock && claimMandateLock > claimEpochLock);
+  const claimPermissionBody = claim.slice(claimPermissionLock, claimEpochLock);
+  assert.ok(claimPermissionBody.includes("p.status = 'granted'"));
+  assert.ok(claimPermissionBody.includes("pending.state = 'pending'"));
+  assert.ok(claimPermissionBody.includes("pending.envelope->>'action' = p.permission"));
+  assert.ok(claimPermissionBody.includes("for share of p;"));
+  assert.ok(claim.slice(claimEpochLock, claimMandateLock).includes("for share;"));
+  const claimMandateBody = claim.slice(claimMandateLock);
+  assert.ok(claimMandateBody.includes("m.mandate_id = any(pending.mandate_ids)"));
+  assert.ok(claimMandateBody.includes("for share of m;"));
+  assert.ok(claim.indexOf("select * into v_device") < claimPermissionLock, "claim keeps the established device-first lock order");
+  assert.ok(claimMandateLock < claim.indexOf("update public.hey_device_commands"), "authorization rows are locked before any queue row mutation");
+  assert.ok(sql.includes("revoke all on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) from public, anon, authenticated;"));
+  assert.ok(sql.includes("grant execute on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) to service_role;"));
+  assert.ok(sql.includes("revoke all on function public.claim_hey_device_command(uuid, uuid, integer) from public, anon, authenticated, service_role;"));
+});
