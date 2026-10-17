@@ -1370,3 +1370,5 @@ All eleven existing specialist chats received new bounded implementation assignm
 | 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave6-11-fusion-account-after-hash` | Withhold answer if account scope goes stale or cancellation occurs during provenance hashing; retain spend receipt. |
 
 **Next:** recover worker worktrees and receipts as they complete, review diff and test output, integrate only safe passing changes, continue running the local app, and report actual blockers. Latest coordinator code before Wave 6 is `77712d1`; latest pushed coordinator handoff checkpoint is `650a506`.
+
+**Wave 6 setup note:** workers 01–10 have visible shared branch refs and remain active; worker 11's branch was not yet visible in the last snapshot. The simultaneous worktree wave caused transient Git setup/inspection failures in workers 02 and 04; coordinator confirmed their refs exist and instructed them to verify their own worktree at exact `650a506` before editing, without reset/clean/restore. No Wave 6 source commit has been integrated or independently confirmed yet.
