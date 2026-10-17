@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { InMemoryEventOutboxStore, publishEventOnce, replayPendingEvents } from "../src/core/eventOutbox.js";
+import { InMemoryEventOutboxStore, deliverOutboxEvent, publishEventOnce, replayPendingEvents } from "../src/core/eventOutbox.js";
+import { clearEventListeners, publishOnce as publishOnceEvent, subscribe } from "../src/core/eventBus.js";
 
 globalThis.crypto ??= webcrypto;
 
@@ -71,4 +72,116 @@ test("outbox rejects malformed JSON payloads and stale lease tokens", async () =
   const claim = await store.claim(event.id, 1000);
   assert.equal(await store.acknowledge(event.id, "wrong-token"), false);
   assert.equal(await store.acknowledge(event.id, claim.leaseToken), true);
+});
+
+test("a timed-out outbox worker aborts its dispatcher and leaves its lease fenced for expiry recovery", async () => {
+  let now = 0;
+  const store = new InMemoryEventOutboxStore({ now: () => now });
+  const { event } = await store.appendOnce("timeout", "event", { safe: true }, "account-a");
+  let finishDispatch;
+  let dispatchSignal;
+  let firstLeaseToken;
+  const wrappedStore = {
+    claim: async (...args) => {
+      const claim = await store.claim(...args);
+      firstLeaseToken = claim?.leaseToken;
+      return claim;
+    },
+    acknowledge: (...args) => store.acknowledge(...args),
+    release: (...args) => store.release(...args),
+  };
+  const timedOut = await deliverOutboxEvent(event.id, {
+    store: wrappedStore,
+    leaseMs: 100,
+    timeoutMs: 10,
+    dispatch: async (_name, _payload, metadata) => {
+      dispatchSignal = metadata.signal;
+      await new Promise((resolve) => { finishDispatch = resolve; });
+    },
+  });
+  assert.deepEqual(timedOut, { delivered: false, state: "pending", eventId: event.id, error: "delivery_timeout" });
+  assert.equal(dispatchSignal.aborted, true);
+  assert.equal(await store.claim(event.id, 100), null, "timed-out work retains its lease until expiry");
+
+  now = 101;
+  const recovered = await store.claim(event.id, 100);
+  assert.ok(recovered);
+  assert.notEqual(recovered.leaseToken, firstLeaseToken);
+  finishDispatch();
+  await Promise.resolve();
+  assert.equal(await store.acknowledge(event.id, firstLeaseToken), false, "stale worker cannot acknowledge the recovered lease");
+  assert.equal(await store.acknowledge(event.id, recovered.leaseToken), true);
+});
+
+test("caller cancellation aborts outbox dispatch and replay recovers after lease expiry", async () => {
+  let now = 0;
+  const store = new InMemoryEventOutboxStore({ now: () => now });
+  const { event } = await store.appendOnce("cancel", "event", { safe: true }, "account-a");
+  const caller = new AbortController();
+  let finishDispatch;
+  let dispatchSignal;
+  const running = deliverOutboxEvent(event.id, {
+    store,
+    leaseMs: 100,
+    timeoutMs: 50,
+    signal: caller.signal,
+    dispatch: async (_name, _payload, metadata) => {
+      dispatchSignal = metadata.signal;
+      await new Promise((resolve) => { finishDispatch = resolve; });
+    },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  caller.abort();
+  assert.deepEqual(await running, { delivered: false, state: "pending", eventId: event.id, error: "delivery_cancelled" });
+  assert.equal(dispatchSignal.aborted, true);
+  assert.equal(await store.claim(event.id, 100), null, "cancellation does not release a possibly active side effect early");
+
+  now = 101;
+  finishDispatch();
+  const replay = await replayPendingEvents({ store, dispatch: async () => {} });
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].delivered, true);
+});
+
+test("outbox dispatch timeout must be bounded below the lease and pre-aborted workers do not claim", async () => {
+  const store = new InMemoryEventOutboxStore();
+  const { event } = await store.appendOnce("bounds", "event", {}, "account-a");
+  const controller = new AbortController();
+  controller.abort();
+  assert.deepEqual(await deliverOutboxEvent(event.id, { store, dispatch: async () => assert.fail("pre-cancelled dispatch must not run"), signal: controller.signal }), {
+    delivered: false, state: "cancelled", eventId: event.id,
+  });
+  assert.equal((await store.claim(event.id, 1000))?.event.id, event.id, "pre-cancellation leaves the event unclaimed");
+  await assert.rejects(deliverOutboxEvent(event.id, { store, leaseMs: 10, timeoutMs: 10, dispatch: async () => {} }), /shorter than its lease/);
+});
+
+test("event bus forwards worker cancellation through its public publish-once API", async () => {
+  const store = new InMemoryEventOutboxStore();
+  const controller = new AbortController();
+  let dispatchSignal;
+  let markStarted;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const unsubscribe = subscribe("cancelled.event", async (_payload, metadata) => {
+    dispatchSignal = metadata.signal;
+    markStarted();
+    await new Promise(() => {});
+  });
+  try {
+    const running = publishOnceEvent("cancelled.event", {}, {
+      idempotencyKey: "cancel-event",
+      scope: "account-a",
+      store,
+      leaseMs: 100,
+      timeoutMs: 50,
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+    assert.equal((await running).error, "delivery_cancelled");
+    assert.equal(dispatchSignal.aborted, true);
+  } finally {
+    unsubscribe();
+    clearEventListeners("cancelled.event");
+  }
 });

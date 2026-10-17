@@ -84,6 +84,8 @@ test("migration enforces service-role RPCs, unique idempotency, atomic leases, a
   assert.match(sql, /for update/i);
   assert.match(sql, /lease_token = gen_random_uuid\(\)/i);
   assert.match(sql, /lease_until > clock_timestamp\(\)/i);
+  assert.match(sql, /create or replace function public\.ack_hey_event_outbox\([\s\S]*?where id = p_event_id and state = 'pending' and lease_token = p_lease_token\s+and lease_until > clock_timestamp\(\)/i);
+  assert.match(sql, /create or replace function public\.release_hey_event_outbox\([\s\S]*?where id = p_event_id and state = 'pending' and lease_token = p_lease_token\s+and lease_until > clock_timestamp\(\)/i);
   assert.match(sql, /last_error = 'delivery_failed'/i);
   assert.doesNotMatch(sql, /p_error|error_message|exception_message/i);
   for (const name of ["append_hey_event_outbox_once", "claim_hey_event_outbox", "list_hey_event_outbox_pending", "ack_hey_event_outbox", "release_hey_event_outbox"]) {

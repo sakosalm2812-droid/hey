@@ -16,10 +16,12 @@ export function publish(eventName, payload = {}) {
   return current.size;
 }
 
-export function publishOnce(eventName, payload = {}, { idempotencyKey, scope, store, leaseMs } = {}) {
+export function publishOnce(eventName, payload = {}, { idempotencyKey, scope, store, leaseMs, timeoutMs, signal } = {}) {
   return publishEventOnce(idempotencyKey, eventName, payload, {
     store,
     leaseMs,
+    timeoutMs,
+    signal,
     scope,
     dispatch: async (name, data, metadata) => {
       const current = [...(listeners.get(name) || [])];
@@ -29,11 +31,13 @@ export function publishOnce(eventName, payload = {}, { idempotencyKey, scope, st
   });
 }
 
-export function replayPending({ store, limit = 100, leaseMs } = {}) {
+export function replayPending({ store, limit = 100, leaseMs, timeoutMs, signal } = {}) {
   return replayPendingEvents({
     store,
     limit,
     leaseMs,
+    timeoutMs,
+    signal,
     dispatch: async (name, data, metadata) => {
       const current = [...(listeners.get(name) || [])];
       if (current.length === 0) throw new Error(`No event handlers are registered for ${name}.`);
