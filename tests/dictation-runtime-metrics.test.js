@@ -245,6 +245,70 @@ test("provider startup failures use a stable status and never return provider di
   session.destroy();
 });
 
+test("synchronous provider termination stops the late-returned handle and permits a clean retry", async () => {
+  for (const terminalCallback of ["onError", "onEnd"]) {
+    const callbacks = [];
+    const handles = [];
+    const stopped = [];
+    const transcripts = [];
+    let starts = 0;
+    const session = createDictationSession({
+      speechProvider: {
+        start(options) {
+          starts += 1;
+          callbacks.push(options);
+          const handle = { attempt: starts };
+          handles.push(handle);
+          if (starts === 1) options[terminalCallback]("provider ended during start");
+          return handle;
+        },
+        stop(handle) { stopped.push(handle); },
+      },
+      environment: environmentWithPermission(),
+      onTranscript: (text) => transcripts.push(text),
+    });
+
+    const first = await session.start({ consentGiven: true });
+    assert.equal(first.success, false, terminalCallback);
+    assert.ok(stopped.includes(handles[0]), `${terminalCallback} handle is released`);
+    assert.notEqual(session.snapshot().state, "listening");
+    callbacks[0].onTranscript("late callback from terminated start");
+    assert.deepEqual(transcripts, []);
+
+    assert.equal((await session.start({ consentGiven: true })).success, true);
+    assert.equal(starts, 2);
+    assert.equal(session.snapshot().state, "listening");
+    session.destroy();
+  }
+});
+
+test("a reentrant transcript cancellation releases the handle returned after cancellation", async () => {
+  let session;
+  let callbacks;
+  const handle = { id: "reentrant-start" };
+  const stopped = [];
+  session = createDictationSession({
+    speechProvider: {
+      start(options) {
+        callbacks = options;
+        options.onTranscript("cancel while provider start is returning");
+        return handle;
+      },
+      stop(value) { stopped.push(value); },
+    },
+    environment: environmentWithPermission(),
+    onTranscript() { session.stop(); },
+  });
+
+  const result = await session.start({ consentGiven: true });
+  assert.equal(result.success, false);
+  assert.notEqual(session.snapshot().state, "listening");
+  assert.ok(stopped.includes(handle));
+  callbacks.onTranscript("late callback after reentrant cancellation");
+  assert.equal(session.snapshot().state, "idle");
+  session.destroy();
+});
+
 test("per-attempt transcript counters stay capped under excessive provider callbacks", async () => {
   let callbacks;
   let metrics;

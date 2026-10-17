@@ -555,7 +555,7 @@ export function createDictationSession({ speechProvider, environment = globalThi
     transition(VOICE_STATES.listening);
     currentAttempt.providerRequestedAt = now();
     try {
-      recognition = activeSpeechProvider.start({
+      const startedRecognition = activeSpeechProvider.start({
         language: sessionLanguage,
         vocabulary: vocabularySnapshot,
         onTranscript: (transcript) => {
@@ -594,6 +594,14 @@ export function createDictationSession({ speechProvider, environment = globalThi
           if (state.state === VOICE_STATES.listening) transition(VOICE_STATES.idle);
         },
       });
+      if (!active || destroyed || currentGeneration !== generation || currentAttempt.finished) {
+        try { activeSpeechProvider.stop(startedRecognition); } catch { /* A terminated start cannot retain its provider handle. */ }
+        const error = state.state === VOICE_STATES.error
+          ? "Speech recognition failed. Start again to retry."
+          : "Speech recognition ended before startup completed.";
+        return { success: false, status: state.state, error };
+      }
+      recognition = startedRecognition;
       currentAttempt.providerStartedAt = now();
       if (visibilityInterruptedAt !== null) {
         currentAttempt.visibilityRecoveryLatencyMs = elapsed(visibilityInterruptedAt, currentAttempt.providerStartedAt);
