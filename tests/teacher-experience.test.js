@@ -1123,22 +1123,15 @@ test("ambiguous recovery rejects an artifact changed after initial read and keep
   await withForgeBatchPersistence(async (_calls, rowsById) => {
     const originalFrom = supabaseClient.from;
     let reads = 0;
-    let mutationTimer;
     supabaseClient.from = (table) => ({
       select() { assert.equal(table, "hey_artifacts"); return this; },
       in(_field, ids) {
         reads += 1;
-        const records = ids.map((id) => rowsById.get(id)).filter(Boolean);
-        if (reads === 1) {
-          const worksheet = records.find((record) => record.metadata?.artifactContract === "hey.teacher.worksheet.v1");
-          mutationTimer = new Promise((resolve) => setTimeout(() => {
-            worksheet.content = {
-              ...worksheet.content,
-              questions: [{ prompt: "Question", points: 1, teacherAnswer: "late private answer mutation" }],
-            };
-            resolve();
-          }, 0));
+        if (reads === 2) {
+          const worksheet = [...rowsById.values()].find((record) => record.metadata?.artifactContract === "hey.teacher.worksheet.v1");
+          worksheet.description = `${worksheet.description} confirmed after initial read`;
         }
+        const records = ids.map((id) => rowsById.get(id)).filter(Boolean);
         return Promise.resolve({ data: records, error: null });
       },
     });
@@ -1151,8 +1144,9 @@ test("ambiguous recovery rejects an artifact changed after initial read and keep
         assert.equal(error.artifactIds.length, 3);
         return true;
       });
-      await mutationTimer;
       assert.equal(reads, 2, "recovery confirms the records again after content verification");
+      const worksheet = [...rowsById.values()].find((record) => record.metadata?.artifactContract === "hey.teacher.worksheet.v1");
+      assert.doesNotMatch(JSON.stringify(worksheet.content), /teacherAnswer|One quarter is one of four equal parts/);
       assert.equal([...rowsById.keys()].some((id) => artifactEngine.artifacts.has(id)), false,
         "rows changed during verification must never be cached as verified");
     } finally {
