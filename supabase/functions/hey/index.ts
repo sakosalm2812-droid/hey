@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from "./forgeArtifact.js";
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
 import { cancelProviderResponse, extractProviderText, readProviderJson } from "./providerResponse.js";
+import { remainingProviderTimeMs } from "./providerDeadline.js";
 import { createProviderExecutionReceipt } from "../../../src/core/providerExecutionReceipt.js";
 import { snapshotChatRetryRoute } from "../../../src/lib/chatRetryRoute.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
@@ -115,12 +116,14 @@ async function callProvider(
   const deadline = Date.now() + 35_000;
   for (const provider of orderedAttempts) {
     if (signal?.aborted) throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
-    if (Date.now() >= deadline) break;
-    const remaining = Math.max(500, Math.min(18_000, deadline - Date.now()));
+    if (remainingProviderTimeMs(deadline) <= 0) break;
     try {
       if (authorizeProvider && !await authorizeProvider(provider)) {
         throw Object.assign(new Error("Provider entitlement is required"), { providerEntitlementDenied: true });
       }
+      if (signal?.aborted) throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
+      const requestTimeoutMs = remainingProviderTimeMs(deadline);
+      if (requestTimeoutMs <= 0) break;
       const providerStartedAt = Date.now();
       const response = provider.id === "gemini"
         ? await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent`, {
@@ -128,7 +131,7 @@ async function callProvider(
           headers: { "Content-Type": "application/json", "x-goog-api-key": provider.key },
           redirect: "error",
           body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: messages.map((message) => `${message.role}: ${message.content}`).join("\n\n") }] }], generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 } }),
-        }, remaining, signal)
+        }, requestTimeoutMs, signal)
         : await fetchWithTimeout(provider.id === "openai" ? "https://api.openai.com/v1/chat/completions" : provider.id === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -138,7 +141,7 @@ async function callProvider(
           },
           redirect: "error",
           body: JSON.stringify({ model: provider.model, messages, temperature: 0.7, max_tokens: maxTokens }),
-        }, remaining, signal);
+        }, requestTimeoutMs, signal);
 
       if (!response.ok) {
         cancelProviderResponse(response);
@@ -147,9 +150,15 @@ async function callProvider(
         continue;
       }
 
+      const bodyTimeoutMs = remainingProviderTimeMs(deadline);
+      if (bodyTimeoutMs <= 0) {
+        cancelProviderResponse(response);
+        lastError = `${provider.id}: request deadline exceeded`;
+        break;
+      }
       const parsedResponse = await readProviderJson(response, undefined, {
         signal,
-        timeoutMs: Math.max(1, Math.min(18_000, deadline - Date.now())),
+        timeoutMs: bodyTimeoutMs,
       });
       if (parsedResponse.status === "aborted") {
         throw Object.assign(new Error("Provider request cancelled"), { providerRequestCancelled: true });
