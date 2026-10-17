@@ -38,7 +38,14 @@ All eleven existing specialist tasks were messaged concurrently after Wave 9 int
 | UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave10-10-ultrasparse` | Narrow bounded-work or false-positive improvement beyond two negation modifiers; no generalized claims. |
 | Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave10-11-fusion` | Distinct cancellation/account/authorization/budget finalization race; ordinary chat remains single-provider by default. |
 
-Exact next actions: inspect active task/thread updates and local refs without touching worker checkouts; integrate reviewed completed branches against the exact base, run their focused suites and the combined full suite/lint/build/route smoke, update this section with exact SHAs and evidence, commit/push, then dispatch another bounded continuation. Keep the unavailable-Supabase login blocker and all live-runtime limitations explicit.
+**Wave 10 completed slices:**
+
+| Area | Branch / worker SHA | Coordinator SHA | Evidence |
+|---|---|---|---|
+| Flow / Dictation | `codex/wave10-06-dictation` / `45e459f4edda036ddb390425dd8ee442b41a2ceb` | `7bbbd46` | Stops speech-provider handles returned after synchronous/reentrant termination; focused dictation suite passed (21 tests in combined run). Synthetic provider only. |
+| VoiceOS | `codex/wave10-07-voiceos` / `50c9d5d6d1662d121f959ffb7deadfed916a70b9` | `6cdb77a` | Rejected review request recovery now uses shared live-context predicate; delayed account/conversation/draft/preview replacement tests; VoiceOS + dictation focused suites **37/37**. Preview remains inert. |
+
+Changed-file ESLint and `git diff --check` passed for these two slices. Other nine Wave 10 workers remain active on their requested branches; inspect current task/ref status and integrate only reviewed commits. Coordinator is temporarily ahead of origin by these two source commits. Exact next actions: record and push this checkpoint, continue reviewing other Wave 10 branches against the exact base, run combined focused and whole-repository verification after the wave settles, update exact SHAs/evidence, commit/push, then dispatch another bounded continuation. Keep the unavailable-Supabase login blocker and all live-runtime limitations explicit.
 
 **Wave 7 verification record (source tip `63d75ca`, recorded in docs checkpoint `63b9817`):** Full `npm test` passed **1025/1025**; `npm run build` passed with **2794 modules**; `npm run smoke:spa` passed for `/login`, `/download`, and `/assets/index-Dsn-WOPP.js` at `http://127.0.0.1:4173/`. Build skipped sitemap output because `SITE_URL` is unset and retained the existing Vite mixed static/dynamic `contextManager.js` import warning. Changed-file lint and `git diff --check` passed for the integrated slices. The browser at `http://127.0.0.1:5175/download` verifies the public release-status page; `/login` is rendered but disabled due to missing `VITE_SUPABASE_URL` and public anon key. All authenticated/backend/provider/billing/native/device/production claims remain **UNVERIFIED**. All 47 requirements remain In Progress or Incomplete.
 
