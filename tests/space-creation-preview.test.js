@@ -140,8 +140,12 @@ test("Space deletion is reviewed, account scoped, stale safe, and durable across
     assert.equal(engine.confirmDeleteSpace({ previewId: failureReview.previewId, confirm: true }).code, "write_failed");
     assert.equal(engine.getSpaces().length, 1);
     storage.failWrites = false;
+    assert.equal(engine.confirmDeleteSpace({ previewId: failureReview.previewId, confirm: true }).success, true);
+    assert.deepEqual(engine.getSpaces(), []);
 
-    const accountAReview = engine.previewDeleteSpace(retryRequest);
+    const switchCreate = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Account switch protection" });
+    const switchSpace = engine.confirmNaturalLanguagePreview({ previewId: switchCreate.previewId, confirm: true }).space;
+    const accountAReview = engine.previewDeleteSpace({ accountScope: switchSpace.accountScope, spaceId: switchSpace.id, expectedLayoutRevision: 0 });
     setAccountScope("spaces-delete-owner-b");
     assert.match(engine.confirmDeleteSpace({ previewId: accountAReview.previewId, confirm: true }).error, /not found or already used|Account scope changed/);
     assert.deepEqual(engine.getSpaces(), []);
@@ -179,8 +183,7 @@ test("private Space archive and restore require preview confirmation and preserv
     assert.equal(engine.getSpaces()[0].status, "active");
     storage.failWrites = false;
 
-    const retryPreview = engine.previewArchiveSpace(request);
-    const archived = engine.confirmArchiveSpace({ previewId: retryPreview.previewId, confirm: true });
+    const archived = engine.confirmArchiveSpace({ previewId: preview.previewId, confirm: true });
     assert.equal(archived.success, true);
     assert.equal(archived.status, "archived");
     assert.equal(archived.revision, 1);
@@ -1727,6 +1730,9 @@ test("portable Space imports reject sharing escalation, stale account snapshots,
     assert.equal(target.confirmImport({ previewId: retry.previewId, confirm: true }).code, "write_failed");
     assert.deepEqual(target.getSpaces().map((space) => space.name), ["Local update"]);
     storage.failWrites = false;
+    const importedAfterRetry = target.confirmImport({ previewId: retry.previewId, confirm: true });
+    assert.equal(importedAfterRetry.success, true);
+    assert.deepEqual(target.getSpaces().map((space) => space.name).sort(), ["Local update", "Safe source"].sort());
 
     const switched = target.previewImport({ accountScope: "account:space-transfer-adversarial-target", exportJson: exported.exportJson });
     setAccountScope("space-transfer-third-account");

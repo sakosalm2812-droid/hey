@@ -866,13 +866,18 @@ export class SpaceCreationEngine {
     const lockKey = JSON.stringify([scope, "__space_import__"]);
     if (activeSpaceRecordWrites.has(lockKey)) return { error: "A Space import is already in progress", code: "write_in_progress" };
     activeSpaceRecordWrites.add(lockKey);
-    this.transferPreviews.delete(previewId);
     try {
       const refreshed = this.refreshFromStorage(scope, { notify: true });
       if (refreshed.error) return refreshed;
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; import preview is no longer valid" };
-      if (serializeSpaces(this.spaces, scope) !== pending.baseSnapshot) return { error: "Spaces changed after import review; review the import again", code: "stale_snapshot" };
-      if (this.spaces.size + pending.spaces.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) return { error: "Space limit reached", code: "space_limit" };
+      if (serializeSpaces(this.spaces, scope) !== pending.baseSnapshot) {
+        this.transferPreviews.delete(previewId);
+        return { error: "Spaces changed after import review; review the import again", code: "stale_snapshot" };
+      }
+      if (this.spaces.size + pending.spaces.length > SPACE_CREATION_LIMITS.maxSpacesPerAccount) {
+        this.transferPreviews.delete(previewId);
+        return { error: "Space limit reached", code: "space_limit" };
+      }
       const nextSpaces = new Map(this.spaces);
       for (const space of pending.spaces) {
         if (nextSpaces.has(space.id)) return { error: "Imported Space ID conflicts with an existing Space", code: "stale_snapshot" };
@@ -890,6 +895,7 @@ export class SpaceCreationEngine {
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying the import" };
       this.updateRecoverySnapshot(scope, serialized);
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying the import" };
+      this.transferPreviews.delete(previewId);
       this.spaces = nextSpaces;
       const result = {
         success: true,
@@ -1198,8 +1204,6 @@ export class SpaceCreationEngine {
         this.deletePreviews.delete(previewId);
         return { error: "Space changed after deletion review; review the latest version", code: "stale_revision", current: cloneSpace(current) };
       }
-      // Consume before writing so reentrant storage cannot apply this confirmation twice.
-      this.deletePreviews.delete(previewId);
       const nextSpaces = new Map(this.spaces);
       nextSpaces.delete(pending.spaceId);
       const serialized = serializeSpaces(nextSpaces, scope);
@@ -1213,6 +1217,7 @@ export class SpaceCreationEngine {
       }
       this.updateRecoverySnapshot(scope, serialized);
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before deleting" };
+      this.deletePreviews.delete(previewId);
       this.spaces = nextSpaces;
       const result = { success: true, accountScope: scope, spaceId: pending.spaceId, permissionsChanged: false };
       this.notify("space_deleted", result);
@@ -1318,7 +1323,6 @@ export class SpaceCreationEngine {
         this.lifecyclePreviews.delete(previewId);
         return { error: "Space changed after lifecycle review; review the latest version", code: "stale_revision", current: cloneSpace(current) };
       }
-      this.lifecyclePreviews.delete(previewId);
       const nextSpaces = new Map(this.spaces);
       const updated = { ...current, status: targetStatus, lifecycleRevision: current.lifecycleRevision + 1 };
       nextSpaces.set(pending.spaceId, updated);
@@ -1333,6 +1337,7 @@ export class SpaceCreationEngine {
       }
       this.updateRecoverySnapshot(scope, serialized);
       if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; reload before retrying" };
+      this.lifecyclePreviews.delete(previewId);
       this.spaces = nextSpaces;
       const result = { success: true, accountScope: scope, spaceId: pending.spaceId, status: targetStatus, revision: updated.lifecycleRevision, permissionsChanged: false };
       const action = targetStatus === "archived" ? "archived" : "restored";
