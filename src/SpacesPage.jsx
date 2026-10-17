@@ -7,7 +7,7 @@ import { isSupabaseConfigured } from "./lib/supabase.js";
 import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import { spaceDetailsFromRecord, spaceDetailsMatchAccount } from "./spacePageDetails.js";
 import { parseSpacePreferenceDraft, spacePreferencesMatchAccount } from "./spacePagePreferences.js";
-import { isSpaceRecoverySnapshotFailure } from "./spacePageRecoveryStatus.js";
+import { isSpaceRecoverySnapshotFailure, isSpaceRecoverySnapshotUpdated } from "./spacePageRecoveryStatus.js";
 import { confirmSpaceLifecycle, prepareSpaceLifecycle, spaceLifecycleFromRecord } from "./spacePageLifecycle.js";
 import "./SpacesPage.css";
 
@@ -667,6 +667,8 @@ export default function SpacesPage() {
   const [recoveryError, setRecoveryError] = useState("");
   const [recovering, setRecovering] = useState(false);
   const [recoverySnapshotWarningAccountId, setRecoverySnapshotWarningAccountId] = useState("");
+  const [recoverySnapshotRetrying, setRecoverySnapshotRetrying] = useState(false);
+  const [recoverySnapshotRetryError, setRecoverySnapshotRetryError] = useState("");
   const importFileRef = useRef(null);
   const [importPreview, setImportPreview] = useState(null);
   const [transferError, setTransferError] = useState("");
@@ -809,6 +811,28 @@ export default function SpacesPage() {
       return;
     }
     if (refreshSpaces()) setNotice(`Recovered ${result.spaceCount} private ${result.spaceCount === 1 ? "Space" : "Spaces"} from the last valid snapshot.`);
+  }
+
+  function retryRecoverySnapshot() {
+    if (!accountId || !accountIsCurrent || recoverySnapshotRetrying) return;
+    const requestedAccountId = accountId;
+    const requestedScope = `account:${requestedAccountId}`;
+    setRecoverySnapshotRetrying(true);
+    setRecoverySnapshotRetryError("");
+    let result;
+    try {
+      result = HEY.spaces.retryRecoverySnapshot({ accountScope: requestedScope });
+    } catch {
+      result = { error: "Space recovery snapshot could not be updated. Try again when storage is available." };
+    }
+    if (accountRef.current !== requestedAccountId || getAccountScope() !== requestedScope) return;
+    setRecoverySnapshotRetrying(false);
+    if (result?.success !== true || result.accountScope !== requestedScope) {
+      setRecoverySnapshotRetryError(result?.error || "Space recovery snapshot could not be verified. Try again when storage is available.");
+      return;
+    }
+    setRecoverySnapshotWarningAccountId("");
+    setRecoverySnapshotRetryError("");
   }
 
   async function exportSpacesFile() {
@@ -1018,6 +1042,8 @@ export default function SpacesPage() {
     setRecoveryError("");
     setRecovering(false);
     setRecoverySnapshotWarningAccountId("");
+    setRecoverySnapshotRetrying(false);
+    setRecoverySnapshotRetryError("");
     setImportPreview(null);
     setTransferError("");
     setImporting(false);
@@ -1031,6 +1057,10 @@ export default function SpacesPage() {
       if (!active || accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
       if (isSpaceRecoverySnapshotFailure(event, payload, accountId, getAccountScope())) {
         setRecoverySnapshotWarningAccountId(accountId);
+        setRecoverySnapshotRetryError("");
+      } else if (isSpaceRecoverySnapshotUpdated(event, payload, accountId, getAccountScope())) {
+        setRecoverySnapshotWarningAccountId("");
+        setRecoverySnapshotRetryError("");
       }
       refreshSpaces();
     };
@@ -1038,6 +1068,10 @@ export default function SpacesPage() {
     try {
       HEY.initialize();
       unsubscribe = HEY.spaces.subscribe(refreshCurrentAccount);
+      const recoveryStatus = HEY.spaces.getRecoverySnapshotStatus({ accountScope: `account:${accountId}` });
+      if (recoveryStatus?.success === true && recoveryStatus.accountScope === `account:${accountId}` && recoveryStatus.needsRefresh === true) {
+        setRecoverySnapshotWarningAccountId(accountId);
+      }
     } catch {
       // Initial loading below still shows an actionable retry if listing fails.
     }
@@ -1321,7 +1355,7 @@ export default function SpacesPage() {
         <div className="spaces-page__list-heading"><div><h2 id="spaces-list-title">Your Spaces</h2><p>Only Spaces saved to the signed-in account appear here.</p></div>
           {!accountDataLoading && !loadError && <span className="spaces-page__count" aria-live="polite">{currentSpaces.length} {currentSpaces.length === 1 ? "Space" : "Spaces"}</span>}
         </div>
-        {recoverySnapshotWarningAccountId === accountId && accountIsCurrent && <p className="spaces-page__recovery-snapshot-warning" role="alert"><AlertCircle size={16} aria-hidden="true" /><span>A Space change was saved, but its recovery snapshot could not be updated. Reload this page to retry. Until then, recovery may restore an older version.</span></p>}
+        {recoverySnapshotWarningAccountId === accountId && accountIsCurrent && <div className="spaces-page__recovery-snapshot-warning" role="alert"><AlertCircle size={16} aria-hidden="true" /><div><p>The Space recovery snapshot could not be verified. Recovery may be unavailable until a refresh succeeds.</p>{recoverySnapshotRetryError && <p>{recoverySnapshotRetryError}</p>}<button type="button" className="spaces-page__secondary" onClick={retryRecoverySnapshot} disabled={recoverySnapshotRetrying || !accountIsCurrent}>{recoverySnapshotRetrying ? <LoaderCircle size={14} className="spaces-page__spin" aria-hidden="true" /> : <RotateCw size={14} aria-hidden="true" />} Retry recovery snapshot</button></div></div>}
         <section className="spaces-page__transfer" aria-labelledby="space-transfer-title">
           <div className="spaces-page__transfer-copy"><h3 id="space-transfer-title">Move Spaces with a file</h3><p>Export private Spaces to a JSON file, or review a file before importing copies into this account.</p></div>
           <input ref={importFileRef} className="spaces-page__sr-only" type="file" accept=".json,application/json" aria-label="Choose a private Space export file" onChange={previewSpaceImport} />

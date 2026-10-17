@@ -359,7 +359,9 @@ function writeRecoverySnapshot(scope, payload) {
   }
   if (getAccountScope() !== scope) return false;
   safeStorage.removeItem(key);
-  try { return getAccountScope() === scope && readStorageItem(key) == null; } catch { return false; }
+  // Removing a stale snapshot prevents an unsafe rollback, but does not mean a
+  // replacement snapshot was persisted and verified.
+  return false;
 }
 
 function parseSpacePrompt(prompt) {
@@ -434,6 +436,7 @@ export class SpaceCreationEngine {
     this.deletePreviews = new Map();
     this.lifecyclePreviews = new Map();
     this.recoveryPreviews = new Map();
+    this.recoverySnapshotFailures = new Set();
     this.transferPreviews = new Map();
     this.listeners = new Set();
     this.loadError = false;
@@ -514,15 +517,66 @@ export class SpaceCreationEngine {
     this.deletePreviews.clear();
     this.lifecyclePreviews.clear();
     this.recoveryPreviews.clear();
+    this.recoverySnapshotFailures.clear();
     this.transferPreviews.clear();
   }
 
   updateRecoverySnapshot(scope, serialized, { notify = true } = {}) {
     const saved = writeRecoverySnapshot(scope, serialized);
-    if (!saved && notify && getAccountScope() === scope && this.accountScope === scope) {
-      this.notify("storage_recovery_snapshot_error", { accountScope: scope, error: "Space recovery snapshot could not be updated" });
+    if (saved) {
+      this.recoverySnapshotFailures.delete(scope);
+    } else if (getAccountScope() === scope && this.accountScope === scope) {
+      this.recoverySnapshotFailures.add(scope);
+      if (notify) this.notify("storage_recovery_snapshot_error", { accountScope: scope, error: "Space recovery snapshot could not be updated" });
     }
     return saved;
+  }
+
+  getRecoverySnapshotStatus(request) {
+    const safeRequest = readDataRecord(request, ["accountScope"]);
+    if (safeRequest.error) return safeRequest;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to check Space recovery status" };
+    if (safeRequest.value.accountScope !== scope || getAccountScope() !== scope) return { error: "Account scope mismatch" };
+    return { success: true, accountScope: scope, needsRefresh: this.recoverySnapshotFailures.has(scope) };
+  }
+
+  retryRecoverySnapshot(request) {
+    const safeRequest = readDataRecord(request, ["accountScope"]);
+    if (safeRequest.error) return safeRequest;
+    const scope = this.accountScope;
+    if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to refresh Space recovery" };
+    if (safeRequest.value.accountScope !== scope || getAccountScope() !== scope) return { error: "Account scope mismatch" };
+    try {
+      const primary = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
+      let spaces;
+      if (primary === null) {
+        const previousRecovery = readStorageItem(getAccountStorageKey(RECOVERY_STORAGE_KEY, scope));
+        if (previousRecovery !== null && parseRecoverySnapshot(previousRecovery, scope).spaces.size > 0) {
+          throw new Error("Primary Space data is missing while recovery data exists");
+        }
+        spaces = new Map();
+      } else {
+        spaces = parseStoredSpaces(primary, scope);
+      }
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry Space recovery refresh" };
+      const serialized = serializeSpaces(spaces, scope);
+      if (!serialized || !this.updateRecoverySnapshot(scope, serialized)) {
+        return { error: "Space recovery snapshot could not be updated", accountScope: scope };
+      }
+      if (getAccountScope() !== scope || this.accountScope !== scope) return { error: "Account scope changed; retry Space recovery refresh" };
+      this.spaces = spaces;
+      this.loadError = false;
+      const result = { success: true, accountScope: scope, spaceCount: spaces.size };
+      this.notify("storage_recovery_snapshot_updated", result);
+      return result;
+    } catch {
+      if (getAccountScope() === scope && this.accountScope === scope) {
+        this.recoverySnapshotFailures.add(scope);
+        this.notify("storage_recovery_snapshot_error", { accountScope: scope, error: "Current Space data could not be verified; the recovery snapshot was not changed" });
+      }
+      return { error: "Current Space data could not be verified; the recovery snapshot was not changed", accountScope: scope };
+    }
   }
 
   previewRecovery(request) {
@@ -1392,6 +1446,15 @@ export function previewPrivateSpaceRecovery(request) {
 /** Restores a reviewed recovery snapshot exactly once. */
 export function confirmPrivateSpaceRecovery(request) {
   return spaceCreationEngine.confirmRecovery(request);
+}
+
+/** Reports and retries an account-scoped recovery snapshot refresh from validated primary data. */
+export function getPrivateSpaceRecoverySnapshotStatus(request) {
+  return spaceCreationEngine.getRecoverySnapshotStatus(request);
+}
+
+export function retryPrivateSpaceRecoverySnapshot(request) {
+  return spaceCreationEngine.retryRecoverySnapshot(request);
 }
 
 /** Updates a private Space's name or description with its expected details revision. */

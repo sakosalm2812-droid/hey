@@ -75,6 +75,8 @@ test("HEY exposes versioned saved Space layout preference operations to consumer
   assert.equal(typeof spacesApi.confirmImport, "function");
   assert.equal(typeof spacesApi.previewRecovery, "function");
   assert.equal(typeof spacesApi.confirmRecovery, "function");
+  assert.equal(typeof spacesApi.getRecoverySnapshotStatus, "function");
+  assert.equal(typeof spacesApi.retryRecoverySnapshot, "function");
   assert.equal(typeof spacesApi.updateLayoutPreferences, "function");
   assert.equal(typeof spacesApi.updateDetails, "function");
   assert.equal(typeof spacesApi.previewArchive, "function");
@@ -1358,6 +1360,55 @@ test("Space recovery invalidates an unverifiable stale snapshot after a committe
     storage.setItem(getAccountStorageKey("hey_spaces"), "damaged");
     const unreadable = new SpaceCreationEngine();
     assert.match(unreadable.previewRecovery({ accountScope: "account:space-recovery-snapshot-failure" }).error, /unavailable/);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("recovery snapshot retry verifies current primary data and remains account fenced", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    const ownerId = "space-recovery-explicit-refresh";
+    const accountScope = `account:${ownerId}`;
+    setAccountScope(ownerId);
+    const engine = new SpaceCreationEngine();
+    const recoveryEvents = [];
+    engine.subscribe((event, payload) => recoveryEvents.push({ event, payload }));
+    const preview = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Retry recovery snapshot" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    assert.equal(created.success, true);
+
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    storage.failWriteKeys.add(recoveryKey);
+    const update = engine.updateDetails({
+      accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      description: "Primary saved while recovery write fails",
+    });
+    assert.equal(update.success, true);
+    assert.equal(recoveryEvents.some(({ event, payload }) => event === "storage_recovery_snapshot_error" && payload.accountScope === accountScope), true);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    const remountedEngine = new SpaceCreationEngine();
+    assert.equal(remountedEngine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    assert.equal(engine.retryRecoverySnapshot({ accountScope }).success, undefined);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+
+    storage.failWriteKeys.delete(recoveryKey);
+    const retried = engine.retryRecoverySnapshot({ accountScope });
+    assert.equal(retried.success, true);
+    assert.equal(retried.accountScope, accountScope);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, false);
+    assert.equal(recoveryEvents.some(({ event, payload }) => event === "storage_recovery_snapshot_updated" && payload.accountScope === accountScope), true);
+    assert.equal(JSON.parse(storage.getItem(recoveryKey)).payload, storage.getItem(getAccountStorageKey("hey_spaces")));
+
+    const recoveryBeforeMissingPrimary = storage.getItem(recoveryKey);
+    storage.removeItem(getAccountStorageKey("hey_spaces"));
+    const missingPrimary = engine.retryRecoverySnapshot({ accountScope });
+    assert.equal(missingPrimary.success, undefined);
+    assert.equal(storage.getItem(recoveryKey), recoveryBeforeMissingPrimary);
+
+    setAccountScope("space-recovery-explicit-refresh-other");
+    assert.match(engine.retryRecoverySnapshot({ accountScope }).error, /scope mismatch/i);
   } finally { setAccountScope(previousScope); }
 }));
 
