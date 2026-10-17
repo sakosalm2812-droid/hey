@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 
 import { cancelProviderResponse, extractProviderText, readProviderJson } from "../supabase/functions/hey/providerResponse.js";
+import { remainingProviderTimeMs } from "../supabase/functions/hey/providerDeadline.js";
 import { parseProviderSelection, resolveProviderSelection, snapshotProviderAttempts } from "../supabase/functions/hey/providerCatalog.js";
 
 const attempts = snapshotProviderAttempts([
@@ -73,6 +74,33 @@ test("provider responses require usable text across OpenAI-compatible and Gemini
   assert.equal(extractProviderText({ candidates: [{ content: { parts: [] } }] }), "");
   assert.equal(extractProviderText({ choices: [{ message: { content: "usable answer" } }] }), "usable answer");
   assert.equal(extractProviderText({ candidates: [{ content: { parts: [{ text: "Gemini answer" }] } }] }), "Gemini answer");
+});
+
+test("provider request budget is recomputed after slow authorization and never floors past the deadline", async () => {
+  const deadline = 35_000;
+  let now = 0;
+  let finishAuthorization;
+  const authorization = new Promise((resolve) => { finishAuthorization = resolve; });
+  const authorize = async () => {
+    await authorization;
+    return true;
+  };
+
+  const pendingAuthorization = authorize();
+  assert.equal(remainingProviderTimeMs(deadline, now), 18_000);
+  now = 35_001;
+  finishAuthorization();
+  await pendingAuthorization;
+  assert.equal(remainingProviderTimeMs(deadline, now), 0);
+  assert.equal(remainingProviderTimeMs(deadline, 34_999), 1);
+  assert.equal(remainingProviderTimeMs(deadline, 34_500), 500);
+
+  const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
+  const providerCall = route.slice(route.indexOf("async function callProvider"), route.indexOf("function shouldSearch"));
+  assert.match(providerCall, /await authorizeProvider\(provider\)[\s\S]*?const requestTimeoutMs = remainingProviderTimeMs\(deadline\)/);
+  assert.match(providerCall, /if \(requestTimeoutMs <= 0\) break/);
+  assert.match(providerCall, /const bodyTimeoutMs = remainingProviderTimeMs\(deadline\)[\s\S]*?timeoutMs: bodyTimeoutMs/);
+  assert.doesNotMatch(providerCall, /Math\.max\(500, Math\.min\(18_000, deadline - Date\.now\(\)\)\)/);
 });
 
 test("oversized streamed provider errors are cancelled instead of fully buffered", async () => {
@@ -167,11 +195,11 @@ test("chat handles bad provider bodies as recoverable failures while exact selec
   const route = await readFile(new URL("../supabase/functions/hey/index.ts", import.meta.url), "utf8");
   const providerCall = route.slice(route.indexOf("async function callProvider"), route.indexOf("function shouldSearch"));
   assert.match(route, /readProviderJson\(response, undefined, \{/);
-  assert.match(providerCall, /if \(!response\.ok\) \{\s*cancelProviderResponse\(response\);[\s\S]*?continue;\s*\}\s*const parsedResponse = await readProviderJson/);
+  assert.match(providerCall, /if \(!response\.ok\) \{\s*cancelProviderResponse\(response\);[\s\S]*?continue;\s*\}[\s\S]*?const parsedResponse = await readProviderJson/);
   assert.match(providerCall, /if \(!extractProviderText\(data\)\) \{[\s\S]*?continue;\s*\}[\s\S]*?return \{ data, providerId: provider\.id/);
   assert.match(providerCall, /lastError = `\$\{provider\.id\}: empty response`/);
   assert.match(route, /parsedResponse\.status !== "ok"[\s\S]*?continue;/);
-  assert.match(route, /readProviderJson\(response, undefined, \{[\s\S]*?signal,[\s\S]*?timeoutMs: Math\.max/);
+  assert.match(route, /readProviderJson\(response, undefined, \{[\s\S]*?signal,[\s\S]*?timeoutMs: bodyTimeoutMs/);
   assert.match(route, /callProvider\(messages, 1200, chatProviderAttempts, authorizeChatProvider, request\.signal\)/);
   assert.match(route, /parsedResponse\.status === "aborted"[\s\S]*?providerRequestCancelled/);
   assert.match(route, /request\.signal\.aborted\) return jsonResponse\(\{ error: "The provider request was cancelled"/);
