@@ -20,7 +20,27 @@ The eleven existing specialist tasks were restarted concurrently on fresh isolat
 | UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave8-10-ultrasparse` | `13180cef9c5a00b391a3a31e43ccf18f64f09f58` → `ca46a9820e8a28dfff010192220a2a4af7a7f789` | Narrow routing phrase suppression now covers up to two internal combining marks while retaining direct-negation/benign behavior; 21 focused tests, benchmark smoke, lint/build passed. Synthetic, uncalibrated heuristic only. |
 | Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave8-11-fusion` | `d4744577ecedd424b24cec21cfe2c92f454f45ba` → `02a082ca0ba69ee59b13c36ed7d41e44c493756d` | A stalled provider body read now returns promptly on abort, removes listeners and cancels reader once; 103 focused tests and lint/build passed. Mock providers; live inference/billing/Edge unverified. |
 
-All eleven source branches above were pushed to `origin`; the coordinator branch contains each reviewed integration plus mission persistence wiring/test commits `19f31353e284f970c057527fcba0d9d8f2d3a80d` and `e4b5c39531423dbe75f284b1b14c70cc6936d23b`. Combined whole-repository evidence: **1042/1042** tests, full lint, build **2797 modules**, route-delivery smoke for `/login`, `/download`, and `/assets/index-_D2yBHMd.js`, and clean `git diff --check`. Keep `docs/requirements/v3-agent-pack/` untracked and untouched. Exact next actions: commit and push this documentation checkpoint; continue with the next distinct implementation wave without overlapping these completed fixes; prioritize real authenticated/browser/backend proof when Supabase configuration becomes available; keep all 47 steps In Progress or Incomplete until their actual required journeys are demonstrated.
+All eleven source branches above were pushed to `origin`; the coordinator branch contains each reviewed integration plus mission persistence wiring/test commits `19f31353e284f970c057527fcba0d9d8f2d3a80d` and `e4b5c39531423dbe75f284b1b14c70cc6936d23b`. Combined whole-repository evidence: **1042/1042** tests, full lint, build **2797 modules**, route-delivery smoke for `/login`, `/download`, and `/assets/index-_D2yBHMd.js`, and clean `git diff --check`. Keep `docs/requirements/v3-agent-pack/` untracked and untouched.
+
+### Wave 9 — active concurrent work from checkpoint `6a49905`
+
+All eleven existing Codex tasks received their next distinct implementation prompt concurrently from pushed coordinator checkpoint `6a499056bd66abcb0e338a82052ac091a567dc05`. GPT-6 Luna with medium reasoning was requested. At the first status snapshot, all eleven tasks were active and independently acknowledged fresh isolated worktrees; requested branch names below must be verified before accepting any commit.
+
+| Area | Codex task | Requested Wave 9 branch | Scope | State at first snapshot |
+|---|---|---|---|---|
+| Frontend / Step 23 | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave9-01-office` | Genuine validated-artifact Office-format export and OOXML/ZIP tests if feasible | Active; inspect packages/source |
+| Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave9-02-spaces` | Cross-tab reset, out-of-order event, storage-failure recovery | Active; fresh worktree |
+| Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave9-03-tool-library` | Distinct stale-session or async lifecycle recovery | Active; fresh worktree |
+| Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave9-04-edge` | Device command idempotency/authorization race after Wave 8 lock migration | Active; review migration history |
+| Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave9-05-gesture` | Distinct detector/permission/track event cleanup failure | Active; fresh worktree |
+| Flow / Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave9-06-dictation` | Distinct consent, cancellation, retry or late-callback race | Active; fresh worktree |
+| VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave9-07-voiceos` | Distinct preview freshness/expiry/cancel/account boundary | Active; fresh worktree |
+| Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave9-08-teacher` | Distinct student-facing artifact auth race | Active; fresh worktree |
+| Provider | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave9-09-provider` | Distinct streaming/parse/fallback reliability issue | Active; fresh worktree |
+| UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave9-10-ultrasparse` | Narrow bounded-work or false-positive/negation gap | Active; fresh worktree |
+| Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave9-11-fusion` | Distinct bounded cancellation/finalization issue | Active; fresh worktree |
+
+Exact next actions: commit/push this Wave 9 handoff update; allow concurrent implementation to proceed; inspect every branch and exact diff against `6a49905`; integrate only nonduplicative fixes with focused evidence; rerun combined full tests/lint/build/SPA smoke; update this handoff and `HEY_STEP_STATUS.md`. Prioritize authenticated product proof when Supabase configuration becomes available, and keep all 47 steps In Progress or Incomplete until their required journeys are demonstrated.
 
 ---
 
