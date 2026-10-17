@@ -33,9 +33,15 @@ test("favorites, pins, and recents have accessible views and explicit empty and 
   assert.match(pageSource, /Recently used/);
   assert.match(pageSource, /Show \$\{describeName\(entry\.name\)\} in the catalog/);
   assert.match(pageSource, /resolveRecentToolEntry/);
-  assert.match(pageSource, /setActiveView\("all"\);\s*setRecentToolName\(entry\.name\);\s*setQuery\(entry\.name\)/);
+  assert.match(pageSource, /setActiveView\("all"\);\s*cancelRecentToolFocus\(\);\s*setRecentToolName\(entry\.name\);\s*setQuery\(entry\.name\)/);
+  assert.match(pageSource, /scheduleRecentToolCardFocus\(/);
+  assert.match(pageSource, /tabIndex=\{-1\}/);
+  assert.match(pageSource, /isCatalogCurrent: \(candidateName\)/);
+  assert.match(pageSource, /preserveAccountPreferences = Boolean\([\s\S]*?getAccountScope\(\) === `account:\$\{requestedAccountId\}`[\s\S]*?previousPreferenceState\.status === "ready"/);
+  assert.match(pageSource, /cancelRecentToolFocus\(\); setRecentToolName\(null\); setQuery\(event\.target\.value\)/);
+  assert.match(styles, /tool-library__card:focus/);
+  assert.doesNotMatch(pageSource.slice(pageSource.indexOf("function openRecentTool"), pageSource.indexOf("function clearRecentToolFocus")), /dispatch|executeTool|runTool/);
   assert.match(pageSource, /tools\.filter\(\(tool\) => tool\.name === recentToolName\)/);
-  assert.match(pageSource, /setRecentToolName\(null\); setQuery\(event\.target\.value\)/);
   assert.match(pageSource, /function clearRecentToolFocus\(\)[\s\S]*?if \(recentToolName\) setQuery\(""\)/);
   assert.match(pageSource, /<time dateTime=\{entry\.usedAt\}>/);
   assert.match(pageSource, /No favorites yet/);

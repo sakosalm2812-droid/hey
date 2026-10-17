@@ -13,6 +13,7 @@ import { isDictationDiscoveryQuery, searchToolLibraryCatalog } from "./lib/toolL
 import { getDictationReadiness } from "./lib/dictationReadiness.js";
 import { getToolLibraryLifecycleView } from "./lib/toolLibraryLifecycleView.js";
 import { resolveRecentToolEntry } from "./lib/toolLibraryRecentEntry.js";
+import { scheduleRecentToolCardFocus } from "./lib/toolLibraryRecentFocus.js";
 import { refreshToolLibraryLifecycleSnapshot } from "./lib/toolLibraryLifecycleRefresh.js";
 import { getToolLibraryPlatformMatrix, TOOL_LIBRARY_PLATFORMS } from "./lib/toolLibraryPlatformMatrix.js";
 import { Link } from "react-router-dom";
@@ -509,7 +510,7 @@ function ToolCard({
   }
 
   return (
-    <article id={`tool-card-${encodeURIComponent(tool.name)}`} className="tool-library__card" aria-labelledby={`tool-${encodeURIComponent(tool.name)}`}>
+    <article id={`tool-card-${encodeURIComponent(tool.name)}`} className="tool-library__card" tabIndex={-1} aria-labelledby={`tool-${encodeURIComponent(tool.name)}`}>
       <div className="tool-library__card-heading">
         <div className="tool-library__tool-icon" aria-hidden="true"><Wrench size={18} /></div>
         <div className="tool-library__card-actions">
@@ -642,8 +643,13 @@ export default function ToolLibraryPage() {
   const [error, setError] = useState("");
   const [activeView, setActiveView] = useState("all");
   const [preferenceState, setPreferenceState] = useState({ status: "loading", accountId: null, preferences: null });
+  const preferenceStateRef = useRef(preferenceState);
   const [preferenceError, setPreferenceError] = useState("");
   const requestRef = useRef(0);
+  const recentFocusRequestRef = useRef(0);
+  const recentFocusTaskRef = useRef(null);
+  const recentFocusMetadataRef = useRef(null);
+  const recentActionButtonRefs = useRef(new Map());
 
   const preferenceView = getToolLibraryPreferenceView({
     accountId,
@@ -654,6 +660,11 @@ export default function ToolLibraryPage() {
   const preferenceReady = preferenceView.ready;
   const preferenceLoading = preferenceStatus === "loading";
   const preferences = preferenceView.preferences;
+  const latestRecentStateRef = useRef(null);
+  useEffect(() => {
+    preferenceStateRef.current = preferenceState;
+    latestRecentStateRef.current = { accountId, tools, recent: preferences.recent, preferenceReady };
+  }, [accountId, preferenceReady, preferenceState, preferences.recent, tools]);
   const displayedView = preferenceReady ? activeView : "all";
   const purposeSetup = preferenceReady && accountId && getAccountScope() === `account:${accountId}`
     ? HEY.onboarding.getPurposeSetup()
@@ -670,14 +681,41 @@ export default function ToolLibraryPage() {
     })
     : null;
 
+  const cancelRecentToolFocus = useCallback(({ restoreIfFocused = false } = {}) => {
+    const task = recentFocusTaskRef.current;
+    const metadata = recentFocusMetadataRef.current;
+    if (restoreIfFocused && task?.focused && metadata && getAccountScope() === `account:${metadata.accountId}`
+      && document.activeElement?.id === `tool-card-${encodeURIComponent(metadata.name)}`) {
+      try {
+        const action = recentActionButtonRefs.current.get(metadata.name);
+        if (action?.isConnected !== false && typeof action?.focus === "function") action.focus();
+      } catch { /* Focus restoration is best-effort if the action was removed. */ }
+    }
+    recentFocusRequestRef.current += 1;
+    task?.cancel();
+    recentFocusTaskRef.current = null;
+    recentFocusMetadataRef.current = null;
+  }, []);
+
   const loadCatalog = useCallback(async () => {
+    cancelRecentToolFocus({ restoreIfFocused: true });
     const request = ++requestRef.current;
     const requestedAccountId = accountId;
     setLoading(true);
     setPlatformCatalogs({});
     setError("");
     setPreferenceError("");
-    setPreferenceState({ status: requestedAccountId ? "loading" : "account_required", accountId: requestedAccountId, preferences: null });
+    const previousPreferenceState = preferenceStateRef.current;
+    const preserveAccountPreferences = Boolean(
+      requestedAccountId
+      && getAccountScope() === `account:${requestedAccountId}`
+      && previousPreferenceState.status === "ready"
+      && previousPreferenceState.accountId === requestedAccountId
+      && previousPreferenceState.preferences
+    );
+    if (!preserveAccountPreferences) {
+      setPreferenceState({ status: requestedAccountId ? "loading" : "account_required", accountId: requestedAccountId, preferences: null });
+    }
     try {
       // Let the loading state render before catalog discovery runs.
       await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -718,14 +756,15 @@ export default function ToolLibraryPage() {
     } finally {
       if (requestRef.current === request) setLoading(false);
     }
-  }, [accountId]);
+  }, [accountId, cancelRecentToolFocus]);
 
   useEffect(() => {
     void loadCatalog();
     return () => {
       requestRef.current += 1;
+      cancelRecentToolFocus();
     };
-  }, [loadCatalog]);
+  }, [loadCatalog, cancelRecentToolFocus]);
 
   function updatePreference(name, kind) {
     if (!preferenceReady || !accountId || getAccountScope() !== `account:${accountId}`) {
@@ -783,11 +822,38 @@ export default function ToolLibraryPage() {
     }
     setPreferenceError("");
     setActiveView("all");
+    cancelRecentToolFocus();
     setRecentToolName(entry.name);
     setQuery(entry.name);
+    const requestId = recentFocusRequestRef.current;
+    const catalogRequest = requestRef.current;
+    const focusRequest = scheduleRecentToolCardFocus({
+      name: entry.name,
+      accountId,
+      requestId,
+      getActiveScope: getAccountScope,
+      isCurrentRequest: (candidate) => candidate === recentFocusRequestRef.current && requestRef.current === catalogRequest,
+      isCatalogCurrent: (candidateName) => {
+        const latest = latestRecentStateRef.current;
+        return latest.preferenceReady && resolveRecentToolEntry({
+          name: candidateName,
+          accountId: latest.accountId,
+          activeScope: getAccountScope(),
+          recent: latest.recent,
+          catalog: latest.tools,
+        }).status === "ready";
+      },
+      findCard: (candidateName) => document.getElementById(`tool-card-${encodeURIComponent(candidateName)}`),
+      findRecentAction: (candidateName) => recentActionButtonRefs.current.get(candidateName),
+      requestFrame: (callback) => window.requestAnimationFrame(callback),
+      cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+    });
+    recentFocusTaskRef.current = focusRequest.task;
+    recentFocusMetadataRef.current = { name: entry.name, accountId, requestId, catalogRequest };
   }
 
   function clearRecentToolFocus() {
+    cancelRecentToolFocus();
     if (recentToolName) setQuery("");
     setRecentToolName(null);
   }
@@ -855,7 +921,7 @@ export default function ToolLibraryPage() {
         <label className="tool-library__search">
           <Search size={18} aria-hidden="true" />
           <span className="tool-library__sr-only">Search tools, permissions, and capabilities</span>
-          <input type="search" value={query} onChange={(event) => { setRecentToolName(null); setQuery(event.target.value); }} placeholder="Search tools or permissions" />
+          <input type="search" value={query} onChange={(event) => { cancelRecentToolFocus(); setRecentToolName(null); setQuery(event.target.value); }} placeholder="Search tools or permissions" />
         </label>
         <p>Platform catalog: <strong>Web</strong></p>
       </div>
@@ -887,7 +953,10 @@ export default function ToolLibraryPage() {
             <ul>
               {recentEntries.map((entry) => (
                 <li key={entry.name}>
-                  <button type="button" className="tool-library__recent-open" aria-label={`Show ${describeName(entry.name)} in the catalog`} onClick={() => openRecentTool(entry.name)}>{describeName(entry.name)}</button>
+                  <button type="button" className="tool-library__recent-open" aria-label={`Show ${describeName(entry.name)} in the catalog`} ref={(element) => {
+                    if (element) recentActionButtonRefs.current.set(entry.name, element);
+                    else recentActionButtonRefs.current.delete(entry.name);
+                  }} onClick={() => openRecentTool(entry.name)}>{describeName(entry.name)}</button>
                   <time dateTime={entry.usedAt}>{formatRecentDate(entry.usedAt)}</time>
                 </li>
               ))}

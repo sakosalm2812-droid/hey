@@ -100,6 +100,11 @@
   background: linear-gradient(145deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .022));
 }
 
+.tool-library__card:focus {
+  outline: 2px solid var(--gold-primary, #d6b66b);
+  outline-offset: 3px;
+}
+
 .tool-library__card-heading { margin-bottom: 19px; }
 
 .tool-library__card-actions {
