@@ -334,9 +334,14 @@ export function selectUltraSparseExpertsMasked(input, { limit = 2 } = {}) {
 /**
  * Connects the prototype expert labels to HEY's canonical provider plan.
  * The result is a routing proposal only; callers must still execute and
- * validate provider inference through the existing trusted runtime.
+ * validate provider inference through the existing trusted runtime. Optional
+ * providerOptions carry caller policy through both hinted and fallback plans.
  */
-export function createUltraSparsePlan(input, { intent = "conversation", limit = 2 } = {}) {
+export function createUltraSparsePlan(input, {
+  intent = "conversation",
+  limit = 2,
+  providerOptions = {},
+} = {}) {
   const selection = selectUltraSparseExperts(input, { limit });
   // Keep ambiguity checks independent of the caller's requested output size.
   // A top-1 result can hide a tied runner-up, which must still suppress hints.
@@ -347,13 +352,14 @@ export function createUltraSparsePlan(input, { intent = "conversation", limit = 
   const suppressedReason = getHintSuppressionReason(input, hintSelection);
   const eligibleExpert = suppressedReason ? null : primaryExpert;
   const capabilityHint = eligibleExpert ? PROVIDER_CAPABILITY_BY_EXPERT[eligibleExpert] || null : null;
+  const canonicalProviderOptions = { ...providerOptions, intent };
   const hintedProviderPlan = capabilityHint
-    ? createProviderPlan({ intent, capability: capabilityHint })
+    ? createProviderPlan({ ...canonicalProviderOptions, capability: capabilityHint })
     : null;
   const useHintedPlan = Boolean(hintedProviderPlan?.selected);
   const selectedProviderPlan = useHintedPlan
     ? hintedProviderPlan
-    : createProviderPlan({ intent });
+    : createProviderPlan(canonicalProviderOptions);
 
   return {
     prototype: "lexical-ultrasparse-v1",

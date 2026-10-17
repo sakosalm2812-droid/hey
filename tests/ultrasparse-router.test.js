@@ -11,7 +11,7 @@ import {
   ULTRASPARSE_MAX_CATALOG_TERM_CHARACTERS,
 } from "../src/core/ultrasparseRouter.js";
 import { createProviderPlan } from "../src/core/providerRouter.js";
-import { clearProviders } from "../src/core/providerRegistry.js";
+import { clearProviders, registerProvider } from "../src/core/providerRegistry.js";
 
 test("ultrasparse selector chooses matching experts deterministically and sparsely", () => {
   const result = selectUltraSparseExperts("Please debug this JavaScript function and cite the source.");
@@ -39,6 +39,45 @@ test("UltraSparse capability hints are advisory and retain the ordinary provider
   assert.equal(unmatched.providerPlan.capability, "chat");
   assert.equal(unmatched.providerPlan.adaptiveRouting.requestedCapability, null);
   assert.equal(unmatched.providerPlan.adaptiveRouting.applied, false);
+});
+
+test("UltraSparse hints and ordinary fallbacks preserve canonical provider privacy options", () => {
+  clearProviders();
+  registerProvider({
+    id: "wave7-cloud",
+    name: "Wave 7 Cloud Fixture",
+    capabilities: ["chat", "coding"],
+    models: [{ id: "cloud-v1", priority: 1 }],
+  });
+  registerProvider({
+    id: "wave7-local",
+    name: "Wave 7 Local Fixture",
+    capabilities: ["chat", "coding"],
+    models: [{ id: "local-v1", priority: 2, local: true }],
+  });
+
+  const localOnly = createUltraSparsePlan("Code debug function", {
+    intent: "conversation",
+    providerOptions: { privacyMode: "local_only" },
+  });
+  assert.equal(localOnly.providerPlan.selected?.providerId, "wave7-local");
+  assert.equal(localOnly.providerPlan.selected?.local, true);
+  assert.equal(localOnly.providerPlan.privacyMode, "local_only");
+  assert.equal(localOnly.providerPlan.policy.privacyMode, "local_only");
+  assert.equal(localOnly.providerPlan.adaptiveRouting.applied, true);
+
+  const ordinaryFallback = createUltraSparsePlan("Hello there", {
+    intent: "conversation",
+    providerOptions: { privacyMode: "local_only" },
+  });
+  assert.equal(ordinaryFallback.providerPlan.selected?.providerId, "wave7-local");
+  assert.equal(ordinaryFallback.providerPlan.selected?.local, true);
+  assert.equal(ordinaryFallback.providerPlan.privacyMode, "local_only");
+  assert.equal(ordinaryFallback.providerPlan.policy.privacyMode, "local_only");
+  assert.equal(ordinaryFallback.providerPlan.adaptiveRouting.expert, null);
+  assert.equal(ordinaryFallback.providerPlan.adaptiveRouting.applied, false);
+
+  clearProviders();
 });
 
 test("explicitly negated safety overrides do not suppress a strong routing hint", () => {
