@@ -3,6 +3,7 @@ import { normaliseForgeArtifact, parseJsonResponse, validateForgeArtifact } from
 import { filterTrustedHistory, readBoundedJson } from "./requestSafety.js";
 import { cancelProviderResponse, extractProviderText, readProviderJson } from "./providerResponse.js";
 import { createProviderExecutionReceipt } from "../../../src/core/providerExecutionReceipt.js";
+import { snapshotChatRetryRoute } from "../../../src/lib/chatRetryRoute.js";
 import { parseFusionPricingConfig, runFusionChatRequest } from "./fusionProvider.js";
 import {
   filterEntitledProviderAttempts,
@@ -795,6 +796,13 @@ Deno.serve(async (request) => {
   if (requestedProfile.status === "invalid") {
     return jsonResponse({ error: "The selected provider profile is invalid", code: "provider_profile_invalid" }, 400);
   }
+  const requestedRetryProfile = requestedProvider.status === "selected"
+    ? { providerId: requestedProvider.providerId, modelId: requestedProvider.modelId }
+    : requestedProfile.profile;
+  const retryRoute = snapshotChatRetryRoute(fusionRequested, requestedRetryProfile);
+  if (!retryRoute) {
+    return jsonResponse({ error: "The selected retry route is invalid", code: "provider_selection_invalid" }, 400);
+  }
   let chatProviderAttempts = getProviderAttempts();
   if (!fusionRequested) {
     const entitlements = normalizeProviderEntitlements(profile.entitlements);
@@ -986,7 +994,7 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: fusionRequested ? "The fusion request was cancelled." : "The provider request was cancelled", code: "request_cancelled" }, 499);
   }
   const messageInsert = serviceSupabase.from("hey_messages").insert([
-    { conversation_id: conversationId, user_id: user.id, role: "user", content: message },
+    { conversation_id: conversationId, user_id: user.id, role: "user", content: message, metadata: { retryRoute } },
     { conversation_id: conversationId, user_id: user.id, role: "assistant", content: answer, metadata },
   ]).abortSignal(request.signal);
   let messageError: unknown = null;

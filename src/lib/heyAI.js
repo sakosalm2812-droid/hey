@@ -6,6 +6,7 @@ import { saveQualityReport } from "./intelligenceRecords.js";
 import { recordAudit } from "../core/auditLog.js";
 import { executeRequest } from "../core/executionController.js";
 import { parseProviderExecutionReceipt } from "../core/providerExecutionReceipt.js";
+import { mapChatConversationRows } from "./chatRetryRoute.js";
 
 const MAX_HEY_API_RESPONSE_BYTES = 2_000_000;
 
@@ -629,17 +630,27 @@ export async function listHEYConversations() {
 export async function getHEYConversationMessages(conversationId) {
   if (!conversationId) return [];
 
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error("Supabase could not verify your session.", { cause: sessionError });
+  const session = sessionData?.session;
+  const userId = session?.user?.id;
+  if (!userId) throw new Error("Your Supabase session is unavailable.");
+
   const { data, error } = await supabase
     .from("hey_messages")
-    .select("role, content, created_at")
+    .select("user_id, role, content, metadata, created_at")
     .eq("conversation_id", conversationId)
+    .eq("user_id", userId)
     .order("created_at", { ascending: true });
 
   if (error) throw error;
 
-  return (data || []).map((message) => ({
-    role: message.role === "assistant" ? "hey" : "user",
-    text: message.content,
-  }));
+  const { data: currentSessionData, error: currentSessionError } = await supabase.auth.getSession();
+  if (currentSessionError) throw new Error("Supabase could not verify your session.", { cause: currentSessionError });
+  if (!isSameHEYAccount(session, currentSessionData?.session)) {
+    throw new DOMException("The signed-in account changed while loading this conversation.", "AbortError");
+  }
+
+  return mapChatConversationRows(data || [], userId);
 }
 

@@ -32,7 +32,15 @@ export function snapshotChatRetryRoute(fusion, providerProfile) {
 export function readChatRetryRoute(message) {
   try {
     if (!isPlainRecord(message) || readData(message, "role") !== "user") return { status: "invalid", route: null };
-    const descriptor = Object.getOwnPropertyDescriptor(message, "retryRoute");
+    let descriptor = Object.getOwnPropertyDescriptor(message, "retryRoute");
+    if (!descriptor) {
+      const metadataDescriptor = Object.getOwnPropertyDescriptor(message, "metadata");
+      if (!metadataDescriptor) return { status: "legacy", route: null };
+      if (!Object.hasOwn(metadataDescriptor, "value") || !isPlainRecord(metadataDescriptor.value)) {
+        return { status: "invalid", route: null };
+      }
+      descriptor = Object.getOwnPropertyDescriptor(metadataDescriptor.value, "retryRoute");
+    }
     if (!descriptor) return { status: "legacy", route: null };
     if (!Object.hasOwn(descriptor, "value") || !isPlainRecord(descriptor.value) || Reflect.ownKeys(descriptor.value).length !== 2) {
       return { status: "invalid", route: null };
@@ -43,4 +51,25 @@ export function readChatRetryRoute(message) {
   } catch {
     return { status: "invalid", route: null };
   }
+}
+
+export function mapChatConversationRows(rows, userId) {
+  if (!Array.isArray(rows) || typeof userId !== "string" || !userId) return [];
+  return rows.flatMap((row) => {
+    try {
+      if (!isPlainRecord(row) || readData(row, "user_id") !== userId) return [];
+      const role = readData(row, "role");
+      if (role !== "user" && role !== "assistant") return [];
+      const content = readData(row, "content");
+      if (typeof content !== "string") return [];
+      const route = role === "user" ? readChatRetryRoute(row) : null;
+      return [{
+        role: role === "assistant" ? "hey" : "user",
+        text: content,
+        ...(route && route.status !== "legacy" ? { retryRoute: route.route } : {}),
+      }];
+    } catch {
+      return [];
+    }
+  });
 }
