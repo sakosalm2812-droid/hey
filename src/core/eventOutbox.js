@@ -119,11 +119,13 @@ export async function deliverOutboxEvent(eventId, { store, dispatch, leaseMs = D
   if (signal?.aborted) return { delivered: false, state: "cancelled", eventId };
   const claim = await store.claim(eventId, leaseMs);
   if (!claim) return { delivered: false, state: "not_claimed" };
-  const controller = new AbortController();
   if (signal?.aborted) {
-    controller.abort(new Error("Outbox dispatch was cancelled."));
+    // The handler has not started, so releasing this claim is safe and avoids
+    // making a cancelled event wait for lease expiry before replay.
+    await store.release(eventId, claim.leaseToken);
     return { delivered: false, state: "pending", eventId, error: "delivery_cancelled" };
   }
+  const controller = new AbortController();
   let timeoutId;
   let resolveInterrupt;
   const interrupted = new Promise((resolve) => { resolveInterrupt = resolve; });

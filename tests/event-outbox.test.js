@@ -327,3 +327,49 @@ test("a hostile replay cancellation signal fails before any outbox read or claim
   assert.equal(reads, 0);
   assert.equal(claims, 0);
 });
+
+test("cancellation during claim releases an undispatched lease for immediate replay", async () => {
+  const durableStore = new InMemoryEventOutboxStore();
+  const { event } = await durableStore.appendOnce("cancel-claim", "event", { value: 1 }, "account-a");
+  let releaseClaimResponse;
+  let markClaimStarted;
+  const claimStarted = new Promise((resolve) => { markClaimStarted = resolve; });
+  const claimGate = new Promise((resolve) => { releaseClaimResponse = resolve; });
+  let releases = 0;
+  let dispatches = 0;
+  const store = {
+    claim: async (...args) => {
+      const claim = await durableStore.claim(...args);
+      markClaimStarted();
+      await claimGate;
+      return claim;
+    },
+    acknowledge: (...args) => durableStore.acknowledge(...args),
+    release: async (...args) => {
+      releases += 1;
+      return durableStore.release(...args);
+    },
+  };
+  const caller = new AbortController();
+  const delivery = deliverOutboxEvent(event.id, {
+    store,
+    leaseMs: 100,
+    timeoutMs: 50,
+    signal: caller.signal,
+    dispatch: async () => { dispatches += 1; },
+  });
+
+  await claimStarted;
+  caller.abort();
+  releaseClaimResponse();
+
+  assert.deepEqual(await delivery, { delivered: false, state: "pending", eventId: event.id, error: "delivery_cancelled" });
+  assert.equal(dispatches, 0, "cancellation observed before dispatch prevents the handler from starting");
+  assert.equal(releases, 1, "the acquired but unused lease is released");
+
+  let replayDispatches = 0;
+  const replay = await replayPendingEvents({ store: durableStore, dispatch: async () => { replayDispatches += 1; } });
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].delivered, true);
+  assert.equal(replayDispatches, 1, "released work is immediately recoverable without waiting for lease expiry");
+});
