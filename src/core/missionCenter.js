@@ -4,6 +4,8 @@ import { executeTask, getExecutionHistory } from "./executionEngine.js";
 import { createPlan } from "./planner.js";
 import { getAccountScope, getAccountStorageKey, subscribeAccountScope } from "./accountScope.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { SupabaseMissionCheckpointStore } from "./supabaseMissionCheckpointStore.js";
+import { isSupabaseConfigured, supabaseClient } from "../lib/supabase.js";
 
 export const MISSION_STATES = Object.freeze({
   DRAFT: "draft",
@@ -681,7 +683,12 @@ export class MissionCenter {
   }
 }
 
-export const missionCenter = new MissionCenter();
+export function createConfiguredMissionCenter({ storage = safeStorage, evidenceService = null, client = supabaseClient, configured = isSupabaseConfigured } = {}) {
+  const checkpointStore = configured ? new SupabaseMissionCheckpointStore(client) : null;
+  return new MissionCenter({ storage, evidenceService, checkpointStore });
+}
+
+export const missionCenter = createConfiguredMissionCenter();
 
 export function createMission(goal, options) {
   return missionCenter.createMission(goal, options);

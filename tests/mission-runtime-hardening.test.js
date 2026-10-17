@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MissionCenter, MISSION_STATES } from "../src/core/missionCenter.js";
+import { createConfiguredMissionCenter, MissionCenter, missionCenter, MISSION_STATES } from "../src/core/missionCenter.js";
+import { SupabaseMissionCheckpointStore } from "../src/core/supabaseMissionCheckpointStore.js";
 import { executeTask } from "../src/core/executionEngine.js";
 import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
 
@@ -9,6 +10,20 @@ class MemoryStore {
   getItem(key) { return this.values.get(key) ?? null; }
   setItem(key, value) { this.values.set(key, value); }
 }
+
+test("configured application mission center wires durable checkpoint persistence without local fallback", () => {
+  const client = { rpc: async () => ({ data: null, error: null }) };
+  const configured = createConfiguredMissionCenter({ storage: new MemoryStore(), client, configured: true });
+  assert.ok(configured.checkpointStore instanceof SupabaseMissionCheckpointStore);
+  assert.equal(configured.checkpointStore.client, client);
+
+  const localOnly = createConfiguredMissionCenter({ storage: new MemoryStore(), client: null, configured: false });
+  assert.equal(localOnly.checkpointStore, null);
+  assert.throws(() => createConfiguredMissionCenter({ storage: new MemoryStore(), client: null, configured: true }), /configured Supabase client/);
+
+  // The exported production singleton uses the same config-aware factory.
+  assert.equal(missionCenter.checkpointStore instanceof SupabaseMissionCheckpointStore, Boolean(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY));
+});
 
 test("mission history is isolated in memory and storage across account switches", () => {
   const storage = new MemoryStore();
