@@ -184,10 +184,10 @@ test("replacing a pending preview revokes its old capability for both typed and 
   assert.match(replacement, /storeComputerPreview\(nextPreview\)/);
 
   const voiceStart = source.indexOf("const askFromVoice = useCallback(");
-  const voiceEnd = source.indexOf("async function sendUserMessage(userMessage)", voiceStart);
+  const voiceEnd = source.indexOf("async function sendUserMessage(", voiceStart);
   assert.ok(voiceStart >= 0 && voiceEnd > voiceStart);
   assert.match(source.slice(voiceStart, voiceEnd), /replaceComputerPreview\(\{ \.\.\.nextPreview, source: "voice" \}\)/);
-  const typedStart = source.indexOf("async function sendUserMessage(userMessage)");
+  const typedStart = source.indexOf("async function sendUserMessage(");
   const typedEnd = source.indexOf("function reviewComputerPreview()", typedStart);
   assert.ok(typedStart >= 0 && typedEnd > typedStart);
   assert.match(source.slice(typedStart, typedEnd), /replaceComputerPreview\(nextPreview\)/);
