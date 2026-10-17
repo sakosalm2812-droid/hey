@@ -92,6 +92,12 @@ function ChatWorkspace() {
   const requestedHistoryConversationRef = useRef(null);
   const historyRequestFenceRef = useRef(null);
   if (historyRequestFenceRef.current === null) historyRequestFenceRef.current = createChatHistoryRequestFence();
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const historyLoadingRef = useRef(true);
+  const updateHistoryLoading = useCallback((nextLoading) => {
+    historyLoadingRef.current = nextLoading;
+    setHistoryLoading(nextLoading);
+  }, []);
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
@@ -222,6 +228,7 @@ function ChatWorkspace() {
   useEffect(() => {
     let cancelled = false;
     const accountId = user?.id || null;
+    updateHistoryLoading(true);
     requestedHistoryConversationRef.current = null;
     const conversationListTicket = historyRequestFenceRef.current.begin(accountId, null);
     const healthController = new AbortController();
@@ -238,12 +245,13 @@ function ChatWorkspace() {
         if (cancelled) return;
 
         setConversations(items);
-        setSupabaseStatus("connected");
-        if (!historyRequestFenceRef.current.isCurrent(
+        const isCurrentListRequest = historyRequestFenceRef.current.isCurrent(
           conversationListTicket,
           userIdRef.current,
           requestedHistoryConversationRef.current,
-        ) || !items.length) return;
+        );
+        if (isCurrentListRequest) setSupabaseStatus("connected");
+        if (!isCurrentListRequest || !items.length) return;
 
         const requestedConversationId = items[0].id;
         requestedHistoryConversationRef.current = requestedConversationId;
@@ -257,6 +265,7 @@ function ChatWorkspace() {
           )) return;
           setConversationId(requestedConversationId);
           setMessages(latestMessages.length ? latestMessages : [welcomeMessage]);
+          updateHistoryLoading(false);
         } catch {
           if (!cancelled && historyRequestFenceRef.current.isCurrent(
             historyTicket,
@@ -265,6 +274,8 @@ function ChatWorkspace() {
           )) {
             setSupabaseStatus("unavailable");
             setChatError("Supabase could not load your conversations. Check the connection and try again.");
+            requestedHistoryConversationRef.current = conversationIdRef.current || null;
+            updateHistoryLoading(false);
           }
         }
       } catch {
@@ -277,7 +288,14 @@ function ChatWorkspace() {
           setChatError("Supabase could not load your conversations. Check the connection and try again.");
         }
       } finally {
-        if (!cancelled) setConversationsLoading(false);
+        if (!cancelled) {
+          setConversationsLoading(false);
+          if (historyRequestFenceRef.current.isCurrent(
+            conversationListTicket,
+            userIdRef.current,
+            requestedHistoryConversationRef.current,
+          )) updateHistoryLoading(false);
+        }
       }
     }
 
@@ -288,7 +306,7 @@ function ChatWorkspace() {
       requestedHistoryConversationRef.current = null;
       healthController.abort();
     };
-  }, [user?.id]);
+  }, [updateHistoryLoading, user?.id]);
 
   useEffect(() => {
     let active = true;
@@ -333,6 +351,8 @@ function ChatWorkspace() {
     if (isSending) return;
     followingRef.current = true;
     requestedHistoryConversationRef.current = id;
+    updateHistoryLoading(true);
+    setChatError("");
     const historyTicket = historyRequestFenceRef.current.begin(userIdRef.current, id);
     const isCurrentRequest = () => historyRequestFenceRef.current.isCurrent(
       historyTicket,
@@ -348,10 +368,14 @@ function ChatWorkspace() {
       setCopiedMessage(null);
       setChatError("");
       setHistoryOpen(false);
+      setSupabaseStatus("connected");
+      updateHistoryLoading(false);
     } catch {
       if (!isCurrentRequest()) return;
       setSupabaseStatus("unavailable");
       setChatError("Supabase could not open that conversation. Check the connection and try again.");
+      requestedHistoryConversationRef.current = conversationIdRef.current || null;
+      updateHistoryLoading(false);
     }
   }
 
@@ -360,6 +384,7 @@ function ChatWorkspace() {
     followingRef.current = true;
     historyRequestFenceRef.current.invalidate();
     requestedHistoryConversationRef.current = null;
+    updateHistoryLoading(false);
     setConversationId(null);
     setMessages([welcomeMessage]);
     copyRequestRef.current += 1;
@@ -537,7 +562,12 @@ function ChatWorkspace() {
       return;
     }
     if (isSending) return;
+    if (historyLoadingRef.current) {
+      setChatError("Wait for the selected conversation to finish loading before sending.");
+      return;
+    }
     if (previewRequestInFlightRef.current) return;
+    const sendHistoryTicket = historyRequestFenceRef.current.begin(userIdRef.current, conversationIdRef.current);
     const previewController = new AbortController();
     previewRequestControllerRef.current = previewController;
     previewRequestInFlightRef.current = true;
@@ -553,6 +583,14 @@ function ChatWorkspace() {
       }
     }
     if (previewController.signal.aborted) return;
+    if (historyLoadingRef.current || !historyRequestFenceRef.current.isCurrent(
+      sendHistoryTicket,
+      userIdRef.current,
+      conversationIdRef.current,
+    )) {
+      setChatError("The selected conversation changed before the message was sent. Review the conversation and try again.");
+      return;
+    }
     if (nextPreview?.blocked) {
       setExecutionStatus(nextPreview.reason === "conversation_changed"
         ? t("chat.voiceOS.conversationChanged", "The computer preview was cleared because you changed conversations. Review the request again here; nothing was run.")
@@ -1115,7 +1153,7 @@ function ChatWorkspace() {
                 conversationId={conversationId}
                 setValue={setMessage}
                 onSend={() => sendUserMessage(message)}
-                disabled={isSending}
+                disabled={isSending || historyLoading}
                 fusionEnabled={fusionEnabled}
                 setFusionEnabled={setFusionEnabled}
                 providerCatalog={providerCatalog}
