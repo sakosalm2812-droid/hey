@@ -578,9 +578,9 @@ export function createDictationSession({ speechProvider, environment = globalThi
             rejectRecognitionResult("transcript_consumer_failed", "Dictation could not safely deliver its result. Start again to retry.");
           }
         },
-        onError: (error) => {
+        onError: () => {
           if (currentGeneration === generation && !destroyed) {
-            rejectRecognitionResult("recognition_error", error);
+            rejectRecognitionResult("recognition_error", "Speech recognition failed. Start again to retry.");
           }
         },
         onEnd: () => {
@@ -596,11 +596,12 @@ export function createDictationSession({ speechProvider, environment = globalThi
         currentAttempt.visibilityRecoveryLatencyMs = elapsed(visibilityInterruptedAt, currentAttempt.providerStartedAt);
         visibilityInterruptedAt = null;
       }
-    } catch (error) {
+    } catch {
       active = false;
       finishAttempt("start_failed");
-      transition(VOICE_STATES.error, error?.message || "Speech recognition could not start.");
-      return { success: false, status: VOICE_STATES.error, error: error?.message || "Speech recognition could not start." };
+      const error = "Speech recognition could not start.";
+      transition(VOICE_STATES.error, error);
+      return { success: false, status: VOICE_STATES.error, error };
     }
     return { success: true, status: VOICE_STATES.listening };
   }

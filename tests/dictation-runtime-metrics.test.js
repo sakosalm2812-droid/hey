@@ -128,12 +128,12 @@ test("permission probe fails closed for malformed or unreadable track collection
 test("recognition errors and throwing metrics consumers cannot disrupt or leak dictation", async () => {
   let callbacks;
   let transcript = "";
-  let state = "";
+  let state;
   const session = createDictationSession({
     speechProvider: { start(options) { callbacks = options; return {}; }, stop() {} },
     environment: environmentWithPermission(),
     onTranscript: (value) => { transcript = value; },
-    onStateChange: (value) => { state = value.state; },
+    onStateChange: (value) => { state = value; },
     onMetrics() { throw new Error("metrics sink failed"); },
   });
 
@@ -141,7 +141,9 @@ test("recognition errors and throwing metrics consumers cannot disrupt or leak d
   callbacks.onTranscript("safe emitted text");
   assert.doesNotThrow(() => callbacks.onError("private provider diagnostic"));
   assert.equal(transcript, "safe emitted text");
-  assert.equal(state, "error");
+  assert.equal(state.state, "error");
+  assert.equal(state.error, "Speech recognition failed. Start again to retry.");
+  assert.equal(JSON.stringify(state).includes("private provider diagnostic"), false);
   session.destroy();
 });
 
@@ -185,17 +187,26 @@ test("a throwing transcript consumer stops capture, fences late callbacks, and p
 
 test("provider startup failures use a stable status and never return provider diagnostics", async () => {
   const reports = [];
+  const states = [];
+  const privateDiagnostic = new Proxy({}, {
+    get() { throw new Error("private error getter must not run"); },
+  });
   const session = createDictationSession({
-    speechProvider: { start() { throw new Error("private provider endpoint and token"); }, stop() {} },
+    speechProvider: { start() { throw privateDiagnostic; }, stop() {} },
     environment: environmentWithPermission(),
     onMetrics: (value) => reports.push(value),
+    onStateChange: (value) => states.push(value),
   });
 
-  const result = await session.start({ consentGiven: true });
+  let result;
+  await assert.doesNotReject(async () => { result = await session.start({ consentGiven: true }); });
   assert.equal(result.success, false);
+  assert.equal(result.error, "Speech recognition could not start.");
   assert.equal(reports.length, 1);
   assert.equal(reports[0].status, "start_failed");
-  assert.equal(JSON.stringify(reports).includes("private provider endpoint"), false);
+  assert.equal(JSON.stringify(reports).includes("private"), false);
+  assert.equal(JSON.stringify(states).includes("private"), false);
+  assert.equal(states.at(-1).error, "Speech recognition could not start.");
   assert.equal(reports[0].transcriptCount, 0);
   session.destroy();
 });
