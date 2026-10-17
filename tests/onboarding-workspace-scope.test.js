@@ -134,6 +134,55 @@ test("tutorial mutations roll back on storage failure and discard results after 
   } finally { setAccountScope(previousScope); }
 }));
 
+test("tutorial progress synchronizes across same-account tabs and ignores malformed or foreign storage events", () => withStorage((storage, windowTarget) => {
+  const previousScope = "tutorial-sync-previous";
+  setAccountScope(previousScope);
+  const first = new TutorialEngine();
+  const second = new TutorialEngine();
+  const events = [];
+  const unsubscribe = subscribeToEvent("tutorial.progress_synced", (payload) => events.push(payload));
+  try {
+    setAccountScope("tutorial-sync-owner");
+    first.registerTutorial({ capabilityId: "shared-tour", steps: ["one", "two"] });
+    second.registerTutorial({ capabilityId: "shared-tour", steps: ["one", "two"] });
+    const key = getAccountStorageKey("hey_tutorial_progress");
+    const dispatch = (eventKey, newValue) => windowTarget.dispatchEvent({ type: "storage", key: eventKey, newValue, storageArea: storage });
+
+    const started = first.startTutorial("shared-tour");
+    const startedSnapshot = storage.getItem(key);
+    dispatch(key, startedSnapshot);
+    assert.equal(second.getProgress("shared-tour").startedAt, started.progress.startedAt);
+    assert.equal(events.at(-1).accountScope, "account:tutorial-sync-owner");
+
+    first.completeStep("shared-tour", 0);
+    dispatch(key, storage.getItem(key));
+    assert.equal(second.getProgress("shared-tour").currentStep, 1);
+    assert.deepEqual(second.getProgress("shared-tour").completedSteps, [0]);
+
+    const synced = second.getProgress("shared-tour");
+    dispatch(key, startedSnapshot);
+    assert.deepEqual(second.getProgress("shared-tour"), synced, "a delayed older event must not roll progress back");
+    dispatch(key, "{");
+    dispatch(getAccountStorageKey("hey_tutorial_progress", "account:other-tutorial-owner"), JSON.stringify({ "shared-tour": { currentStep: 9 } }));
+    assert.deepEqual(second.getProgress("shared-tour"), synced);
+
+    storage.removeItem(key);
+    dispatch(key, null);
+    assert.equal(second.getProgress("shared-tour").startedAt, null);
+    assert.equal(events.at(-1).progress.startedAt, null);
+
+    setAccountScope("tutorial-sync-other-owner");
+    assert.equal(second.getProgress("shared-tour").startedAt, null);
+    dispatch(key, JSON.stringify({ "shared-tour": { startedAt: "foreign" } }));
+    assert.equal(second.getProgress("shared-tour").startedAt, null);
+  } finally {
+    unsubscribe();
+    first.destroy();
+    second.destroy();
+    setAccountScope(previousScope);
+  }
+}));
+
 test("onboarding synchronizes same-account storage updates and ignores foreign or malformed events", () => withStorage((storage, windowTarget) => {
   const previousScope = "spaces-test-previous";
   setAccountScope(previousScope);

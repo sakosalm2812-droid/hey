@@ -259,6 +259,31 @@ function normalizeProgress(value) {
   };
 }
 
+function parseTutorialProgress(serialized) {
+  if (serialized === null || serialized === undefined) return new Map();
+  if (typeof serialized !== "string" || serialized.length > MAX_ONBOARDING_STORAGE_CHARS) return null;
+  try {
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const progress = new Map();
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (!/^[a-z0-9][a-z0-9_.:-]{0,99}$/i.test(key) || !value || typeof value !== "object" || Array.isArray(value)) return;
+      const completedSteps = Array.isArray(value.completedSteps) ? value.completedSteps.filter((step) => Number.isInteger(step) && step >= 0 && step < 1000) : [];
+      progress.set(key, {
+        capabilityId: key,
+        startedAt: typeof value.startedAt === "string" ? value.startedAt.slice(0, 64) : null,
+        completedAt: typeof value.completedAt === "string" ? value.completedAt.slice(0, 64) : null,
+        currentStep: Number.isInteger(value.currentStep) && value.currentStep >= 0 ? Math.min(value.currentStep, 1000) : 0,
+        completedSteps: [...new Set(completedSteps)],
+        skipped: value.skipped === true,
+      });
+    });
+    return progress;
+  } catch {
+    return null;
+  }
+}
+
 export class OnboardingEngine {
   constructor() {
     this.progress = createInitialProgress();
@@ -645,38 +670,56 @@ export class TutorialEngine {
     this.unsubscribeAccountScope = subscribeAccountScope((_previousScope, nextScope) => {
       this.accountScope = nextScope;
       this.load();
+      publish("tutorial.account_scope_changed", { accountScope: nextScope });
     });
+    this.storageEventTarget = globalThis.window && typeof globalThis.window.addEventListener === "function"
+      ? globalThis.window
+      : null;
+    this.handleStorageEvent = (event) => {
+      if (!event || (event.key !== getAccountStorageKey(TUTORIAL_STORAGE_KEY) && event.key !== null)) return;
+      try {
+        if (event.storageArea && globalThis.localStorage && event.storageArea !== globalThis.localStorage) return;
+        const scope = this.accountScope;
+        if (scope !== getAccountScope()) return;
+        const key = getAccountStorageKey(TUTORIAL_STORAGE_KEY, scope);
+        if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== "function") return;
+        // Storage events can be delayed behind a newer write. Apply the current
+        // account's canonical bytes instead of replaying an older event payload.
+        const serialized = globalThis.localStorage.getItem(key);
+        const nextProgress = parseTutorialProgress(serialized);
+        if (!nextProgress || scope !== this.accountScope || scope !== getAccountScope()) return;
+        const previous = this.progress;
+        this.progress = nextProgress;
+        for (const capabilityId of new Set([...previous.keys(), ...nextProgress.keys()])) {
+          if (JSON.stringify(previous.get(capabilityId) ?? null) === JSON.stringify(nextProgress.get(capabilityId) ?? null)) continue;
+          publish("tutorial.progress_synced", {
+            accountScope: scope,
+            capabilityId,
+            progress: this.getProgress(capabilityId),
+          });
+        }
+      } catch {
+        // Storage events are external input. Keep the current progress on malformed or unavailable data.
+      }
+    };
+    this.storageEventTarget?.addEventListener("storage", this.handleStorageEvent);
+  }
+
+  destroy() {
+    this.storageEventTarget?.removeEventListener("storage", this.handleStorageEvent);
+    this.unsubscribeAccountScope?.();
   }
 
   load() {
     const scope = getAccountScope();
     this.accountScope = scope;
-    const progress = new Map();
     try {
       const stored = safeStorage.getItem(getAccountStorageKey(TUTORIAL_STORAGE_KEY, scope));
       if (scope !== getAccountScope() || scope !== this.accountScope) return;
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          this.progress = progress;
-          return;
-        }
-        Object.entries(parsed).forEach(([key, value]) => {
-          if (!/^[a-z0-9][a-z0-9_.:-]{0,99}$/i.test(key) || !value || typeof value !== "object" || Array.isArray(value)) return;
-          const completedSteps = Array.isArray(value.completedSteps) ? value.completedSteps.filter((step) => Number.isInteger(step) && step >= 0 && step < 1000) : [];
-          progress.set(key, {
-            capabilityId: key,
-            startedAt: typeof value.startedAt === "string" ? value.startedAt.slice(0, 64) : null,
-            completedAt: typeof value.completedAt === "string" ? value.completedAt.slice(0, 64) : null,
-            currentStep: Number.isInteger(value.currentStep) && value.currentStep >= 0 ? Math.min(value.currentStep, 1000) : 0,
-            completedSteps: [...new Set(completedSteps)],
-            skipped: value.skipped === true,
-          });
-        });
-      }
-      if (scope === getAccountScope() && scope === this.accountScope) this.progress = progress;
+      const progress = parseTutorialProgress(stored);
+      if (scope === getAccountScope() && scope === this.accountScope) this.progress = progress || new Map();
     } catch (err) {
-      if (scope === getAccountScope() && scope === this.accountScope) this.progress = progress;
+      if (scope === getAccountScope() && scope === this.accountScope) this.progress = new Map();
       console.warn("Failed to load tutorial progress:", err);
     }
   }
@@ -743,7 +786,7 @@ export class TutorialEngine {
     const failure = this.persistMutation(previousProgress, scope, "Could not safely save tutorial progress");
     if (failure) return failure;
     
-    publish("tutorial.started", { capabilityId, tutorial });
+    publish("tutorial.started", { accountScope: scope, capabilityId, tutorial });
     return { tutorial, progress: prog };
   }
 
