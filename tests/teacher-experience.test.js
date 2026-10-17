@@ -980,6 +980,67 @@ test("atomic journey write failures return a retry handle and retry without dupl
   }, { loseFirstResponse: true });
 });
 
+test("a committed batch with a lost RPC response is accepted only after exact authorized readback", async () => {
+  const journeyId = "96ea63ed-0bd7-46b2-9d39-2248b3c52fa8";
+  const context = teacherContext();
+  await withForgeBatchPersistence(async (calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(_field, ids) { return Promise.resolve({ data: ids.map((id) => rowsById.get(id)).filter(Boolean), error: null }); },
+    });
+    try {
+      const result = await HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      });
+      assert.equal(result.recoveredAfterAmbiguousWrite, true);
+      assert.equal(result.recovered, true);
+      assert.equal(rowsById.size, 3);
+      assert.equal(calls.length, 1, "the committed batch is not submitted a second time");
+      assert.equal(result.saved.teacherArtifact.content.questions[0].teacherAnswer,
+        assessmentInput().questions[0].teacherAnswer);
+      assert.doesNotMatch(JSON.stringify(result.saved.studentArtifact.content), /teacherAnswer|One quarter is one of four equal parts/);
+    } finally {
+      supabaseClient.from = originalFrom;
+    }
+  }, { loseFirstResponse: true });
+});
+
+test("an ambiguous batch is not reported complete when persisted readback is partial or mismatched", async () => {
+  const journeyId = "98fe2850-7caf-4a6f-b752-e38c91406423";
+  const context = teacherContext();
+  await withForgeBatchPersistence(async (_calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(_field, ids) {
+        const records = ids.map((id) => rowsById.get(id)).filter(Boolean);
+        const worksheet = records.find((record) => record.metadata?.artifactContract === "hey.teacher.worksheet.v1");
+        if (worksheet) worksheet.content = {
+          ...worksheet.content,
+          questions: [{ prompt: "Question", points: 1, teacherAnswer: "injected private answer" }],
+        };
+        return Promise.resolve({ data: records, error: null });
+      },
+    });
+    try {
+      await assert.rejects(HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      }), (error) => {
+        assert.match(error.message, /atomic teacher artifact batch/);
+        assert.equal(error.journeyId, journeyId);
+        assert.equal(error.artifactIds.length, 3);
+        return true;
+      });
+      assert.equal(rowsById.size, 3, "the simulated server had committed, but the returned row failed verification");
+      assert.equal([...rowsById.keys()].some((id) => artifactEngine.artifacts.has(id)), false,
+        "unverified readback must not enter the in-memory Forge cache");
+    } finally {
+      supabaseClient.from = originalFrom;
+    }
+  }, { loseFirstResponse: true });
+});
+
 test("concurrent retries with one journey ID resolve to the same complete artifact set", async () => {
   const request = {
     lesson: lessonInput(),

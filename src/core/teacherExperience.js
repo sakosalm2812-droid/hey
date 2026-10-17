@@ -1154,6 +1154,28 @@ async function deriveJourneyArtifactId(journeyId, kind) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function persistedTeacherJourneyMatchesPrepared(readback, preparedArtifacts) {
+  if (!readback || !Array.isArray(preparedArtifacts) || preparedArtifacts.length !== 3
+    || readback.journeyId !== preparedArtifacts[0]?.metadata?.journeyId) return false;
+  const persisted = [readback.saved?.lesson, readback.saved?.teacherArtifact, readback.saved?.studentArtifact];
+  return persisted.every((artifact, index) => {
+    const expected = preparedArtifacts[index];
+    return artifact && artifact.id === expected.id
+      && artifact.projectId === expected.projectId
+      && artifact.createdBy === expected.createdBy
+      && artifact.type === expected.type
+      && artifact.title === expected.title
+      && artifact.description === expected.description
+      && artifact.status === "draft"
+      && artifact.version === 1
+      && artifact.parentVersionId === null
+      && artifact.branchName === "main"
+      && canonicalJson(artifact.content) === canonicalJson(expected.content)
+      && canonicalJson(artifact.metadata) === canonicalJson(expected.metadata)
+      && canonicalJson(artifact.tags || []) === canonicalJson(expected.tags || []);
+  });
+}
+
 /** Build and atomically persist the teacher lesson, answer key, and class-scoped student worksheet. */
 export async function createTeacherLessonWorksheetJourney({ lesson: lessonRequest, assessment: assessmentRequest, context: contextRequest, journeyId: requestedJourneyId } = {}) {
   let lessonInput;
@@ -1174,6 +1196,7 @@ export async function createTeacherLessonWorksheetJourney({ lesson: lessonReques
   if (!Number.isFinite(Date.parse(journeyCreatedAt))) throw new TypeError("journeyCreatedAt must be a valid date");
   const stableContext = { ...context, journeyCreatedAt: new Date(journeyCreatedAt).toISOString() };
   let journeyArtifactIds = [];
+  let preparedArtifacts = null;
 
   try {
     const builtLesson = await buildTeacherLessonArtifact({ ...lessonInput, createdAt: stableContext.journeyCreatedAt });
@@ -1198,9 +1221,10 @@ export async function createTeacherLessonWorksheetJourney({ lesson: lessonReques
       prepareTeacherArtifactSave(worksheet, stableContext, BUILT_TEACHER_WORKSHEET_ARTIFACTS, verifyTeacherWorksheetArtifact,
         "worksheet", "hey.teacher.worksheet.v1", ["teacher", "student-worksheet"], { id: worksheetId, journeyId }),
     ]);
-    const [savedLesson, savedTeacherArtifact, savedStudentArtifact] = await createTeacherArtifactBatch([
+    preparedArtifacts = [
       lessonParams, answerKeyParams, worksheetParams,
-    ]);
+    ];
+    const [savedLesson, savedTeacherArtifact, savedStudentArtifact] = await createTeacherArtifactBatch(preparedArtifacts);
     return Object.freeze({
       journeyId,
       lesson,
@@ -1209,6 +1233,24 @@ export async function createTeacherLessonWorksheetJourney({ lesson: lessonReques
       saved: Object.freeze({ lesson: savedLesson, teacherArtifact: savedTeacherArtifact, studentArtifact: savedStudentArtifact }),
     });
   } catch (error) {
+    if (preparedArtifacts) {
+      try {
+        const readback = await getTeacherLessonWorksheetJourney({ journeyId, context: stableContext });
+        if (persistedTeacherJourneyMatchesPrepared(readback, preparedArtifacts)) {
+          return Object.freeze({
+            journeyId,
+            lesson: readback.lesson,
+            teacherArtifact: readback.teacherArtifact,
+            studentArtifact: readback.studentArtifact,
+            saved: readback.saved,
+            recovered: true,
+            recoveredAfterAmbiguousWrite: true,
+          });
+        }
+      } catch {
+        // Keep the original persistence error and its stable retry information.
+      }
+    }
     if (error && typeof error === "object") {
       error.journeyId = journeyId;
       error.recovery = Object.freeze({
