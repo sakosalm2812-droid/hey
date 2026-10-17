@@ -328,14 +328,21 @@ function writeRecoverySnapshot(scope, payload) {
   if (getAccountScope() !== scope) return false;
   const key = getAccountStorageKey(RECOVERY_STORAGE_KEY, scope);
   let sequence = 1;
+  let previous;
   try {
-    const previous = readStorageItem(key);
-    if (previous != null) {
+    previous = readStorageItem(key);
+  } catch {
+    // An unavailable read is not evidence that the existing recovery snapshot
+    // is corrupt. Preserve it and retry only after storage can be read.
+    return false;
+  }
+  if (previous != null) {
+    try {
       const parsed = parseRecoverySnapshot(previous, scope);
       sequence = parsed.sequence + 1;
+    } catch {
+      // Replace a damaged or foreign snapshot only from a validated primary.
     }
-  } catch {
-    // Replace a damaged or foreign snapshot with the validated current store.
   }
   if (!Number.isSafeInteger(sequence) || sequence < 1) return false;
   let spaces;

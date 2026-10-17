@@ -10,11 +10,12 @@ import { registerTool, unregisterTool } from "../src/core/toolRegistry.js";
 class MemoryStorage {
   values = new Map();
   failReads = false;
+  failReadKeys = new Set();
   failWrites = false;
   failWriteKeys = new Set();
   onSet = null;
   getItem(key) {
-    if (this.failReads) throw new Error("storage unavailable");
+    if (this.failReads || this.failReadKeys.has(key)) throw new Error("storage unavailable");
     return this.values.get(key) ?? null;
   }
   setItem(key, value) {
@@ -1419,6 +1420,55 @@ test("recovery snapshot retry verifies current primary data and remains account 
 
     setAccountScope("space-recovery-explicit-refresh-other");
     assert.match(engine.retryRecoverySnapshot({ accountScope }).error, /scope mismatch/i);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("a cross-tab recovery read failure after a healthy snapshot preserves bytes until verified retry", () => withStorage((storage, windowTarget) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    const ownerId = "space-recovery-read-failure";
+    const accountScope = `account:${ownerId}`;
+    setAccountScope(ownerId);
+    const engine = new SpaceCreationEngine();
+    const preview = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Healthy recovery snapshot" });
+    const created = engine.confirmNaturalLanguagePreview({ previewId: preview.previewId, confirm: true });
+    assert.equal(created.success, true);
+
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    const primaryBefore = storage.values.get(primaryKey);
+    const recoveryBefore = storage.values.get(recoveryKey);
+    assert.ok(primaryBefore);
+    assert.ok(recoveryBefore);
+    const events = [];
+    engine.subscribe((event, payload) => events.push({ event, payload }));
+    const writes = [];
+    storage.onSet = (key) => writes.push(key);
+    storage.failReadKeys.add(recoveryKey);
+
+    windowTarget.dispatchEvent({ type: "storage", key: recoveryKey, storageArea: storage, oldValue: recoveryBefore, newValue: recoveryBefore });
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    assert.equal(events.some(({ event, payload }) => event === "storage_recovery_snapshot_error" && payload.accountScope === accountScope), true);
+    assert.equal(storage.values.get(primaryKey), primaryBefore);
+    assert.equal(storage.values.get(recoveryKey), recoveryBefore);
+    assert.deepEqual(writes, []);
+
+    const unavailableRetry = engine.retryRecoverySnapshot({ accountScope });
+    assert.notEqual(unavailableRetry.success, true);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    assert.equal(storage.values.get(primaryKey), primaryBefore);
+    assert.equal(storage.values.get(recoveryKey), recoveryBefore);
+    assert.deepEqual(writes, []);
+
+    storage.failReadKeys.delete(recoveryKey);
+    storage.onSet = null;
+    const retry = engine.retryRecoverySnapshot({ accountScope });
+    assert.equal(retry.success, true);
+    assert.equal(retry.accountScope, accountScope);
+    assert.equal(JSON.parse(storage.values.get(recoveryKey)).payload, primaryBefore);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, false);
+    assert.equal(events.some(({ event, payload }) => event === "storage_recovery_snapshot_updated" && payload.accountScope === accountScope), true);
   } finally { setAccountScope(previousScope); }
 }));
 
