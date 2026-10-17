@@ -269,12 +269,14 @@ async function requestProvider({ provider, attempt, messages, candidate, signal,
   }
   const usage = readUsage(provider.id, data);
   if (!usage) throw new Error("Provider usage is unavailable");
+  const costUsd = calculateCost(usage, provider);
+  onUsageReported?.(costUsd);
+  if (costUsd > provider.reservedCostUsd) {
+    throw Object.assign(new Error("Provider usage exceeded its reserved cost"), { providerBudgetExceeded: true });
+  }
   if (usage.inputTokens > provider.maxInputTokens || usage.outputTokens > provider.maxOutputTokens) {
     throw new Error("Provider usage exceeded its reserved token bounds");
   }
-  const costUsd = calculateCost(usage, provider);
-  if (costUsd > provider.reservedCostUsd) throw new Error("Provider usage exceeded its reserved cost");
-  onUsageReported?.(costUsd);
   const text = readProviderText(provider.id, data);
   if (text.length > 16_000) throw new Error("Provider output too large");
   let parsed;
@@ -344,8 +346,8 @@ export async function runFusionChatRequest({
   if (permitted.length < 2) return { status: "denied", reason: "two_permitted_priced_providers_required" };
 
   const pricedProviders = permitted.map((provider, index) => {
-    // The second call can carry the bounded primary answer and its evidence.
-    const maxInputTokens = estimateInputTokenCeiling(messages, index === 1 ? MAX_VERIFICATION_CONTEXT_BYTES + 512 : 0);
+    // Every provider after the first may become a checker during recovery.
+    const maxInputTokens = estimateInputTokenCeiling(messages, index > 0 ? MAX_VERIFICATION_CONTEXT_BYTES + 512 : 0);
     const inputWorstCaseUsd = (maxInputTokens * provider.inputUsdPerMillion) / 1_000_000;
     if (inputWorstCaseUsd >= provider.maxCostUsd && provider.outputUsdPerMillion > 0) return null;
     const affordableOutputTokens = provider.outputUsdPerMillion > 0
@@ -429,6 +431,9 @@ export async function runFusionChatRequest({
         callsMetered += 1;
         providerReportedUsd += costUsd;
         attemptReceipt.usageStatus = "reported";
+        if (providerReportedUsd > pricingConfig.budgetUsd) {
+          throw Object.assign(new Error("Provider usage exceeded the Fusion request cap"), { providerBudgetExceeded: true });
+        }
       };
       if (typeof getCurrentEntitlements !== "function") {
         return await requestProvider({ provider, attempt, messages, candidate, signal: providerSignal, fetchImpl, onDispatch, onUsageReported });

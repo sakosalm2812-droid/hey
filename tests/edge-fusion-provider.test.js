@@ -265,6 +265,277 @@ test("Fusion recovers checker verification through a third permitted provider", 
   assert.equal(JSON.stringify(result).includes("private vendor error"), false);
 });
 
+test("a recovery checker reserves candidate context and meters its reported usage", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  const text = "The answer is 42.";
+  const primaryEvidence = [
+    { claimId: "answer", statement: "Exact response text returned by this provider.", value: text, source: null },
+    ...Array.from({ length: 13 }, (_, index) => ({
+      claimId: `detail-${index}`,
+      statement: "x".repeat(400),
+      value: index,
+      source: null,
+    })),
+  ];
+  const primaryBody = JSON.stringify({ text, confidence: 0.9, evidence: primaryEvidence });
+  assert.ok(new TextEncoder().encode(JSON.stringify({ providerId: "openai", modelId: "fixture-openai", text, confidence: 0.9, evidence: primaryEvidence })).byteLength < 8_000);
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") return new Response("private vendor error", { status: 503 });
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    const outputText = isChecker ? providerPayload(providerId, "42", 0.9, true) : null;
+    const outputData = isChecker
+      ? JSON.parse(JSON.stringify(outputText))
+      : { choices: [{ message: { content: primaryBody } }], usage: { prompt_tokens: 50, completion_tokens: 20 } };
+    if (providerId === "groq") outputData.usage = { prompt_tokens: 5_000, completion_tokens: 20 };
+    return new Response(JSON.stringify(outputData), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: threeProviderEntitlements,
+    attempts: threeProviderAttempts,
+    pricingConfig: threeProviderPricing,
+    messages,
+    fetchImpl,
+  });
+  assert.equal(result.status, "complete");
+  assert.deepEqual(calls, ["openai", "gemini", "groq"]);
+  assert.equal(result.costReceipt.callsMetered, 2);
+  assert.ok(Math.abs(result.costReceipt.providerReportedUsd - 0.00513) < 1e-9);
+  assert.ok(result.costReceipt.providerReportedUsd <= result.costReceipt.reservedUsd);
+  assert.ok(result.costReceipt.reservedUsd <= result.costReceipt.requestCapUsd);
+});
+
+test("reported provider spend above its reservation stops all remaining retries", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") {
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({
+          text: "The answer is 42.", confidence: 0.9,
+          evidence: [
+            { claimId: "answer", statement: "Exact response text returned by this provider.", value: "The answer is 42.", source: null },
+            { claimId: "verification", statement: "The candidate was reviewed.", value: true, source: null },
+          ],
+        }) }] } }],
+        usageMetadata: { promptTokenCount: 100_000, candidatesTokenCount: 20 },
+      }), { status: 200 });
+    }
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: threeProviderEntitlements,
+    attempts: threeProviderAttempts,
+    pricingConfig: threeProviderPricing,
+    messages,
+    fetchImpl,
+  });
+  assert.equal(result.status, "budget_exhausted");
+  assert.equal(result.reason, "provider_usage_exceeded_reserved_cost");
+  assert.deepEqual(calls, ["openai", "gemini"]);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal(result.costReceipt.callsMetered, 2);
+  assert.ok(result.costReceipt.providerReportedUsd > result.costReceipt.requestCapUsd);
+  assert.equal("answer" in result, false);
+});
+
+test("unknown usage still consumes reserved budget before another provider can be dispatched", async () => {
+  const fourProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    budgetUsd: 0.03,
+    minConfidence: 0.72,
+    providers: [
+      { id: "openai", model: "fixture-openai", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+      { id: "gemini", model: "fixture-gemini", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+      { id: "openrouter", model: "fixture-openrouter", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const fourProviderAttempts = [
+    ...attempts,
+    { id: "groq", model: "fixture-groq", key: "fake-groq-key" },
+    { id: "openrouter", model: "fixture-openrouter", key: "fake-router-key" },
+  ];
+  const fourProviderEntitlements = [...entitlements, "provider:groq", "provider:openrouter"];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : url.includes("openrouter.ai") ? "openrouter"
+      : "openai";
+    calls.push(providerId);
+    const payload = providerPayload(providerId, "42", 0.9, init.body.includes("Untrusted candidate to verify") ? true : null);
+    if (providerId !== "openai") {
+      delete payload.usage;
+      delete payload.usageMetadata;
+    }
+    return new Response(JSON.stringify(payload), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: fourProviderEntitlements,
+    attempts: fourProviderAttempts,
+    pricingConfig: fourProviderPricing,
+    messages,
+    fetchImpl,
+  });
+  assert.equal(result.status, "budget_exhausted");
+  assert.deepEqual(calls, ["openai", "gemini", "groq"]);
+  assert.equal(result.costReceipt.callsDispatched, 3);
+  assert.equal(result.costReceipt.callsMetered, 1);
+  assert.equal(result.costReceipt.providerAttempts[0].usageStatus, "reported");
+  assert.ok(result.costReceipt.providerAttempts.slice(1).every((attempt) => attempt.usageStatus === "unknown"));
+  assert.ok(result.costReceipt.reservedUsd <= result.costReceipt.requestCapUsd);
+  assert.equal("answer" in result, false);
+});
+
+test("disagreement from a recovery checker returns no answer", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") return new Response("private checker outage", { status: 503 });
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, providerId === "groq" ? "43" : "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: threeProviderEntitlements,
+    attempts: threeProviderAttempts,
+    pricingConfig: threeProviderPricing,
+    messages,
+    fetchImpl,
+  });
+  assert.equal(result.status, "conflict");
+  assert.equal(result.answer, null);
+  assert.deepEqual(calls, ["openai", "gemini", "groq"]);
+  assert.equal("provenance" in result, false);
+});
+
+test("account changes after a failed checker prevent the next provider retry", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  let accountCurrent = true;
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") {
+      accountCurrent = false;
+      return new Response("private checker outage", { status: 503 });
+    }
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: threeProviderEntitlements,
+    attempts: threeProviderAttempts,
+    pricingConfig: threeProviderPricing,
+    messages,
+    isCurrent: () => accountCurrent,
+    fetchImpl,
+  });
+  assert.equal(result.status, "cancelled");
+  assert.deepEqual(calls, ["openai", "gemini"]);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal("answer" in result, false);
+});
+
+test("revoking the recovery provider grant prevents that retry dispatch", async () => {
+  const threeProviderPricing = parseFusionPricingConfig(JSON.stringify({
+    ...JSON.parse(pricingText),
+    providers: [
+      ...JSON.parse(pricingText).providers,
+      { id: "groq", model: "fixture-groq", inputUsdPerMillion: 1, outputUsdPerMillion: 2, maxCostUsd: 0.02 },
+    ],
+  }));
+  const threeProviderAttempts = [...attempts, { id: "groq", model: "fixture-groq", key: "fake-groq-key" }];
+  const threeProviderEntitlements = [...entitlements, "provider:groq"];
+  let checkerFailed = false;
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const providerId = url.includes("generativelanguage.googleapis.com") ? "gemini"
+      : url.includes("api.groq.com") ? "groq"
+      : "openai";
+    calls.push(providerId);
+    if (providerId === "gemini") {
+      checkerFailed = true;
+      return new Response("private checker outage", { status: 503 });
+    }
+    const isChecker = init.body.includes("Untrusted candidate to verify");
+    return new Response(JSON.stringify(providerPayload(providerId, "42", 0.9, isChecker ? true : null)), { status: 200 });
+  };
+  const result = await runFusionChatRequest({
+    requested: true,
+    accountId: "account-a",
+    entitlements: threeProviderEntitlements,
+    attempts: threeProviderAttempts,
+    pricingConfig: threeProviderPricing,
+    messages,
+    fetchImpl,
+    getCurrentEntitlements: async () => checkerFailed
+      ? threeProviderEntitlements.filter((grant) => grant !== "provider:groq")
+      : threeProviderEntitlements,
+  });
+  assert.equal(result.status, "denied");
+  assert.equal(result.reason, "provider_permission_revoked");
+  assert.deepEqual(calls, ["openai", "gemini"]);
+  assert.equal(result.costReceipt.callsDispatched, 2);
+  assert.equal("answer" in result, false);
+});
+
 test("oversized provider response streams are cancelled before the body is fully buffered", async () => {
   let cancelled = 0;
   let calls = 0;

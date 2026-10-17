@@ -425,6 +425,13 @@ export async function runProviderFusion({
       if (error?.providerAuthorization === "unavailable") {
         return result("unconfigured", { reason: "authorization_revalidation_failed", calls: dispatchedCalls, reservedCostUsd });
       }
+      if (error?.providerBudgetExceeded) {
+        return withPartialProviderFailure("budget_exhausted", {
+          reason: "provider_usage_exceeded_reserved_cost",
+          calls: dispatchedCalls,
+          reservedCostUsd,
+        });
+      }
       if (requestDeadlineLimitsCall || performance.now() - startedAt >= maxDurationMs) {
         return independentCheckRequired && outputs.length
           ? result("verification_unavailable", { reason: "time_budget_exhausted", calls: dispatchedCalls, reservedCostUsd })
