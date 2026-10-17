@@ -1434,7 +1434,9 @@ export class GestureEngine {
     try {
       this.recognitionAdapter?.stop?.(reason);
     } catch (error) {
-      this.notify("recognition_adapter_error", { profileId: this.activeProfileId, error: error?.message || "Gesture adapter cleanup failed." });
+      let message = "Gesture adapter cleanup failed.";
+      try { message = error?.message || message; } catch { /* Hostile adapter errors must not interrupt session cleanup. */ }
+      this.notify("recognition_adapter_error", { profileId: this.activeProfileId, error: message });
     }
     this.activeProfileId = null;
     this.recognitionMode = "active";

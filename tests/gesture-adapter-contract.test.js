@@ -1307,6 +1307,37 @@ test("camera track cleanup failure does not skip video and detector release", as
   assert.equal(adapterStops, 1);
 });
 
+test("hostile adapter cleanup errors cannot interrupt final session cleanup", async () => {
+  const { engine, profile } = makeEngine();
+  const camera = installCamera();
+  const adapterError = Object.defineProperty({}, "message", {
+    get() { throw new Error("hostile message accessor"); },
+  });
+  const adapterErrors = [];
+  const stoppedEvents = [];
+  engine.subscribe((event, value) => {
+    if (event === "recognition_adapter_error") adapterErrors.push(value);
+  });
+  const unsubscribe = subscribe("gesture.recognition_stopped", (event) => stoppedEvents.push(event));
+  engine.setRecognitionAdapter({ async detect() { return null; }, stop() { throw adapterError; } });
+
+  try {
+    assert.equal((await engine.startRecognition(profile.id, { consent: true })).success, true);
+    engine.stopRecognition("user_stop");
+
+    assert.equal(engine.getRecognitionState(), GESTURE_STATES.INACTIVE);
+    assert.equal(engine.activeProfileId, null);
+    assert.equal(engine.mediaStream, null);
+    assert.equal(engine.videoElement, null);
+    assert.equal(camera.video.srcObject, null);
+    assert.equal(adapterErrors.length, 1);
+    assert.equal(adapterErrors[0].error, "Gesture adapter cleanup failed.");
+    assert.equal(stoppedEvents.length, 1);
+  } finally {
+    unsubscribe();
+  }
+});
+
 test("detector deadlines reject invalid and unbounded configuration", () => {
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: 0 }), RangeError);
   assert.throws(() => new GestureEngine({ detectionTimeoutMs: 10_001 }), RangeError);
