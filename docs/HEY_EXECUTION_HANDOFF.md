@@ -1350,3 +1350,23 @@ These are worker progress messages, not coordinator-verified results. Reconfirm 
 - Real in-app browser (`http://127.0.0.1:5175/download`) renders the release matrix. Web source is marked verified; desktop targets say native build required; mobile targets say native project required. A second real browser tab at `http://127.0.0.1:5175/login` shows the sign-in UI but explicitly reports: authentication is not configured; sign-in/password reset require the HEY Supabase URL and public anon key. This is the exact blocker for exercising authenticated routes locally.
 - The development server remains available at `http://127.0.0.1:5175/`. Public browser route evidence is real; frontend-to-live-backend, authenticated account journeys, DB/RLS/migrations on a live project, deployed Edge functions, provider inference/billing, native device/camera/microphone, signed platform builds, and production deployment are all **UNVERIFIED**.
 - These combined results support integration and route availability only. They do not make any of the 47 program steps production complete. Full repo lint and Deno type-check remain unrun; changed-file lint was run per integrated slice. Continue from coordinator source `77712d1` plus following handoff commits, preserve untracked `docs/requirements/v3-agent-pack/`, and update this handoff before ending or dispatching the next wave.
+
+### Wave 6 concurrent dispatch — 2026-10-17
+
+All eleven existing specialist chats received new bounded implementation assignments concurrently from exact pushed checkpoint `650a506` (source includes integrated Wave 5; docs checkpoint is part of the base). GPT-6 Luna / medium was requested through each task setting; workers have stated previously when Luna was not available to them, so only tool request—not effective-model telemetry—is recorded. All worktree branch heads/commits are pending. Preserve the untracked extracted V3 agent pack and all previous worktrees.
+
+| Worker | Existing task reference | Fresh branch from `650a506` | Active implementation slice |
+|---|---|---|---|
+| 01 Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave6-01-chat-history-race` | Fence overlapping saved-conversation loads so delayed old success/failure cannot override a newer selection or account. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave6-02-space-storage-failure` | Failure/unavailable storage after healthy cross-tab Space recovery; preserve bytes and require verified retry. |
+| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave6-03-tool-library-focus-recent` | Focus and scroll to exact recent catalog card with keyboard fallback, no dispatch, and account/catalog fences. |
+| 04 Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave6-04-outbox-preabort-replay` | Pre-aborted outbox replay must do no store reads or claims; retain durable replay behavior. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave6-05-gesture-play-failure` | Release camera/detector resources when `video.play()` or frame startup fails; require fresh consent. |
+| 06 Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave6-06-dictation-stale-target` | Reject stale proposals at async review and insertion boundaries without changing the current draft. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave6-07-voiceos-credential-url` | Reject credential-bearing/malformed target URLs before showing a safe inert preview. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave6-08-teacher-accessor-classifier` | Make private-artifact classification accessor/proxy/depth safe, fail closed, and preserve current class rules. |
+| 09 HTTP / Models | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave6-09-provider-response-cleanup` | Fix a confirmed provider response parser/error stream cleanup or raw-diagnostic leak branch. |
+| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave6-10-ultrasparse-combining` | Bounded Unicode combining-mark adversarial case with benign negation controls; no quality claims. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave6-11-fusion-account-after-hash` | Withhold answer if account scope goes stale or cancellation occurs during provenance hashing; retain spend receipt. |
+
+**Next:** recover worker worktrees and receipts as they complete, review diff and test output, integrate only safe passing changes, continue running the local app, and report actual blockers. Latest coordinator code before Wave 6 is `77712d1`; latest pushed coordinator handoff checkpoint is `650a506`.
