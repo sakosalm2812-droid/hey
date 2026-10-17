@@ -56,6 +56,115 @@ test("provider catalog is withheld when the signed-in account changes during loa
   assert.equal(fetchCalls, 1);
 });
 
+test("pre-aborted model catalog requests never dispatch fetch", async (t) => {
+  t.mock.method(supabase.auth, "getSession", async () => ({
+    data: { session: { user: { id: "account-a" }, access_token: "token-a" } },
+  }));
+  let fetchCalls = 0;
+  t.mock.method(globalThis, "fetch", async () => { fetchCalls += 1; throw new Error("fetch must not start"); });
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(getHEYProviderCatalog({ signal: controller.signal }), { name: "AbortError" });
+
+  const timeoutController = new AbortController();
+  const timeoutReason = new DOMException("The request timed out.", "TimeoutError");
+  timeoutController.abort(timeoutReason);
+  await assert.rejects(getHEYProviderCatalog({ signal: timeoutController.signal }), (error) => error === timeoutReason);
+  assert.equal(fetchCalls, 0);
+});
+
+test("non-OK catalog body timeout preserves TimeoutError and cancels its stream", async (t) => {
+  t.mock.method(supabase.auth, "getSession", async () => ({
+    data: { session: { user: { id: "account-a" }, access_token: "token-a" } },
+  }));
+  let requestSignal;
+  let cancelRequested = false;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    requestSignal = options.signal;
+    return new Response(new ReadableStream({
+      start() {},
+      cancel() { cancelRequested = true; return new Promise(() => {}); },
+    }), { status: 503 });
+  });
+
+  const startedAt = Date.now();
+  await assert.rejects(getHEYProviderCatalog({ timeoutMs: 20 }), { name: "TimeoutError" });
+  assert.equal(Date.now() - startedAt < 500, true);
+  assert.equal(requestSignal.aborted, true);
+  assert.equal(cancelRequested, true);
+});
+
+test("oversized catalog content-length cancels before any body pull", async (t) => {
+  t.mock.method(supabase.auth, "getSession", async () => ({
+    data: { session: { user: { id: "account-a" }, access_token: "token-a" } },
+  }));
+  let cancelRequested = false;
+  let pulls = 0;
+  t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    pull() { pulls += 1; },
+    cancel() { cancelRequested = true; },
+  }, { highWaterMark: 0 }), {
+    status: 503,
+    headers: { "Content-Length": "2000001" },
+  }));
+
+  await assert.rejects(getHEYProviderCatalog({ timeoutMs: 1_000 }), /could not be loaded/i);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(cancelRequested, true);
+  assert.equal(pulls, 0);
+});
+
+test("late fetch response after caller abort is cancelled without reading its body", async (t) => {
+  t.mock.method(supabase.auth, "getSession", async () => ({
+    data: { session: { user: { id: "account-a" }, access_token: "token-a" } },
+  }));
+  const controller = new AbortController();
+  let requestSignal;
+  let fetchCalls = 0;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  let resolveFetch;
+  const pendingFetch = new Promise((resolve) => { resolveFetch = resolve; });
+  t.mock.method(globalThis, "fetch", (_url, options) => {
+    requestSignal = options.signal;
+    fetchCalls += 1;
+    markFetchStarted();
+    return pendingFetch;
+  });
+
+  const pendingCatalog = getHEYProviderCatalog({ signal: controller.signal, timeoutMs: 5_000 });
+  await fetchStarted;
+  controller.abort();
+  await assert.rejects(pendingCatalog, { name: "AbortError" });
+
+  let cancelRequested = false;
+  let pulls = 0;
+  resolveFetch(new Response(new ReadableStream({
+    pull() { pulls += 1; },
+    cancel() { cancelRequested = true; },
+  }, { highWaterMark: 0 })));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fetchCalls, 1);
+  assert.equal(requestSignal.aborted, true);
+  assert.equal(cancelRequested, true);
+  assert.equal(pulls, 0);
+});
+
+test("streamed catalog responses remain capped at two megabytes", async (t) => {
+  t.mock.method(supabase.auth, "getSession", async () => ({
+    data: { session: { user: { id: "account-a" }, access_token: "token-a" } },
+  }));
+  let cancelRequested = false;
+  t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array(2_000_001)); },
+    cancel() { cancelRequested = true; },
+  }), { status: 200 }));
+
+  await assert.rejects(getHEYProviderCatalog({ timeoutMs: 1_000 }), /catalog is invalid/i);
+  assert.equal(cancelRequested, true);
+});
+
 test("account entitlements narrow models and reject malformed or hostile grants", () => {
   assert.deepEqual(normalizeProviderEntitlements(["provider.remote", "provider:openai"]), ["provider.remote", "provider:openai"]);
   assert.deepEqual(filterEntitledProviderAttempts(attempts, ["provider.remote", "provider:openai"]), [attempts[0]]);

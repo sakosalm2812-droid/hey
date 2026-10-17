@@ -303,6 +303,11 @@ export async function getHEYProviderCatalog({ signal, timeoutMs = 8_000 } = {}) 
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
+  const callerAbortReason = () => externalSignal?.reason instanceof Error
+    ? externalSignal.reason
+    : new DOMException("The request was cancelled.", "AbortError");
+  if (externalSignal?.aborted) throw callerAbortReason();
+
   const controller = new AbortController();
   let response = null;
   let activeReader = null;
@@ -323,13 +328,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalS
     rejectInterrupted(error);
   };
   const timeout = setTimeout(() => interrupt(new DOMException("The request timed out.", "TimeoutError")), timeoutMs);
-  const abortFromCaller = () => interrupt(
-    externalSignal?.reason instanceof Error
-      ? externalSignal.reason
-      : new DOMException("The request was cancelled.", "AbortError"),
-  );
-  if (externalSignal?.aborted) abortFromCaller();
-  else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  const abortFromCaller = () => interrupt(callerAbortReason());
+  externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   const cleanup = () => {
     clearTimeout(timeout);
     externalSignal?.removeEventListener("abort", abortFromCaller);
