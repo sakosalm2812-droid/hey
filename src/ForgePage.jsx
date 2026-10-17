@@ -31,7 +31,7 @@ import {
   forgeWorkflowDefinition,
 } from "./core/forgeEngine.js";
 import { saveForgeRun } from "./lib/intelligenceRecords.js";
-import { downloadForgeArtifactJson } from "./lib/forgeArtifactExport.js";
+import { downloadForgeArtifactDocx, downloadForgeArtifactJson } from "./lib/forgeArtifactExport.js";
 import {
   registerCustomAgent,
   getAllAgents,
@@ -158,6 +158,15 @@ export default function ForgePage() {
 
   function downloadStructuredArtifact() {
     const result = downloadForgeArtifactJson(artifact);
+    if (!result.ok) {
+      setForgeExportError(result.error);
+      return;
+    }
+    setForgeExportError("");
+  }
+
+  function downloadWordDocument() {
+    const result = downloadForgeArtifactDocx(artifact);
     if (!result.ok) {
       setForgeExportError(result.error);
       return;
@@ -411,6 +420,15 @@ export default function ForgePage() {
                             aria-label="Export the validated Forge artifact as JSON"
                           >
                             <FileText size={16} aria-hidden="true" /> Export JSON
+                          </button>
+                          <button
+                            type="button"
+                            className="hey-btn-primary"
+                            onClick={downloadWordDocument}
+                            disabled={!artifact.validation?.valid}
+                            aria-label="Export the validated Forge artifact as a Word document"
+                          >
+                            <FileText size={16} aria-hidden="true" /> Export Word (.docx)
                           </button>
                         </div>
                       </div>
