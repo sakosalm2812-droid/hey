@@ -185,6 +185,9 @@ export async function publishEventOnce(idempotencyKey, eventName, payload, { sto
 export async function replayPendingEvents({ store, dispatch, limit = 100, leaseMs, timeoutMs, signal } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError("Replay limit must be between 1 and 1000.");
   if (!store || typeof store.listPending !== "function") throw new TypeError("A conforming event outbox store is required.");
+  validateOutboxSignal(signal);
+  // Keep the empty-array result contract without querying pending events.
+  if (signal?.aborted) return [];
   const pending = await store.listPending(limit);
   const results = [];
   for (const event of pending) {

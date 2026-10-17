@@ -284,3 +284,46 @@ test("event bus forwards worker cancellation through its public publish-once API
     clearEventListeners("cancelled.event");
   }
 });
+
+test("pre-aborted replay performs no store read or claim and leaves committed work replayable", async () => {
+  const durableStore = new InMemoryEventOutboxStore();
+  await durableStore.appendOnce("preserve-replay", "event", { value: 1 }, "account-a");
+  let reads = 0;
+  let claims = 0;
+  const store = {
+    listPending: (...args) => { reads += 1; return durableStore.listPending(...args); },
+    claim: (...args) => { claims += 1; return durableStore.claim(...args); },
+    acknowledge: (...args) => durableStore.acknowledge(...args),
+    release: (...args) => durableStore.release(...args),
+  };
+  const caller = new AbortController();
+  caller.abort();
+
+  assert.deepEqual(await replayPendingEvents({ store, dispatch: async () => assert.fail("pre-aborted replay must not dispatch"), signal: caller.signal }), []);
+  assert.equal(reads, 0, "pre-aborted replay must not query pending events");
+  assert.equal(claims, 0, "pre-aborted replay must not claim an event");
+  assert.equal((await durableStore.listPending()).length, 1, "pre-abort must not mutate durable pending work");
+
+  let deliveries = 0;
+  const replay = await replayPendingEvents({ store: durableStore, dispatch: async () => { deliveries += 1; } });
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].delivered, true);
+  assert.equal(deliveries, 1, "committed events remain eligible for at-least-once replay");
+});
+
+test("a hostile replay cancellation signal fails before any outbox read or claim", async () => {
+  let reads = 0;
+  let claims = 0;
+  const store = {
+    listPending: async () => { reads += 1; return []; },
+    claim: async () => { claims += 1; return null; },
+  };
+  const signal = Object.defineProperty({}, "aborted", { get() { throw new Error("hostile replay signal getter"); } });
+
+  await assert.rejects(
+    replayPendingEvents({ store, dispatch: async () => {}, signal }),
+    /hostile replay signal getter/,
+  );
+  assert.equal(reads, 0);
+  assert.equal(claims, 0);
+});
