@@ -8,7 +8,7 @@ function cancelQuietly(stream) {
 }
 
 export function cancelProviderResponse(response) {
-  cancelQuietly(response?.body);
+  try { cancelQuietly(response?.body); } catch { /* Malformed response objects must not block fallback. */ }
 }
 
 function normaliseProviderContent(content) {
@@ -43,14 +43,33 @@ function cancelBody(reader) {
 
 /** Read provider JSON with a hard byte cap; malformed and oversized bodies fail closed. */
 export async function readProviderJson(response, maxBytes = MAX_PROVIDER_RESPONSE_BYTES, { signal, timeoutMs = 10_000 } = {}) {
-  if (!response || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return { status: "invalid" };
-  const declaredLength = response.headers?.get?.("content-length");
-  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
-    try { void Promise.resolve(response.body?.cancel?.()).catch(() => {}); } catch { /* Best-effort upstream cleanup. */ }
+  if (!response) return { status: "invalid" };
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    cancelProviderResponse(response);
+    return { status: "invalid" };
+  }
+  let declaredLength;
+  try {
+    declaredLength = response.headers?.get?.("content-length");
+  } catch {
+    cancelProviderResponse(response);
+    return { status: "invalid" };
+  }
+  if (typeof declaredLength === "string" && /^\d+$/.test(declaredLength) && Number(declaredLength) > maxBytes) {
+    cancelProviderResponse(response);
     return { status: "too_large" };
   }
-  const reader = response.body?.getReader?.();
-  if (!reader) return { status: "invalid" };
+  let reader;
+  try {
+    reader = response.body?.getReader?.();
+  } catch {
+    cancelProviderResponse(response);
+    return { status: "invalid" };
+  }
+  if (!reader) {
+    cancelProviderResponse(response);
+    return { status: "invalid" };
+  }
   const chunks = [];
   let totalBytes = 0;
   let interrupt;

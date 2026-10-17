@@ -21,6 +21,52 @@ test("provider JSON reader accepts bounded object JSON and rejects malformed or 
   assert.deepEqual(await readProviderJson(new Response("{}", { headers: { "content-length": "99" } }), 8), { status: "too_large" });
 });
 
+test("invalid limits and malformed response access cancel bodies without waiting for cleanup", async () => {
+  const trackedBody = () => {
+    let cancelRequested = false;
+    let pullCount = 0;
+    const body = new ReadableStream({
+      pull() { pullCount += 1; },
+      cancel() {
+        cancelRequested = true;
+        return new Promise(() => {});
+      },
+    }, { highWaterMark: 0 });
+    return { body, wasCancelled: () => cancelRequested, pullCount: () => pullCount };
+  };
+
+  const invalidLimit = trackedBody();
+  assert.deepEqual(await readProviderJson({ headers: new Headers(), body: invalidLimit.body }, 0), { status: "invalid" });
+  assert.equal(invalidLimit.wasCancelled(), true);
+  assert.equal(invalidLimit.pullCount(), 0);
+
+  let noReaderCancelled = false;
+  assert.deepEqual(await readProviderJson({
+    headers: new Headers(),
+    body: { cancel() { noReaderCancelled = true; return new Promise(() => {}); } },
+  }), { status: "invalid" });
+  assert.equal(noReaderCancelled, true);
+
+  const hostileHeaders = trackedBody();
+  const malformedResponse = {
+    get headers() { throw new Error("hostile headers getter"); },
+    body: hostileHeaders.body,
+  };
+  assert.deepEqual(await readProviderJson(malformedResponse), { status: "invalid" });
+  assert.equal(hostileHeaders.wasCancelled(), true);
+  assert.equal(hostileHeaders.pullCount(), 0);
+
+  let failedReaderCancelled = false;
+  assert.deepEqual(await readProviderJson({
+    headers: new Headers(),
+    body: {
+      getReader() { throw new Error("body is not readable"); },
+      cancel() { failedReaderCancelled = true; return new Promise(() => {}); },
+    },
+  }), { status: "invalid" });
+  assert.equal(failedReaderCancelled, true);
+});
+
 test("provider responses require usable text across OpenAI-compatible and Gemini shapes", () => {
   assert.equal(extractProviderText({ choices: [] }), "");
   assert.equal(extractProviderText({ choices: [{ message: { content: "  " } }] }), "");
