@@ -22,15 +22,27 @@ const PROVIDER_CAPABILITY_BY_EXPERT = Object.freeze({
   research: "reasoning",
   math: "reasoning",
 });
-const ROUTING_OVERRIDE_TERMS = "ignore|bypass|override|disable|circumvent|evade|disregard|forget|suppress";
-const ROUTING_POLICY_TERMS = "permissions?|polic(?:y|ies)|safety|security|authority|guardrails?|rules?|restrictions?|safeguards?|protections?";
+const ROUTING_OVERRIDE_TERMS = Object.freeze([
+  "ignore", "bypass", "override", "disable", "circumvent", "evade", "disregard", "forget", "suppress",
+]);
+const ROUTING_POLICY_TERMS = Object.freeze([
+  "permission", "permissions", "policy", "policies", "safety", "security", "authority",
+  "guardrail", "guardrails", "rule", "rules", "restriction", "restrictions", "safeguard",
+  "safeguards", "protection", "protections",
+]);
+const punctuationTolerantTerms = (terms) => `(?:${terms.flatMap((term) => [
+  term,
+  ...Array.from({ length: term.length - 1 }, (_, index) => `${term.slice(0, index + 1)}\\p{P}${term.slice(index + 1)}`),
+]).join("|")})`;
+const ROUTING_OVERRIDE_PATTERN = punctuationTolerantTerms(ROUTING_OVERRIDE_TERMS);
+const ROUTING_POLICY_PATTERN = punctuationTolerantTerms(ROUTING_POLICY_TERMS);
 const NEGATED_ROUTING_OVERRIDE = new RegExp(
-  `\\b(?:do\\s+not|don['’]t|never|should\\s+not|shouldn't|must\\s+not|mustn't|cannot|can['’]t)\\s+(?:${ROUTING_OVERRIDE_TERMS})\\b`,
-  "gi",
+  `\\b(?:do\\s+not|don['’]t|never|should\\s+not|shouldn't|must\\s+not|mustn't|cannot|can['’]t)\\s+(?:${ROUTING_OVERRIDE_PATTERN})\\b`,
+  "giu",
 );
 const ADVERSARIAL_ROUTING_TEXT = new RegExp(
-  `\\b(?:${ROUTING_OVERRIDE_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_POLICY_TERMS})\\b|\\b(?:${ROUTING_POLICY_TERMS})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_OVERRIDE_TERMS})\\b`,
-  "i",
+  `\\b(?:${ROUTING_OVERRIDE_PATTERN})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_POLICY_PATTERN})\\b|\\b(?:${ROUTING_POLICY_PATTERN})\\b[\\s\\S]{0,96}\\b(?:${ROUTING_OVERRIDE_PATTERN})\\b`,
+  "iu",
 );
 const EXPERT_BY_ID = new Map(EXPERTS.map((expert) => [expert.id, expert]));
 const TOKEN_EXPERT_INDEX = new Map();
@@ -66,8 +78,9 @@ function selectionInput(input, limit) {
 function containsAdversarialRoutingText(input) {
   // Normalize only the safety check so invisible format characters and
   // compatibility forms cannot disguise a routing-policy override phrase.
-  // Remove direct negations to avoid treating safety-preserving instructions
-  // as attempts to disable policy. The phrase rule remains heuristic.
+  // Match one internal punctuation character per listed term, while retaining
+  // the bounded phrase window and direct-negation handling. This stays a
+  // phrase heuristic, not a general prompt-injection detector.
   const normalizedInput = input.normalize("NFKC").replace(/\p{Cf}/gu, "");
   const unnegatedInput = normalizedInput.replace(NEGATED_ROUTING_OVERRIDE, " ");
   return ADVERSARIAL_ROUTING_TEXT.test(unnegatedInput);
