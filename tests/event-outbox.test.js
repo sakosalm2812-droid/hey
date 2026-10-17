@@ -156,6 +156,105 @@ test("outbox dispatch timeout must be bounded below the lease and pre-aborted wo
   await assert.rejects(deliverOutboxEvent(event.id, { store, leaseMs: 10, timeoutMs: 10, dispatch: async () => {} }), /shorter than its lease/);
 });
 
+test("a pre-cancelled publish-once call does not enqueue an event for later replay", async () => {
+  const durableStore = new InMemoryEventOutboxStore();
+  let appendCalls = 0;
+  const store = {
+    appendOnce: (...args) => { appendCalls += 1; return durableStore.appendOnce(...args); },
+    claim: (...args) => durableStore.claim(...args),
+    listPending: (...args) => durableStore.listPending(...args),
+    acknowledge: (...args) => durableStore.acknowledge(...args),
+    release: (...args) => durableStore.release(...args),
+  };
+  const caller = new AbortController();
+  caller.abort();
+  let sideEffects = 0;
+
+  const result = await publishOnceEvent("cancelled.before.enqueue", { secret: "must-not-replay" }, {
+    idempotencyKey: "cancel-before-enqueue",
+    scope: "account-a",
+    store,
+    signal: caller.signal,
+  });
+
+  assert.deepEqual(result, {
+    delivered: false,
+    state: "cancelled",
+    error: "enqueue_cancelled",
+    enqueued: false,
+    created: false,
+    duplicate: false,
+    eventId: null,
+  });
+  assert.equal(appendCalls, 0);
+  assert.deepEqual(await durableStore.listPending(), []);
+  assert.deepEqual(await replayPendingEvents({ store: durableStore, dispatch: async () => { sideEffects += 1; } }), []);
+  assert.equal(sideEffects, 0);
+});
+
+test("a hostile cancellation signal fails closed before the outbox append", async () => {
+  const durableStore = new InMemoryEventOutboxStore();
+  let appendCalls = 0;
+  const store = {
+    appendOnce: (...args) => { appendCalls += 1; return durableStore.appendOnce(...args); },
+    listPending: (...args) => durableStore.listPending(...args),
+  };
+  const signal = Object.defineProperty({}, "aborted", { get() { throw new Error("hostile signal getter"); } });
+
+  await assert.rejects(
+    publishEventOnce("hostile-signal", "event", {}, { store, dispatch: async () => {}, scope: "account-a", signal }),
+    /hostile signal getter/,
+  );
+  assert.equal(appendCalls, 0);
+  assert.deepEqual(await durableStore.listPending(), []);
+});
+
+test("cancellation after durable append stops immediate dispatch but preserves the event for replay", async () => {
+  const durableStore = new InMemoryEventOutboxStore();
+  let finishAppend;
+  let markAppendStarted;
+  const appendStarted = new Promise((resolve) => { markAppendStarted = resolve; });
+  const appendGate = new Promise((resolve) => { finishAppend = resolve; });
+  const store = {
+    appendOnce: async (...args) => {
+      const appended = await durableStore.appendOnce(...args);
+      markAppendStarted();
+      await appendGate;
+      return appended;
+    },
+    claim: (...args) => durableStore.claim(...args),
+    listPending: (...args) => durableStore.listPending(...args),
+    acknowledge: (...args) => durableStore.acknowledge(...args),
+    release: (...args) => durableStore.release(...args),
+  };
+  const caller = new AbortController();
+  let immediateSideEffects = 0;
+  const publishing = publishEventOnce("cancel-during-enqueue", "event", { value: 1 }, {
+    store,
+    dispatch: async () => { immediateSideEffects += 1; },
+    scope: "account-a",
+    signal: caller.signal,
+  });
+
+  await appendStarted;
+  caller.abort();
+  finishAppend();
+  const result = await publishing;
+
+  assert.equal(result.state, "cancelled");
+  assert.equal(result.enqueued, true, "the append had committed before cancellation was observed");
+  assert.equal(result.created, true);
+  assert.equal(result.error, undefined);
+  assert.equal(immediateSideEffects, 0, "cancelled caller does not start immediate delivery");
+  assert.equal((await durableStore.listPending()).length, 1);
+
+  let replaySideEffects = 0;
+  const replay = await replayPendingEvents({ store: durableStore, dispatch: async () => { replaySideEffects += 1; } });
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].delivered, true);
+  assert.equal(replaySideEffects, 1, "durable enqueue remains eligible for the normal replay guarantee");
+});
+
 test("event bus forwards worker cancellation through its public publish-once API", async () => {
   const store = new InMemoryEventOutboxStore();
   const controller = new AbortController();

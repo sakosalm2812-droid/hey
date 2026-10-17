@@ -25,6 +25,12 @@ function eventSnapshot(event) {
   return { ...event, payload: JSON.parse(event.fingerprint) };
 }
 
+function validateOutboxSignal(signal) {
+  if (signal && (typeof signal.aborted !== "boolean" || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")) {
+    throw new TypeError("Outbox cancellation requires an AbortSignal.");
+  }
+}
+
 export class EventOutboxStoreContract {
   async appendOnce() { throw new Error("Implement appendOnce with a durable unique key and transactional persistence."); }
   async claim() { throw new Error("Implement atomic lease claim with expiry and fencing token."); }
@@ -163,9 +169,17 @@ export async function deliverOutboxEvent(eventId, { store, dispatch, leaseMs = D
 
 export async function publishEventOnce(idempotencyKey, eventName, payload, { store, dispatch, leaseMs, timeoutMs, signal, scope } = {}) {
   if (!store || typeof store.appendOnce !== "function" || typeof store.listPending !== "function") throw new TypeError("A conforming event outbox store is required.");
+  validateOutboxSignal(signal);
+  // Enqueue is the durable boundary. A caller cancelled before this point must
+  // not create work that a later replay could deliver. Once appendOnce starts,
+  // cancellation cannot safely retract a transaction that may already commit;
+  // it only prevents or stops this call's immediate delivery.
+  if (signal?.aborted) {
+    return { delivered: false, state: "cancelled", error: "enqueue_cancelled", enqueued: false, created: false, duplicate: false, eventId: null };
+  }
   const { created, event } = await store.appendOnce(idempotencyKey, eventName, payload, scope);
   const result = await deliverOutboxEvent(event.id, { store, dispatch, leaseMs, timeoutMs, signal });
-  return { ...result, created, duplicate: !created, eventId: event.id };
+  return { ...result, enqueued: true, created, duplicate: !created, eventId: event.id };
 }
 
 export async function replayPendingEvents({ store, dispatch, limit = 100, leaseMs, timeoutMs, signal } = {}) {
