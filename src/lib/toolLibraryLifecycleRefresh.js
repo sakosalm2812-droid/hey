@@ -10,22 +10,21 @@ function ownDataValue(value, key) {
 
 function normalizeActivity(result) {
   try {
-    if (ownDataValue(result, "success") !== true) return [];
+    if (ownDataValue(result, "success") !== true) return null;
     const entries = ownDataValue(result, "activity");
-    if (!Array.isArray(entries)) return [];
+    if (!Array.isArray(entries)) return null;
     const items = [];
     for (let index = 0; index < Math.min(entries.length, 100); index += 1) {
       const item = ownDataValue(entries, index);
       const id = ownDataValue(item, "id");
       const status = ownDataValue(item, "status");
       const at = ownDataValue(item, "at");
-      if (typeof id === "string" && id && typeof status === "string" && status && typeof at === "string" && Number.isFinite(Date.parse(at))) {
-        items.push(Object.freeze({ id, status, at }));
-      }
+      if (typeof id !== "string" || !id || typeof status !== "string" || !status || typeof at !== "string" || !Number.isFinite(Date.parse(at))) return null;
+      items.push(Object.freeze({ id, status, at }));
     }
     return items;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -46,10 +45,14 @@ export async function refreshToolLibraryLifecycleSnapshot({
   ]);
   if (getActiveScope() !== accountScope || !isCurrentRequest()) return Object.freeze({ status: "stale" });
 
-  const activity = activityResult.status === "fulfilled" ? normalizeActivity(activityResult.value) : [];
+  const activityResponse = activityResult.status === "fulfilled" ? activityResult.value : null;
+  const normalizedActivity = normalizeActivity(activityResponse);
+  const activityStatus = normalizedActivity === null ? "unavailable" : "ready";
+  const activity = normalizedActivity || [];
   const contract = lifecycleResult.status === "fulfilled" ? lifecycleResult.value : null;
+  const lifecycleStatus = ownDataValue(contract, "success") === true ? "ready" : "unavailable";
   const actions = ownDataValue(contract, "actions");
-  const lifecycle = ownDataValue(contract, "success") === true ? Object.freeze({
+  const lifecycle = lifecycleStatus === "ready" ? Object.freeze({
     success: true,
     status: ownDataValue(contract, "status"),
     readiness: ownDataValue(contract, "readiness"),
@@ -63,7 +66,9 @@ export async function refreshToolLibraryLifecycleSnapshot({
   }) : null;
   return Object.freeze({
     status: "ready",
+    activityStatus,
     activity: Object.freeze(activity),
+    lifecycleStatus,
     lifecycle,
   });
 }

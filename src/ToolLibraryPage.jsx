@@ -130,10 +130,12 @@ function ToolCard({
   const [receiptState, setReceiptState] = useState(null);
   const [activityState, setActivityState] = useState(null);
   const [lifecycleState, setLifecycleState] = useState(null);
+  const [refreshState, setRefreshState] = useState(null);
   const [refreshingLifecycle, setRefreshingLifecycle] = useState(false);
   const receipt = isToolLibraryRecordVisible(receiptState, accountId, getAccountScope()) ? receiptState : null;
   const activity = isToolLibraryRecordVisible(activityState, accountId, getAccountScope()) ? activityState.items : [];
   const lifecycleRecord = isToolLibraryRecordVisible(lifecycleState, accountId, getAccountScope()) ? lifecycleState : null;
+  const refreshStatus = isToolLibraryRecordVisible(refreshState, accountId, getAccountScope()) ? refreshState : null;
   const lifecycleView = getToolLibraryLifecycleView(lifecycleRecord, accountId, getAccountScope(), tool.status);
   const canStart = lifecycleView.canStart && tool.permissions.length === 1;
   const canRetry = lifecycleView.canRetry && tool.permissions.length === 1;
@@ -160,6 +162,7 @@ function ToolCard({
     if (!accountId || getAccountScope() !== `account:${accountId}`) {
       setActivityState(null);
       setLifecycleState(null);
+      setRefreshState(null);
       setRefreshingLifecycle(false);
       return;
     }
@@ -174,9 +177,14 @@ function ToolCard({
     if (snapshot.status === "ready") {
       setActivityState(scopeToolLibraryRecord(accountId, { items: snapshot.activity }));
       setLifecycleState(snapshot.lifecycle ? scopeToolLibraryRecord(accountId, snapshot.lifecycle) : null);
+      setRefreshState(scopeToolLibraryRecord(accountId, {
+        activityStatus: snapshot.activityStatus,
+        lifecycleStatus: snapshot.lifecycleStatus,
+      }));
     } else if (snapshot.status === "account_changed" && refreshRequestRef.current === request) {
       setActivityState(null);
       setLifecycleState(null);
+      setRefreshState(null);
     }
     if (refreshRequestRef.current === request) setRefreshingLifecycle(false);
   }, [accountId, tool.name, user]);
@@ -196,6 +204,7 @@ function ToolCard({
       setReceiptState(null);
       setActivityState(null);
       setLifecycleState(null);
+      setRefreshState(null);
       setRefreshingLifecycle(false);
     });
     return () => {
@@ -587,7 +596,12 @@ function ToolCard({
         </button>
         {activity.length ? <ul className="tool-library__activity-list">{activity.slice(0, 10).map((item) => (
           <li key={`${item.id}-${item.status}-${item.at}`}><span>{item.status.replaceAll("_", " ")}</span><time dateTime={item.at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(item.at))}</time></li>
-        ))}</ul> : <p className="tool-library__run-help">No Tool Library activity is recorded for this tool on this device.</p>}
+        ))}</ul> : refreshStatus?.activityStatus === "ready"
+          ? <p className="tool-library__run-help">No Tool Library activity is recorded for this tool on this device.</p>
+          : refreshStatus?.activityStatus === "unavailable"
+            ? <p className="tool-library__run-help" role="alert">Tool activity could not be refreshed. Try again.</p>
+            : null}
+        {refreshStatus?.lifecycleStatus === "unavailable" && <p className="tool-library__run-help" role="alert">Session status could not be refreshed. Try again.</p>}
       </details>
       {hasLifecycleControls && <details className="tool-library__advanced-details tool-library__lifecycle" open={lifecycleView.status === "starting" || lifecycleView.status === "running" || lifecycleView.status === "stopping" || lifecycleView.canRetry}>
         <summary>Session controls</summary>

@@ -60,12 +60,58 @@ test("late refresh responses are discarded after account switch or newer request
   assert.deepEqual(await pending, { status: "stale" });
 });
 
-test("thrown catalog reads resolve to empty activity and unavailable lifecycle", async () => {
+test("thrown activity and lifecycle reads have explicit unavailable states", async () => {
   const result = await refreshToolLibraryLifecycleSnapshot(makeOptions({
     readActivity: () => { throw new Error("unavailable"); },
     readLifecycle: () => { throw new Error("unavailable"); },
   }));
   assert.equal(result.status, "ready");
+  assert.equal(result.activityStatus, "unavailable");
   assert.deepEqual(result.activity, []);
+  assert.equal(result.lifecycleStatus, "unavailable");
   assert.equal(result.lifecycle, null);
+});
+
+test("one failed read is reported independently while the other source stays usable", async () => {
+  const activityFailed = await refreshToolLibraryLifecycleSnapshot(makeOptions({
+    readActivity: () => { throw new Error("storage unavailable"); },
+  }));
+  assert.equal(activityFailed.activityStatus, "unavailable");
+  assert.deepEqual(activityFailed.activity, []);
+  assert.equal(activityFailed.lifecycleStatus, "ready");
+  assert.equal(activityFailed.lifecycle.status, "stopped");
+
+  const lifecycleFailed = await refreshToolLibraryLifecycleSnapshot(makeOptions({
+    readLifecycle: () => ({ success: false, status: "unavailable" }),
+  }));
+  assert.equal(lifecycleFailed.activityStatus, "ready");
+  assert.equal(lifecycleFailed.activity.length, 1);
+  assert.equal(lifecycleFailed.lifecycleStatus, "unavailable");
+  assert.equal(lifecycleFailed.lifecycle, null);
+});
+
+test("an unsuccessful or malformed activity response is not reported as an empty successful history", async () => {
+  const unsuccessful = await refreshToolLibraryLifecycleSnapshot(makeOptions({
+    readActivity: () => ({ success: false, activity: [] }),
+  }));
+  assert.equal(unsuccessful.activityStatus, "unavailable");
+
+  const malformed = await refreshToolLibraryLifecycleSnapshot(makeOptions({
+    readActivity: () => ({ success: true }),
+  }));
+  assert.equal(malformed.activityStatus, "unavailable");
+
+  const revoked = Proxy.revocable([], {});
+  revoked.revoke();
+  const hostile = await refreshToolLibraryLifecycleSnapshot(makeOptions({
+    readActivity: () => ({ success: true, activity: revoked.proxy }),
+  }));
+  assert.equal(hostile.activityStatus, "unavailable");
+  assert.deepEqual(hostile.activity, []);
+
+  const malformedRow = await refreshToolLibraryLifecycleSnapshot(makeOptions({
+    readActivity: () => ({ success: true, activity: [{ id: "event-1", status: "running", at: "invalid-date" }] }),
+  }));
+  assert.equal(malformedRow.activityStatus, "unavailable");
+  assert.deepEqual(malformedRow.activity, []);
 });

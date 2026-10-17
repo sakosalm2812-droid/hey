@@ -79,6 +79,14 @@ test("Tool Library lifecycle controls use the declared canonical account session
   assert.match(pageSource, /getAccountScope\(\) !== `account:\$\{accountId\}`/);
 });
 
+test("Tool Library distinguishes failed activity and session refreshes from empty history", () => {
+  assert.match(pageSource, /activityStatus: snapshot\.activityStatus/);
+  assert.match(pageSource, /lifecycleStatus: snapshot\.lifecycleStatus/);
+  assert.match(pageSource, /refreshStatus\?\.activityStatus === "ready"[\s\S]*?No Tool Library activity is recorded/);
+  assert.match(pageSource, /Tool activity could not be refreshed\. Try again\./);
+  assert.match(pageSource, /Session status could not be refreshed\. Try again\./);
+});
+
 test("Tool Library maps the V3 natural language dictation request to a truthful live entrypoint", () => {
   assert.match(pageSource, /isDictationDiscoveryQuery\(query\)/);
   assert.match(pageSource, /Dictation in Chat/);
