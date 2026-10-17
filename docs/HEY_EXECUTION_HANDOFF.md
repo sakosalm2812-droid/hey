@@ -2,7 +2,23 @@
 
 **Wave 7 is fully verified on the combined coordinator tree.** Source implementation tip: `63d75ca`; current docs-only checkpoint before this update: `63b9817`. Full `npm test` passed **1025/1025**; `npm run build` passed with **2794 modules**; `npm run smoke:spa` passed for `/login`, `/download`, and `/assets/index-Dsn-WOPP.js` at `http://127.0.0.1:4173/`. Build skipped sitemap output because `SITE_URL` is unset and retained the existing Vite mixed static/dynamic `contextManager.js` import warning. Changed-file lint and `git diff --check` passed for the integrated slices. The browser at `http://127.0.0.1:5175/download` verifies the public release-status page; `/login` is rendered but disabled due to missing `VITE_SUPABASE_URL` and public anon key. All authenticated/backend/provider/billing/native/device/production claims remain **UNVERIFIED**. All 47 requirements remain In Progress or Incomplete.
 
-The eleven existing specialist tasks are idle and available for concurrent continuation. The immediately preceding source wave is fully integrated; there are no pending Wave 7 implementation diffs. Preserve their history and branches. Next action is to dispatch distinct follow-up implementation slices from the verified source tip, then record each task's current branch, Codex task ID, worker commit, coordinator integration commit, and evidence here. Keep `docs/requirements/v3-agent-pack/` untracked and untouched.
+The eleven existing specialist tasks have now been restarted concurrently on fresh isolated branches from pushed base `4b3a93a` (source tip `63d75ca`). Their turn IDs are new continuations inside the existing task chats; model `gpt-6-luna` with medium reasoning was requested. At the first post-dispatch status snapshot all eleven were active; branch creation and implementation are in progress, so worker SHAs are pending. Preserve their prior branches and history.
+
+| Area | Existing Codex task | Wave 8 branch requested | Scope dispatched | Current state |
+|---|---|---|---|---|
+| Frontend | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave8-01-frontend` | Real user-visible gap; assess Step 23 export only if saved artifact/dependency path is feasible | Active; fresh worktree setup/inspection |
+| Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave8-02-spaces` | Distinct persistence/concurrency recovery gap | Active; base check/worktree |
+| Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave8-03-tool-library` | Distinct lifecycle/authorization reliability gap | Active; fresh worktree setup |
+| Edge | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave8-04-edge` | Distinct fail-closed device queue/SQL contract gap | Active; fresh worktree setup |
+| Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave8-05-gesture` | Distinct camera/calibration recovery fault | Active; fresh worktree setup |
+| Flow / Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave8-06-dictation` | Distinct provider-session/privacy recovery gap | Active; fresh worktree setup |
+| VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave8-07-voiceos` | Distinct fail-closed proposal-flow safety/recovery gap | Active; base inspection |
+| Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave8-08-teacher` | Distinct teacher-facing persistence/privacy/recovery gap | Active; fresh worktree setup |
+| Provider | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave8-09-provider` | Distinct body/fallback/privacy reliability gap | Active; base inspection |
+| UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave8-10-ultrasparse` | Narrow remaining routing guard gap | Active; fresh worktree setup |
+| Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave8-11-fusion` | Distinct bounded authorization/recovery improvement | Active; base verification |
+
+Exact worker branch names and SHAs must be confirmed from each checkout before integration; these are requested names, not claimed results. Keep `docs/requirements/v3-agent-pack/` untracked and untouched. Next actions: let all workers implement concurrently; collect receipts; review each diff against base and existing integrated behavior; integrate only passing nonduplicative changes; run combined gates and update both this ledger and `HEY_STEP_STATUS.md`.
 
 ---
 
