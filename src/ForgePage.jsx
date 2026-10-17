@@ -31,6 +31,7 @@ import {
   forgeWorkflowDefinition,
 } from "./core/forgeEngine.js";
 import { saveForgeRun } from "./lib/intelligenceRecords.js";
+import { downloadForgeArtifactJson } from "./lib/forgeArtifactExport.js";
 import {
   registerCustomAgent,
   getAllAgents,
@@ -97,6 +98,7 @@ export default function ForgePage() {
   const [selectedFile, setSelectedFile] = useState("");
   const [isForging, setIsForging] = useState(false);
   const [forgeError, setForgeError] = useState("");
+  const [forgeExportError, setForgeExportError] = useState("");
 
   const [studioTab, setStudioTab] = useState("agent");
   const [agentForm, setAgentForm] = useState({
@@ -124,6 +126,7 @@ export default function ForgePage() {
     const plan = HEY.process(draft);
     setForgePlan(plan);
     setForgeError("");
+    setForgeExportError("");
     setArtifact(null);
     setIsForging(true);
 
@@ -151,6 +154,15 @@ export default function ForgePage() {
     link.download = file.path.split("/").pop() || "forge-file.txt";
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function downloadStructuredArtifact() {
+    const result = downloadForgeArtifactJson(artifact);
+    if (!result.ok) {
+      setForgeExportError(result.error);
+      return;
+    }
+    setForgeExportError("");
   }
 
   function updateAgentField(field, value) {
@@ -367,7 +379,8 @@ export default function ForgePage() {
                   {isForging ? "Building..." : "Build it"}
                 </button>
               </form>
-              {forgeError && <p className="mt-4 text-[var(--coral)]">{forgeError}</p>}
+              {forgeError && <p className="mt-4 text-[var(--coral)]" role="alert">{forgeError}</p>}
+              {forgeExportError && <p className="mt-4 text-[var(--coral)]" role="alert">{forgeExportError}</p>}
               {forgePlan && (
                 <div className="mt-6 rounded-2xl bg-[var(--bg-secondary)] p-5">
                   <p className="text-sm text-[var(--text-secondary)]">
@@ -386,9 +399,20 @@ export default function ForgePage() {
                           <h3 className="font-heading text-2xl text-[var(--text-primary)]">{artifact.title}</h3>
                           <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{artifact.summary}</p>
                         </div>
-                        <button type="button" className="hey-btn-ghost" onClick={() => artifact.files?.forEach(downloadFile)}>
-                          Download files
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className="hey-btn-ghost" onClick={() => artifact.files?.forEach(downloadFile)}>
+                            Download files
+                          </button>
+                          <button
+                            type="button"
+                            className="hey-btn-primary"
+                            onClick={downloadStructuredArtifact}
+                            disabled={!artifact.validation?.valid}
+                            aria-label="Export the validated Forge artifact as JSON"
+                          >
+                            <FileText size={16} aria-hidden="true" /> Export JSON
+                          </button>
+                        </div>
                       </div>
                       <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-[var(--text-secondary)]">
                         <span className={artifact.validation?.valid ? "badge badge-green" : "badge badge-coral"}>
