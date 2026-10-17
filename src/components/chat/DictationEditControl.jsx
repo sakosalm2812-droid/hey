@@ -12,6 +12,7 @@ import {
   readSelectionSnapshot,
   replaceSelection,
   selectionStillMatches,
+  undoEntryIsCurrent,
 } from "../../lib/dictationEditSelection.js";
 import DictationControl from "./DictationControl.jsx";
 
@@ -284,7 +285,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       resetFlow("The draft changed. Nothing was replaced.");
       return;
     }
-    setUndoEntry({ previousValue: inputRef.current.value, nextValue, start: snapshot.start, originalEnd: snapshot.end, conversationId: snapshot.conversationId });
+    setUndoEntry({ previousValue: inputRef.current.value, nextValue, start: snapshot.start, originalEnd: snapshot.end, conversationId: snapshot.conversationId, accountScope: operationFence.accountScope });
     setValue(nextValue);
     requestAnimationFrame(() => {
       if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
@@ -300,13 +301,21 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   }
 
   function undoAppliedEdit() {
-    if (!undoEntry || undoEntry.conversationId !== conversationId || inputRef.current?.value !== undoEntry.nextValue) {
+    const currentScope = getAccountScope();
+    if (!undoEntryIsCurrent(undoEntry, { accountScope: currentScope, conversationId, currentValue: inputRef.current?.value })
+      || currentScope !== accountRef.current) {
       setUndoEntry(null);
-      setStatus("The draft changed after the edit, so it cannot be undone here.");
+      setStatus("The draft, account, or conversation changed after the edit, so it cannot be undone here.");
       return;
     }
+    const operationFence = captureEditOperationFence(generationRef.current, currentScope);
+    if (!operationFence) return;
     setValue(undoEntry.previousValue);
     requestAnimationFrame(() => {
+      if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
+        || operationFence.accountScope !== accountRef.current
+        || undoEntry.conversationId !== conversationId
+        || inputRef.current?.value !== undoEntry.previousValue) return;
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(undoEntry.start, undoEntry.originalEnd);
     });

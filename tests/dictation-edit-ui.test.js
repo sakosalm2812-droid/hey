@@ -10,6 +10,7 @@ import {
   readSelectionSnapshot,
   replaceSelection,
   selectionStillMatches,
+  undoEntryIsCurrent,
 } from "../src/lib/dictationEditSelection.js";
 import { focusDictationEditTarget } from "../src/lib/dictationEditFocus.js";
 
@@ -61,6 +62,29 @@ test("replacement changes only the bound range and rejects stale drafts", () => 
   const snapshot = readSelectionSnapshot(input());
   assert.equal(replaceSelection(snapshot.currentText, snapshot, "chosen"), "Hello chosen world");
   assert.equal(replaceSelection("new draft", snapshot, "chosen"), null);
+});
+
+test("undo entries are bound to the originating account, conversation, and exact replacement", () => {
+  const entry = {
+    previousValue: "Hello selected world",
+    nextValue: "Hello chosen world",
+    start: 6,
+    originalEnd: 14,
+    conversationId: "conversation-a",
+    accountScope: "account:edit-a",
+  };
+  const context = { accountScope: "account:edit-a", conversationId: "conversation-a", currentValue: entry.nextValue };
+  assert.equal(undoEntryIsCurrent(entry, context), true);
+  assert.equal(undoEntryIsCurrent(entry, { ...context, accountScope: "account:edit-b" }), false);
+  assert.equal(undoEntryIsCurrent(entry, { ...context, conversationId: "conversation-b" }), false);
+  assert.equal(undoEntryIsCurrent(entry, { ...context, currentValue: "Hello another draft" }), false);
+
+  let getterCalls = 0;
+  const hostile = { ...entry };
+  Object.defineProperty(hostile, "accountScope", { enumerable: true, get() { getterCalls += 1; return entry.accountScope; } });
+  assert.equal(undoEntryIsCurrent(hostile, context), false);
+  assert.equal(getterCalls, 0);
+  assert.equal(undoEntryIsCurrent(new Proxy(entry, { ownKeys() { throw new Error("hostile undo record"); } }), context), false);
 });
 
 test("async edit operations are fenced against cancellation and account changes", () => {
@@ -177,6 +201,17 @@ test("voice edit does not mutate draft until the separate insertion action", asy
   assert.match(insertion, /setValue\(nextValue\)/);
   assert.match(insertion, /requestAnimationFrame/);
   assert.match(insertion, /inputRef\.current\?\.value !== nextValue/);
+});
+
+test("undo checks its account fence before restoring and again before restoring focus", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  assert.match(control, /setUndoEntry\(\{[^}]*accountScope: operationFence\.accountScope/);
+  const undo = control.slice(control.indexOf("function undoAppliedEdit()"), control.indexOf("if (!userId || disabled)"));
+  assert.match(undo, /undoEntryIsCurrent\(undoEntry, \{ accountScope: currentScope, conversationId, currentValue: inputRef\.current\?\.value \}\)/);
+  assert.match(undo, /currentScope !== accountRef\.current/);
+  assert.match(undo, /editOperationFenceIsCurrent\(operationFence, generationRef\.current, getAccountScope\(\)\)/);
+  assert.match(undo, /operationFence\.accountScope !== accountRef\.current/);
+  assert.match(undo, /inputRef\.current\?\.value !== undoEntry\.previousValue/);
 });
 
 test("keyboard focus follows selected-text edit stages and returns to spoken status feedback", async () => {

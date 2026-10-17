@@ -24,6 +24,37 @@ export function editOperationFenceIsCurrent(fence, generation, accountScope) {
   }
 }
 
+export function undoEntryIsCurrent(entry, { accountScope, conversationId, currentValue } = {}) {
+  try {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const prototype = Object.getPrototypeOf(entry);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(entry);
+    const expectedKeys = ["accountScope", "conversationId", "nextValue", "originalEnd", "previousValue", "start"];
+    if (keys.length !== expectedKeys.length || keys.some((key) => !expectedKeys.includes(key))) return false;
+    const snapshot = Object.create(null);
+    for (const key of expectedKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) return false;
+      snapshot[key] = descriptor.value;
+    }
+    return typeof snapshot.accountScope === "string"
+      && snapshot.accountScope === accountScope
+      && snapshot.conversationId === conversationId
+      && typeof snapshot.previousValue === "string"
+      && typeof snapshot.nextValue === "string"
+      && snapshot.nextValue === currentValue
+      && Number.isSafeInteger(snapshot.start)
+      && Number.isSafeInteger(snapshot.originalEnd)
+      && snapshot.start >= 0
+      && snapshot.originalEnd >= snapshot.start
+      && snapshot.originalEnd <= snapshot.previousValue.length
+      && snapshot.start <= snapshot.nextValue.length;
+  } catch {
+    return false;
+  }
+}
+
 export async function digestSelection(targetId, selectedText, start, end) {
   if (typeof targetId !== "string" || !targetId || typeof selectedText !== "string" || !selectedText) return null;
   if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return null;
