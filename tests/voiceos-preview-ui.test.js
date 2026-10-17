@@ -56,6 +56,26 @@ test("chat review UI is visibly inert and does not dispatch a confirmed action",
   assert.doesNotMatch(reviewHandler, /sendUserMessage|askHEY|executeRequest|invoke\(/);
 });
 
+test("a rejected review revokes the stale token and restores the request only into its current empty context", async () => {
+  const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
+  const reviewStart = source.indexOf("function reviewComputerPreview()");
+  const reviewEnd = source.indexOf("async function refreshComputerPreview()", reviewStart);
+  assert.ok(reviewStart >= 0 && reviewEnd > reviewStart);
+  const reviewHandler = source.slice(reviewStart, reviewEnd);
+  const rejectionStart = reviewHandler.indexOf("if (!reviewed.success)");
+  const rejectionEnd = reviewHandler.indexOf("storeComputerPreview({ ...pending, reviewed: true", rejectionStart);
+  assert.ok(rejectionStart >= 0 && rejectionEnd > rejectionStart);
+  const rejection = reviewHandler.slice(rejectionStart, rejectionEnd);
+  assert.match(rejection, /reviewed\.status === "preview_expired"[\s\S]*?return;/);
+  assert.match(rejection, /cancelVoiceCommandPreview\(pending\.preview\.previewId\)/);
+  assert.match(rejection, /storeComputerPreview\(null\)/);
+  assert.match(rejection, /pending\.accountScope === getAccountScope\(\)/);
+  assert.match(rejection, /pending\.conversationId === conversationId/);
+  assert.match(rejection, /!message\.trim\(\)/);
+  assert.match(rejection, /setMessage\(pending\.message\)/);
+  assert.doesNotMatch(rejection, /sendUserMessage|askHEY|executeRequest|invoke\(/);
+});
+
 test("VoiceOS preview labels and status copy are accessible and translated for every supported locale", async () => {
   const source = await readFile(new URL("../src/ChatPage.jsx", import.meta.url), "utf8");
   const required = [
