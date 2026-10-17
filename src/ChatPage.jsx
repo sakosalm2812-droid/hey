@@ -39,6 +39,7 @@ import {
 } from "./lib/voiceProviders.js";
 import { createConversationScopedVoiceAsk } from "./lib/voiceConversationContext.js";
 import { readChatRetryRoute, snapshotChatRetryRoute } from "./lib/chatRetryRoute.js";
+import { createChatHistoryRequestFence } from "./lib/chatHistoryRequestFence.js";
 import { clearCopiedMessageIfCurrent, getChatMessageKey } from "./lib/chatCopyFeedback.js";
 
 const welcomeMessage = {
@@ -88,6 +89,9 @@ function ChatWorkspace() {
   const [conversationId, setConversationId] = useState(null);
   const conversationIdRef = useRef(conversationId);
   useLayoutEffect(() => { conversationIdRef.current = conversationId; }, [conversationId]);
+  const requestedHistoryConversationRef = useRef(null);
+  const historyRequestFenceRef = useRef(null);
+  if (historyRequestFenceRef.current === null) historyRequestFenceRef.current = createChatHistoryRequestFence();
   const [conversationSearch, setConversationSearch] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [fusionEnabled, setFusionEnabled] = useState(false);
@@ -217,6 +221,9 @@ function ChatWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
+    const accountId = user?.id || null;
+    requestedHistoryConversationRef.current = null;
+    const conversationListTicket = historyRequestFenceRef.current.begin(accountId, null);
     const healthController = new AbortController();
     checkHEYAIReadiness({ signal: healthController.signal }).then((result) => {
       if (!cancelled) setAIReadiness(result);
@@ -232,15 +239,40 @@ function ChatWorkspace() {
 
         setConversations(items);
         setSupabaseStatus("connected");
-        if (!items.length) return;
+        if (!historyRequestFenceRef.current.isCurrent(
+          conversationListTicket,
+          userIdRef.current,
+          requestedHistoryConversationRef.current,
+        ) || !items.length) return;
 
-        const latestMessages = await getHEYConversationMessages(items[0].id);
-        if (!cancelled) {
-          setConversationId(items[0].id);
+        const requestedConversationId = items[0].id;
+        requestedHistoryConversationRef.current = requestedConversationId;
+        const historyTicket = historyRequestFenceRef.current.begin(accountId, requestedConversationId);
+        try {
+          const latestMessages = await getHEYConversationMessages(requestedConversationId);
+          if (cancelled || !historyRequestFenceRef.current.isCurrent(
+            historyTicket,
+            userIdRef.current,
+            requestedHistoryConversationRef.current,
+          )) return;
+          setConversationId(requestedConversationId);
           setMessages(latestMessages.length ? latestMessages : [welcomeMessage]);
+        } catch {
+          if (!cancelled && historyRequestFenceRef.current.isCurrent(
+            historyTicket,
+            userIdRef.current,
+            requestedHistoryConversationRef.current,
+          )) {
+            setSupabaseStatus("unavailable");
+            setChatError("Supabase could not load your conversations. Check the connection and try again.");
+          }
         }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && historyRequestFenceRef.current.isCurrent(
+          conversationListTicket,
+          userIdRef.current,
+          requestedHistoryConversationRef.current,
+        )) {
           setSupabaseStatus("unavailable");
           setChatError("Supabase could not load your conversations. Check the connection and try again.");
         }
@@ -252,6 +284,8 @@ function ChatWorkspace() {
     loadConversations();
     return () => {
       cancelled = true;
+      historyRequestFenceRef.current.invalidate();
+      requestedHistoryConversationRef.current = null;
       healthController.abort();
     };
   }, [user?.id]);
@@ -298,8 +332,16 @@ function ChatWorkspace() {
   async function openConversation(id) {
     if (isSending) return;
     followingRef.current = true;
+    requestedHistoryConversationRef.current = id;
+    const historyTicket = historyRequestFenceRef.current.begin(userIdRef.current, id);
+    const isCurrentRequest = () => historyRequestFenceRef.current.isCurrent(
+      historyTicket,
+      userIdRef.current,
+      requestedHistoryConversationRef.current,
+    );
     try {
       const history = await getHEYConversationMessages(id);
+      if (!isCurrentRequest()) return;
       setConversationId(id);
       setMessages(history.length ? history : [welcomeMessage]);
       copyRequestRef.current += 1;
@@ -307,6 +349,7 @@ function ChatWorkspace() {
       setChatError("");
       setHistoryOpen(false);
     } catch {
+      if (!isCurrentRequest()) return;
       setSupabaseStatus("unavailable");
       setChatError("Supabase could not open that conversation. Check the connection and try again.");
     }
@@ -315,6 +358,8 @@ function ChatWorkspace() {
   function startNewConversation() {
     if (isSending) return;
     followingRef.current = true;
+    historyRequestFenceRef.current.invalidate();
+    requestedHistoryConversationRef.current = null;
     setConversationId(null);
     setMessages([welcomeMessage]);
     copyRequestRef.current += 1;
@@ -539,6 +584,8 @@ function ChatWorkspace() {
       }
     }
     setFusionEnabled(false);
+    historyRequestFenceRef.current.invalidate();
+    requestedHistoryConversationRef.current = conversationId || null;
 
     setMessages((current) => [...current, { role: "user", text: trimmedMessage, retryRoute: retryRouteSnapshot }]);
     setMessage("");
