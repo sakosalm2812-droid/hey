@@ -112,6 +112,17 @@ export function selectionStillMatches(input, snapshot, conversationId) {
   return input.value.slice(snapshot.start, snapshot.end) === snapshot.sourceText;
 }
 
+export function editTargetFenceIsCurrent(input, snapshot, conversationId, digest) {
+  try {
+    return typeof digest === "string"
+      && digest.length > 0
+      && digest === snapshot?.selectionDigest
+      && selectionStillMatches(input, snapshot, conversationId);
+  } catch {
+    return false;
+  }
+}
+
 export function replaceSelection(currentText, snapshot, replacement) {
   if (typeof currentText !== "string" || !snapshot || typeof replacement !== "string") return null;
   if (currentText !== snapshot.currentText || currentText.slice(snapshot.start, snapshot.end) !== snapshot.sourceText) return null;

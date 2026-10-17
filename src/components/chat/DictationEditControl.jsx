@@ -9,6 +9,7 @@ import {
   captureEditOperationFence,
   dictationProviderRouteIdentity,
   digestSelectionSnapshot,
+  editTargetFenceIsCurrent,
   editOperationFenceIsCurrent,
   readSelectionSnapshot,
   replaceSelection,
@@ -227,7 +228,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     try {
       const currentDigest = await digestSelectionSnapshot(snapshot);
       if (generationRef.current !== generation || controller.signal.aborted || getAccountScope() !== accountRef.current || currentProviderRouteRef.current !== routeAtStart) return;
-      if (conversationId !== snapshot.conversationId || !currentDigest || currentDigest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
+      if (!editTargetFenceIsCurrent(inputRef.current, snapshot, conversationId, currentDigest)) {
         resetFlow("The selection changed. Select the text again and retry.");
         return;
       }
@@ -249,7 +250,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         cancelSignal: controller.signal,
       });
       if (generationRef.current !== generation || getAccountScope() !== accountRef.current || currentProviderRouteRef.current !== routeAtStart) return;
-      if (conversationId !== snapshot.conversationId || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
+      if (!editTargetFenceIsCurrent(inputRef.current, snapshot, conversationId, snapshot.selectionDigest)) {
         resetFlow("The selection changed. Select the text again and retry.");
         return;
       }
@@ -269,7 +270,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         && !controller.signal.aborted
         && getAccountScope() === accountRef.current
         && currentProviderRouteRef.current === routeAtStart) {
-        if (conversationId !== snapshot.conversationId || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
+        if (!editTargetFenceIsCurrent(inputRef.current, snapshot, conversationId, snapshot.selectionDigest)) {
           resetFlow("The selection changed. Select the text again and retry.");
           return;
         }
@@ -291,7 +292,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     const digest = await digestSelectionSnapshot(selection);
     if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
       || operationFence.accountScope !== accountRef.current) return;
-    if (conversationId !== selection.conversationId || !digest || digest !== selection.selectionDigest || !selectionStillMatches(inputRef.current, selection, conversationId)) {
+    if (!editTargetFenceIsCurrent(inputRef.current, selection, conversationId, digest)) {
       resetFlow("The selection changed. Select the text again and retry.");
       return;
     }
@@ -321,7 +322,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     const digest = await digestSelectionSnapshot(snapshot);
     if (!editOperationFenceIsCurrent(operationFence, generationRef.current, getAccountScope())
       || operationFence.accountScope !== accountRef.current) return;
-    if (conversationId !== snapshot.conversationId || !digest || digest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
+    if (!editTargetFenceIsCurrent(inputRef.current, snapshot, conversationId, digest)) {
       resetFlow("The selection changed. Nothing was replaced.");
       return;
     }

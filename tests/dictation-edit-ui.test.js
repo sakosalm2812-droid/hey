@@ -7,6 +7,7 @@ import {
   dictationProviderRouteIdentity,
   digestSelectionSnapshot,
   digestSelection,
+  editTargetFenceIsCurrent,
   editOperationFenceIsCurrent,
   readSelectionSnapshot,
   replaceSelection,
@@ -25,6 +26,12 @@ function input(overrides = {}) {
     selectionEnd: 14,
     ...overrides,
   };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => { resolve = complete; });
+  return { promise, resolve };
 }
 
 test("edit selection is bound to the intended composer, exact range, and full draft", () => {
@@ -63,6 +70,54 @@ test("replacement changes only the bound range and rejects stale drafts", () => 
   const snapshot = readSelectionSnapshot(input());
   assert.equal(replaceSelection(snapshot.currentText, snapshot, "chosen"), "Hello chosen world");
   assert.equal(replaceSelection("new draft", snapshot, "chosen"), null);
+});
+
+test("rewrite completion discards a proposal after the composer draft changes while pending", async () => {
+  const target = input();
+  const snapshot = { ...readSelectionSnapshot(target, "conversation-a"), selectionDigest: "digest-a" };
+  const pendingRewrite = deferred();
+  const result = (async () => {
+    const proposal = await pendingRewrite.promise;
+    return {
+      proposal,
+      current: editTargetFenceIsCurrent(target, snapshot, "conversation-a", snapshot.selectionDigest),
+    };
+  })();
+
+  target.value = "The user edited the draft while rewrite was pending";
+  pendingRewrite.resolve({ proposedText: "late provider proposal" });
+  assert.deepEqual(await result, { proposal: { proposedText: "late provider proposal" }, current: false });
+});
+
+test("confirmation hashing rejects a selection change while the reviewed proposal is open", async () => {
+  const target = input();
+  const snapshot = { ...readSelectionSnapshot(target, "conversation-a"), selectionDigest: "digest-a" };
+  const pendingDigest = deferred();
+  const confirmation = (async () => {
+    const digest = await pendingDigest.promise;
+    return editTargetFenceIsCurrent(target, snapshot, "conversation-a", digest);
+  })();
+
+  target.selectionStart = 7;
+  target.selectionEnd = 15;
+  pendingDigest.resolve(snapshot.selectionDigest);
+  assert.equal(await confirmation, false);
+});
+
+test("insertion hashing rejects a draft or conversation change before applying a confirmed proposal", async () => {
+  const target = input();
+  const snapshot = { ...readSelectionSnapshot(target, "conversation-a"), selectionDigest: "digest-a" };
+  const pendingDigest = deferred();
+  let currentConversation = "conversation-a";
+  const insertion = (async () => {
+    const digest = await pendingDigest.promise;
+    return editTargetFenceIsCurrent(target, snapshot, currentConversation, digest);
+  })();
+
+  target.value = "Newer draft version";
+  currentConversation = "conversation-b";
+  pendingDigest.resolve(snapshot.selectionDigest);
+  assert.equal(await insertion, false);
 });
 
 test("undo entries are bound to the originating account, conversation, and exact replacement", () => {
@@ -198,6 +253,16 @@ test("late confirmation and replacement digests cannot revive cancelled UI work"
   }
 });
 
+test("rewrite, confirm, and insertion each recheck the exact target after their await", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  const preview = control.slice(control.indexOf("async function createPreview()"), control.indexOf("async function confirmProposal()"));
+  const confirm = control.slice(control.indexOf("async function confirmProposal()"), control.indexOf("async function replaceConfirmed()"));
+  const replace = control.slice(control.indexOf("async function replaceConfirmed()"), control.indexOf("function undoAppliedEdit()"));
+  assert.match(preview, /await sessionRef\.current\?\.propose\([\s\S]*?editTargetFenceIsCurrent\(inputRef\.current, snapshot, conversationId, snapshot\.selectionDigest\)/);
+  assert.match(confirm, /await digestSelectionSnapshot\(selection\)[\s\S]*?editTargetFenceIsCurrent\(inputRef\.current, selection, conversationId, digest\)/);
+  assert.match(replace, /await digestSelectionSnapshot\(snapshot\)[\s\S]*?editTargetFenceIsCurrent\(inputRef\.current, snapshot, conversationId, digest\)/);
+});
+
 test("provider preview keeps exact model routing while Fusion remains a separate chat opt-in", async () => {
   const control = await source("../src/components/chat/DictationEditControl.jsx");
   const chatInput = await source("../src/components/chat/ChatInput.jsx");
@@ -241,14 +306,13 @@ test("late rewrite failures recover only for the still-current route, account, c
   assert.match(resultHandling, /generationRef\.current !== generation/);
   assert.match(resultHandling, /getAccountScope\(\) !== accountRef\.current/);
   assert.match(resultHandling, /currentProviderRouteRef\.current !== routeAtStart/);
-  assert.match(resultHandling, /conversationId !== snapshot\.conversationId/);
-  assert.match(resultHandling, /selectionStillMatches\(inputRef\.current, snapshot, conversationId\)/);
+  assert.match(resultHandling, /editTargetFenceIsCurrent\(inputRef\.current, snapshot, conversationId, snapshot\.selectionDigest\)/);
 
   const catchHandling = preview.slice(preview.indexOf("} catch {"), preview.indexOf("} finally"));
   assert.match(catchHandling, /!controller\.signal\.aborted/);
   assert.match(catchHandling, /getAccountScope\(\) === accountRef\.current/);
   assert.match(catchHandling, /currentProviderRouteRef\.current === routeAtStart/);
-  assert.match(catchHandling, /selectionStillMatches\(inputRef\.current, snapshot, conversationId\)/);
+  assert.match(catchHandling, /editTargetFenceIsCurrent\(inputRef\.current, snapshot, conversationId, snapshot\.selectionDigest\)/);
   assert.match(catchHandling, /setConsentedRouteIdentity\(null\)/);
   assert.match(catchHandling, /setStage\("consent"\)/);
   assert.doesNotMatch(catchHandling, /setInstruction\(""\)|error\?\.message/);
