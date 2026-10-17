@@ -31,7 +31,7 @@ import FirstRunPurposeSetup from "./components/chat/FirstRunPurposeSetup.jsx";
 import { subscribe } from "./core/eventBus.js";
 import { getAccountScope, subscribeAccountScope } from "./core/accountScope.js";
 import { cancelVoiceCommandPreview, isVoiceCommandCancellation, reviewVoiceCommandPreview, understandVoiceCommand } from "./core/voiceCommandUnderstanding.js";
-import { describeSafeComputerActionPreview } from "./core/voiceOSPreview.js";
+import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview } from "./core/voiceOSPreview.js";
 import {
   createBrowserSpeechProvider,
   createBrowserSpeechSynthesisProvider,
@@ -76,6 +76,10 @@ function ChatWorkspace() {
   const { t } = useLocale();
   const draftKey = `hey_draft_${user?.id || 'signed-out'}`;
   const [message, setMessage] = useState(() => { try { return sessionStorage.getItem(draftKey) || ''; } catch { return ''; } });
+  const messageRef = useRef(message);
+  useLayoutEffect(() => { messageRef.current = message; }, [message]);
+  const userIdRef = useRef(user?.id || null);
+  useLayoutEffect(() => { userIdRef.current = user?.id || null; }, [user?.id]);
   const feedEndRef = useRef(null);
   const feedRef = useRef(null);
   const followingRef = useRef(true);
@@ -360,6 +364,21 @@ function ChatWorkspace() {
     setPendingComputerPreview(nextPreview);
   }, []);
 
+  function canRestoreFailedPreviewRequest(pending) {
+    const current = pendingComputerPreviewRef.current;
+    const currentUserId = userIdRef.current;
+    return canRestoreComputerPreviewRequest({
+      pendingPreviewId: pending?.preview?.previewId,
+      currentPreviewId: current?.preview?.previewId || null,
+      pendingAccountScope: pending?.accountScope,
+      currentAccountScope: getAccountScope(),
+      expectedAccountScope: currentUserId ? `account:${currentUserId}` : null,
+      pendingConversationId: pending?.conversationId,
+      currentConversationId: conversationIdRef.current,
+      currentDraft: messageRef.current,
+    });
+  }
+
   useEffect(() => {
     const pending = pendingComputerPreviewRef.current;
     if (!pending || pending.conversationId === conversationId) return;
@@ -607,9 +626,14 @@ function ChatWorkspace() {
   async function refreshComputerPreview() {
     const pending = pendingComputerPreviewRef.current;
     if (!pending?.expired || previewRequestInFlightRef.current) return;
-    if (pending.accountScope !== getAccountScope() || pending.accountScope !== `account:${user?.id || ""}`) {
+    const accountIsCurrent = pending.accountScope === getAccountScope()
+      && pending.accountScope === (userIdRef.current ? `account:${userIdRef.current}` : null);
+    if (!accountIsCurrent || pending.conversationId !== conversationIdRef.current) {
+      cancelVoiceCommandPreview(pending.preview.previewId);
       storeComputerPreview(null);
-      setExecutionStatus(t("chat.voiceOS.differentAccount", "This preview belongs to a different account. Nothing was run."));
+      setExecutionStatus(accountIsCurrent
+        ? t("chat.voiceOS.conversationChanged", "The computer preview was cleared because you changed conversations. Review the request again here; nothing was run.")
+        : t("chat.voiceOS.differentAccount", "This preview belongs to a different account. Nothing was run."));
       return;
     }
     const previewController = new AbortController();
@@ -623,13 +647,18 @@ function ChatWorkspace() {
     } catch {
       const current = pendingComputerPreviewRef.current;
       if (previewController.signal.aborted) {
-        if (current?.preview.previewId === pending.preview.previewId && current.accountScope === getAccountScope()) {
+        if (current?.preview.previewId === pending.preview.previewId
+          && current.accountScope === getAccountScope()
+          && current.accountScope === (userIdRef.current ? `account:${userIdRef.current}` : null)
+          && current.conversationId === conversationIdRef.current) {
           setExecutionStatus(t("chat.voiceOS.previewRefreshCancelled", "Preview refresh cancelled. The original request is still available; nothing was run."));
         }
       } else if (current?.preview.previewId === pending.preview.previewId) {
+        const restoreRequest = canRestoreFailedPreviewRequest(pending);
+        cancelVoiceCommandPreview(pending.preview.previewId);
         storeComputerPreview(null);
-        setMessage(pending.message);
-        setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. Your request was restored so you can try again."));
+        if (restoreRequest) setMessage(pending.message);
+        setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. You can retry when ready."));
       }
       return;
     } finally {
@@ -643,20 +672,33 @@ function ChatWorkspace() {
     if (previewController.signal.aborted) {
       if (nextPreview?.preview?.previewId) cancelVoiceCommandPreview(nextPreview.preview.previewId);
       const current = pendingComputerPreviewRef.current;
-      if (current?.preview.previewId === pending.preview.previewId && current.accountScope === getAccountScope()) {
+      if (current?.preview.previewId === pending.preview.previewId
+        && current.accountScope === getAccountScope()
+        && current.accountScope === (userIdRef.current ? `account:${userIdRef.current}` : null)
+        && current.conversationId === conversationIdRef.current) {
         setExecutionStatus(t("chat.voiceOS.previewRefreshCancelled", "Preview refresh cancelled. The original request is still available; nothing was run."));
       }
       return;
     }
     const current = pendingComputerPreviewRef.current;
-    if (!current || current.preview.previewId !== pending.preview.previewId || current.accountScope !== getAccountScope()) {
+    if (!current || current.preview.previewId !== pending.preview.previewId
+      || current.accountScope !== getAccountScope()
+      || current.accountScope !== (userIdRef.current ? `account:${userIdRef.current}` : null)
+      || current.conversationId !== conversationIdRef.current) {
       if (nextPreview?.preview?.previewId) cancelVoiceCommandPreview(nextPreview.preview.previewId);
+      if (current?.preview.previewId === pending.preview.previewId
+        && (current.accountScope !== getAccountScope() || current.conversationId !== conversationIdRef.current)) {
+        cancelVoiceCommandPreview(current.preview.previewId);
+        storeComputerPreview(null);
+      }
       return;
     }
     if (!nextPreview || nextPreview.blocked) {
+      const restoreRequest = canRestoreFailedPreviewRequest(pending);
+      cancelVoiceCommandPreview(pending.preview.previewId);
       storeComputerPreview(null);
-      setMessage(pending.message);
-      setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. Your request was restored so you can try again."));
+      if (restoreRequest) setMessage(pending.message);
+      setExecutionStatus(t("chat.voiceOS.previewRefreshFailed", "A fresh preview could not be created. You can retry when ready."));
       return;
     }
     storeComputerPreview({ ...nextPreview, source: pending.source });

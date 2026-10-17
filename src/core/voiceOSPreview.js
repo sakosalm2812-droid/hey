@@ -47,4 +47,37 @@ export function describeSafeComputerActionPreview(preview) {
   }
 }
 
+/** Decide whether a failed refresh may restore its request without crossing current UI context. */
+export function canRestoreComputerPreviewRequest(input) {
+  try {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    if (Object.getOwnPropertySymbols(input).length) return false;
+    const fields = Object.getOwnPropertyDescriptors(input);
+    const allowed = [
+      "pendingPreviewId", "currentPreviewId", "pendingAccountScope", "currentAccountScope",
+      "expectedAccountScope", "pendingConversationId", "currentConversationId", "currentDraft",
+    ];
+    if (Object.keys(fields).length !== allowed.length || Object.keys(fields).some((key) => !allowed.includes(key))) return false;
+    const values = Object.create(null);
+    for (const key of allowed) {
+      const descriptor = fields[key];
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) return false;
+      values[key] = descriptor.value;
+    }
+    const conversationIsValid = (value) => value === null || typeof value === "string";
+    return typeof values.pendingPreviewId === "string" && values.pendingPreviewId.length > 0
+      && values.currentPreviewId === values.pendingPreviewId
+      && typeof values.pendingAccountScope === "string" && values.pendingAccountScope.length > 0
+      && values.pendingAccountScope === values.currentAccountScope
+      && values.pendingAccountScope === values.expectedAccountScope
+      && conversationIsValid(values.pendingConversationId)
+      && values.pendingConversationId === values.currentConversationId
+      && typeof values.currentDraft === "string" && values.currentDraft.trim().length === 0;
+  } catch {
+    return false;
+  }
+}
+
 export default { describeSafeComputerActionPreview };

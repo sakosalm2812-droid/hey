@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { understandVoiceCommand } from "../src/core/voiceCommandUnderstanding.js";
-import { describeSafeComputerActionPreview } from "../src/core/voiceOSPreview.js";
+import { canRestoreComputerPreviewRequest, describeSafeComputerActionPreview } from "../src/core/voiceOSPreview.js";
 import { translations } from "../src/i18n/translations.js";
 
 test("safe computer previews expose only bounded target and capability labels", async () => {
@@ -39,6 +39,43 @@ test("unsafe, malformed, and hostile previews never produce a display summary", 
     assert.equal(getterCalls, 0);
   } finally {
     setAccountScope(null);
+  }
+});
+
+test("failed refresh recovery rejects delayed results after cancel, account or conversation switch, or newer draft", async () => {
+  const base = {
+    pendingPreviewId: "preview-current",
+    currentPreviewId: "preview-current",
+    pendingAccountScope: "account:owner",
+    currentAccountScope: "account:owner",
+    expectedAccountScope: "account:owner",
+    pendingConversationId: "conversation-a",
+    currentConversationId: "conversation-a",
+    currentDraft: "",
+  };
+  assert.equal(canRestoreComputerPreviewRequest(base), true);
+
+  const hostile = { ...base };
+  let getterCalls = 0;
+  Object.defineProperty(hostile, "currentDraft", { enumerable: true, get() { getterCalls += 1; return ""; } });
+  assert.equal(canRestoreComputerPreviewRequest(hostile), false);
+  assert.equal(getterCalls, 0);
+  assert.equal(canRestoreComputerPreviewRequest(new Proxy({ ...base }, { ownKeys() { throw new Error("hostile state"); } })), false);
+
+  for (const [name, mutate] of [
+    ["cancel", (current) => { current.currentPreviewId = null; }],
+    ["replacement preview", (current) => { current.currentPreviewId = "preview-new"; }],
+    ["account switch", (current) => { current.currentAccountScope = "account:other"; current.expectedAccountScope = "account:other"; }],
+    ["conversation switch", (current) => { current.currentConversationId = "conversation-b"; }],
+    ["newer draft", (current) => { current.currentDraft = "keep this newer text"; }],
+  ]) {
+    const current = { ...base };
+    let completeRefresh;
+    const refresh = new Promise((resolve) => { completeRefresh = resolve; })
+      .then(() => canRestoreComputerPreviewRequest({ ...base, ...current }));
+    mutate(current);
+    completeRefresh();
+    assert.equal(await refresh, false, `late refresh cannot restore after ${name}`);
   }
 });
 
@@ -243,4 +280,10 @@ test("the preview remains cancellable while refresh is pending and discards any 
   assert.match(refreshHandler, /createSafeComputerPreview\(pending\.message, previewController\.signal\)/);
   assert.match(refreshHandler, /if \(previewController\.signal\.aborted\) \{/);
   assert.match(refreshHandler, /cancelVoiceCommandPreview\(nextPreview\.preview\.previewId\)/);
+  assert.match(refreshHandler, /canRestoreFailedPreviewRequest\(pending\)/);
+  assert.match(source, /currentDraft: messageRef\.current/);
+  assert.match(source, /currentConversationId: conversationIdRef\.current/);
+  assert.match(source, /expectedAccountScope: currentUserId \? `account:\$\{currentUserId\}` : null/);
+  assert.match(refreshHandler, /current\.conversationId !== conversationIdRef\.current/);
+  assert.match(refreshHandler, /current\.accountScope !== \(userIdRef\.current \? `account:\$\{userIdRef\.current\}` : null\)/);
 });
