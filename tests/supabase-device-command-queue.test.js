@@ -301,3 +301,37 @@ test("latest authorized enqueue requires enrollment before idempotency replay", 
   assert.ok(sql.includes("revoke all on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) from public, anon, authenticated;"));
   assert.ok(sql.includes("grant execute on function public.enqueue_hey_device_command_authorized(uuid, uuid, text, jsonb, uuid[], timestamptz, bigint) to service_role;"));
 });
+
+test("idempotent claim replay locks current authorization before locking the command row", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/20261017000300_fence_device_claim_replay_authorization.sql", import.meta.url), "utf8");
+  const start = sql.indexOf("create or replace function public.claim_hey_device_command(");
+  const end = sql.indexOf("$$;", start) + 3;
+  const claim = sql.slice(start, end);
+  const deviceLock = claim.indexOf("select * into v_device");
+  const credentialLock = claim.indexOf("select * into v_credential");
+  const receiptLookup = claim.indexOf("select * into v_receipt");
+  const metadataRead = claim.indexOf("select * into v_command");
+  const permissionLock = claim.indexOf("perform p.permission from public.hey_permissions p");
+  const epochLock = claim.indexOf("perform 1 from public.hey_action_mandate_epochs e");
+  const mandateLock = claim.indexOf("perform m.mandate_id from public.hey_action_mandates m");
+  const replayCommandLock = claim.indexOf("select * into v_command", metadataRead + 1);
+  assert.ok(deviceLock >= 0 && credentialLock > deviceLock && receiptLookup > credentialLock);
+  assert.ok(metadataRead > receiptLookup && permissionLock > metadataRead && epochLock > permissionLock);
+  assert.ok(mandateLock > epochLock && replayCommandLock > mandateLock, "authorization rows must be locked before the replayed command row");
+  assert.ok(claim.slice(permissionLock, epochLock).includes("p.status = 'granted'") && claim.slice(permissionLock, epochLock).includes("for share of p;"));
+  assert.ok(claim.slice(epochLock, mandateLock).includes("for share;"));
+  assert.ok(claim.slice(mandateLock, replayCommandLock).includes("m.mandate_id = any(v_command.mandate_ids)"));
+  const replay = claim.slice(replayCommandLock);
+  assert.ok(replay.includes("c.state = 'pending'"));
+  assert.ok(replay.includes("c.lease_token = v_receipt.lease_token"));
+  assert.ok(replay.includes("c.lease_until > clock_timestamp()"));
+  assert.ok(replay.includes("hey_device_command_mandate_is_current"));
+  assert.ok(replay.includes("p.status = 'granted'"));
+  assert.ok(replay.includes("v_device.capabilities @> jsonb_build_array(c.envelope->>'action')"));
+  assert.ok(replay.indexOf("for update;") > replay.indexOf("v_device.capabilities"), "replay must revalidate and lock the current command after authorization locks");
+  assert.ok(claim.includes("v_claim := public.claim_hey_device_command(p_account_id, p_device_id, p_lease_ms)"), "first-time claims still use the private legacy routine");
+  assert.ok(claim.includes("insert into public.hey_device_command_claim_receipts"));
+  assert.ok(sql.includes("revoke all on function public.claim_hey_device_command(uuid, uuid, text, integer, text) from public, anon, authenticated;"));
+  assert.ok(sql.includes("grant execute on function public.claim_hey_device_command(uuid, uuid, text, integer, text) to service_role;"));
+  assert.ok(!/grant execute on function public\.claim_hey_device_command\([^;]+\) to [^;]*authenticated/i.test(sql));
+});
