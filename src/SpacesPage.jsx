@@ -7,6 +7,7 @@ import { isSupabaseConfigured } from "./lib/supabase.js";
 import { spaceMembershipMatchesAccount, spaceMembershipRetryMatches, spacePreviewMatchesAccount, spacesForAccount } from "./spacePageAccount.js";
 import { spaceDetailsFromRecord, spaceDetailsMatchAccount } from "./spacePageDetails.js";
 import { parseSpacePreferenceDraft, spacePreferencesMatchAccount } from "./spacePagePreferences.js";
+import { isSpaceRecoverySnapshotFailure } from "./spacePageRecoveryStatus.js";
 import { confirmSpaceLifecycle, prepareSpaceLifecycle, spaceLifecycleFromRecord } from "./spacePageLifecycle.js";
 import "./SpacesPage.css";
 
@@ -665,6 +666,7 @@ export default function SpacesPage() {
   const [recoveryPreview, setRecoveryPreview] = useState(null);
   const [recoveryError, setRecoveryError] = useState("");
   const [recovering, setRecovering] = useState(false);
+  const [recoverySnapshotWarningAccountId, setRecoverySnapshotWarningAccountId] = useState("");
   const importFileRef = useRef(null);
   const [importPreview, setImportPreview] = useState(null);
   const [transferError, setTransferError] = useState("");
@@ -1015,6 +1017,7 @@ export default function SpacesPage() {
     setRecoveryPreview(null);
     setRecoveryError("");
     setRecovering(false);
+    setRecoverySnapshotWarningAccountId("");
     setImportPreview(null);
     setTransferError("");
     setImporting(false);
@@ -1024,8 +1027,12 @@ export default function SpacesPage() {
     setCloudBackupBusy(false);
     setImportSource("file");
 
-    const refreshCurrentAccount = () => {
-      if (active) refreshSpaces();
+    const refreshCurrentAccount = (event, payload) => {
+      if (!active || accountRef.current !== accountId || getAccountScope() !== `account:${accountId}`) return;
+      if (isSpaceRecoverySnapshotFailure(event, payload, accountId, getAccountScope())) {
+        setRecoverySnapshotWarningAccountId(accountId);
+      }
+      refreshSpaces();
     };
     let unsubscribe = () => {};
     try {
@@ -1314,6 +1321,7 @@ export default function SpacesPage() {
         <div className="spaces-page__list-heading"><div><h2 id="spaces-list-title">Your Spaces</h2><p>Only Spaces saved to the signed-in account appear here.</p></div>
           {!accountDataLoading && !loadError && <span className="spaces-page__count" aria-live="polite">{currentSpaces.length} {currentSpaces.length === 1 ? "Space" : "Spaces"}</span>}
         </div>
+        {recoverySnapshotWarningAccountId === accountId && accountIsCurrent && <p className="spaces-page__recovery-snapshot-warning" role="alert"><AlertCircle size={16} aria-hidden="true" /><span>A Space change was saved, but its recovery snapshot could not be updated. Reload this page to retry. Until then, recovery may restore an older version.</span></p>}
         <section className="spaces-page__transfer" aria-labelledby="space-transfer-title">
           <div className="spaces-page__transfer-copy"><h3 id="space-transfer-title">Move Spaces with a file</h3><p>Export private Spaces to a JSON file, or review a file before importing copies into this account.</p></div>
           <input ref={importFileRef} className="spaces-page__sr-only" type="file" accept=".json,application/json" aria-label="Choose a private Space export file" onChange={previewSpaceImport} />

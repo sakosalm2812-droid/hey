@@ -175,6 +175,8 @@
 .spaces-page__recovery-review ul { display: grid; gap: 6px; margin: 10px 0; padding: 0; list-style: none; }
 .spaces-page__recovery-review li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: rgba(0, 0, 0, .14); color: var(--text-secondary, #a7a4ae); font-size: 12px; }
 .spaces-page__recovery-review li strong { color: var(--text-primary, #f5f2ec); }
+.spaces-page__recovery-snapshot-warning { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 8px; margin: 8px 0; padding: 11px 12px; border: 1px solid rgba(255, 185, 105, .34); border-radius: 10px; background: rgba(255, 166, 64, .08); color: #ffd49b; font-size: 12px; line-height: 1.5; }
+.spaces-page__recovery-snapshot-warning svg { flex: 0 0 auto; margin-top: 1px; }
 .spaces-page__sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @keyframes spaces-spin { to { transform: rotate(360deg); } }
 
