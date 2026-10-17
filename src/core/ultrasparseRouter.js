@@ -35,10 +35,12 @@ const routingTermPattern = (terms) => `(?:${terms.flatMap((term) => {
   const boundaries = Array.from({ length: term.length - 1 }, (_, index) => index + 1);
   for (const firstBoundary of boundaries) {
     variants.push(`${term.slice(0, firstBoundary)}\\p{M}${term.slice(firstBoundary)}`);
+    variants.push(`${term.slice(0, firstBoundary)}\\p{M}{2}${term.slice(firstBoundary)}`);
     variants.push(`${term.slice(0, firstBoundary)}\\p{P}${term.slice(firstBoundary)}`);
     variants.push(`${term.slice(0, firstBoundary)}\\p{P}{2}${term.slice(firstBoundary)}`);
     for (const secondBoundary of boundaries) {
       if (secondBoundary <= firstBoundary) continue;
+      variants.push(`${term.slice(0, firstBoundary)}\\p{M}${term.slice(firstBoundary, secondBoundary)}\\p{M}${term.slice(secondBoundary)}`);
       variants.push(`${term.slice(0, firstBoundary)}\\p{P}${term.slice(firstBoundary, secondBoundary)}\\p{P}${term.slice(secondBoundary)}`);
     }
   }
@@ -88,8 +90,8 @@ function selectionInput(input, limit) {
 function containsAdversarialRoutingText(input) {
   // Normalize only the safety check so invisible format characters and
   // compatibility forms cannot disguise a routing-policy override phrase.
-  // Match up to two internal punctuation characters or one combining mark per
-  // listed term, retaining the bounded phrase window and negation handling.
+  // Match up to two internal punctuation characters or two combining marks
+  // per listed term, retaining the bounded phrase window and negation handling.
   // This stays a phrase heuristic, not a general prompt-injection detector.
   const normalizedInput = input.normalize("NFKC").replace(/\p{Cf}/gu, "");
   const unnegatedInput = normalizedInput.replace(NEGATED_ROUTING_OVERRIDE, " ");
