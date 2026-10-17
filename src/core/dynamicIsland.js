@@ -1,6 +1,7 @@
 import { publish } from "./eventBus.js";
 import { getSetting } from "./settingsRegistry.js";
 import { safeStorage } from "../lib/safeStorage.js";
+import { snapshotDynamicIslandInteraction } from "../lib/dynamicIslandInteraction.js";
 
 const ISLAND_STATES = Object.freeze({
   HIDDEN: "hidden",
@@ -61,7 +62,7 @@ function generateModuleId() {
   return `module_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-class DynamicIslandEngine {
+export class DynamicIslandEngine {
   constructor() {
     this.islands = new Map();
     this.defaultIsland = null;
@@ -274,17 +275,20 @@ class DynamicIslandEngine {
     const island = this.islands.get(islandId);
     if (!island) return { error: "Island not found" };
 
+    const safeInteraction = snapshotDynamicIslandInteraction(interaction);
+    if (!safeInteraction) return { error: "Invalid interaction" };
+
     island.lastInteraction = new Date().toISOString();
     
-    if (interaction.type === "click" && island.state === ISLAND_STATES.COMPACT) {
+    if (safeInteraction.type === "click" && island.state === ISLAND_STATES.COMPACT) {
       this.setIslandState(islandId, ISLAND_STATES.EXPANDED);
-    } else if (interaction.type === "click" && island.state === ISLAND_STATES.EXPANDED) {
-      if (interaction.target === "background") {
+    } else if (safeInteraction.type === "click" && island.state === ISLAND_STATES.EXPANDED) {
+      if (safeInteraction.target === "background") {
         this.setIslandState(islandId, ISLAND_STATES.COMPACT);
       }
     }
     
-    publish("island.interaction", { islandId, interaction });
+    publish("island.interaction", { islandId, interaction: safeInteraction });
     return { success: true };
   }
 
