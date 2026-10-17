@@ -38,6 +38,7 @@ import {
   createVoiceSession,
 } from "./lib/voiceProviders.js";
 import { createConversationScopedVoiceAsk } from "./lib/voiceConversationContext.js";
+import { readChatRetryRoute, snapshotChatRetryRoute } from "./lib/chatRetryRoute.js";
 import { clearCopiedMessageIfCurrent, getChatMessageKey } from "./lib/chatCopyFeedback.js";
 
 const welcomeMessage = {
@@ -463,7 +464,7 @@ function ChatWorkspace() {
     askFromVoiceRef.current = askFromVoice;
   }, [askFromVoice]);
 
-  async function sendUserMessage(userMessage) {
+  async function sendUserMessage(userMessage, retryRoute = null) {
     const trimmedMessage = userMessage.trim();
     if (!trimmedMessage) return;
     if (isVoiceCommandCancellation(trimmedMessage)) {
@@ -500,13 +501,19 @@ function ChatWorkspace() {
       setExecutionStatus(t("chat.voiceOS.previewOnly", "Preview only. Nothing has been sent to the device."));
       return;
     }
-    const requestedFusion = fusionEnabled;
+    const requestedFusion = retryRoute ? retryRoute.fusion : fusionEnabled;
     const requestedProviderProfile = requestedFusion ? "automatic" : providerProfile;
-    if (!requestedFusion && requestedProviderProfile !== "automatic") {
-      const exactSelection = requestedProviderProfile && typeof requestedProviderProfile === "object";
+    const effectiveProviderProfile = retryRoute ? retryRoute.providerProfile : requestedProviderProfile;
+    const retryRouteSnapshot = snapshotChatRetryRoute(requestedFusion, effectiveProviderProfile);
+    if (!retryRouteSnapshot) {
+      setChatError("The selected model choice could not be safely saved for this request. Choose another option and try again.");
+      return;
+    }
+    if (!requestedFusion && effectiveProviderProfile !== "automatic") {
+      const exactSelection = effectiveProviderProfile && typeof effectiveProviderProfile === "object";
       const selectionAvailable = providerCatalog.status === "ready" && (exactSelection
-        ? providerCatalog.providers.some((provider) => provider.providerId === requestedProviderProfile.providerId && provider.modelId === requestedProviderProfile.modelId)
-        : providerCatalog.profiles.some((profile) => profile.id === requestedProviderProfile));
+        ? providerCatalog.providers.some((provider) => provider.providerId === effectiveProviderProfile.providerId && provider.modelId === effectiveProviderProfile.modelId)
+        : providerCatalog.profiles.some((profile) => profile.id === effectiveProviderProfile));
       if (!selectionAvailable) {
         setChatError("Your selected model is no longer available to this account. Choose another option or Automatic before sending.");
         return;
@@ -514,7 +521,7 @@ function ChatWorkspace() {
     }
     setFusionEnabled(false);
 
-    setMessages((current) => [...current, { role: "user", text: trimmedMessage }]);
+    setMessages((current) => [...current, { role: "user", text: trimmedMessage, retryRoute: retryRouteSnapshot }]);
     setMessage("");
     setChatError("");
     setIsSending(true);
@@ -529,7 +536,7 @@ function ChatWorkspace() {
         conversationId,
         onConversationId: setConversationId,
         fusion: requestedFusion,
-        providerProfile: requestedProviderProfile,
+        providerProfile: effectiveProviderProfile,
         signal: controller.signal,
         onFusionVerification: (verification) => { fusionVerification = verification; },
         onProviderExecutionReceipt: (receipt) => { providerExecutionReceipt = receipt; },
@@ -745,7 +752,13 @@ function ChatWorkspace() {
     const previousUserMessage = [...messages.slice(0, index)]
       .reverse()
       .find((item) => item.role === "user");
-    if (previousUserMessage) await sendUserMessage(previousUserMessage.text);
+    if (!previousUserMessage) return;
+    const retryRoute = readChatRetryRoute(previousUserMessage);
+    if (retryRoute.status === "invalid") {
+      setChatError("This response's original model choice is unavailable. Start a new message with a current choice to retry.");
+      return;
+    }
+    await sendUserMessage(previousUserMessage.text, retryRoute.status === "stored" ? retryRoute.route : null);
   }
 
   async function copyMessage(text, messageKey) {

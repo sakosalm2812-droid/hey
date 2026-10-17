@@ -14,7 +14,7 @@ test("chat keeps Automatic and Lower cost on the supported providerProfile reque
   ]);
   assert.match(input, /value=\{routingChoice\}/);
   assert.match(input, /profiles\.map\(\(profile\)/);
-  assert.match(page, /providerProfile: requestedProviderProfile/);
+  assert.match(page, /providerProfile: effectiveProviderProfile/);
   assert.match(page, /requestedFusion \? "automatic" : providerProfile/);
   assert.match(client, /providerSelection: \{ providerId, modelId \}/);
   assert.match(catalogTests, /routing catalog exposes only entitled models/);
@@ -27,7 +27,7 @@ test("exact entitled models use providerProfile and the current catalog pair", a
   assert.match(input, /<optgroup label="Exact entitled models">/);
   assert.match(input, /setProviderProfile\?\.\(\{ providerId: provider\.providerId, modelId: provider\.modelId \}\)/);
   assert.match(input, /Unavailable · \{exactSelection \?/);
-  assert.match(page, /providerCatalog\.providers\.some\(\(provider\) => provider\.providerId === requestedProviderProfile\.providerId && provider\.modelId === requestedProviderProfile\.modelId\)/);
+  assert.match(page, /providerCatalog\.providers\.some\(\(provider\) => provider\.providerId === effectiveProviderProfile\.providerId && provider\.modelId === effectiveProviderProfile\.modelId\)/);
   assert.deepEqual(getProviderRouteRequest({ providerId: "gemini", modelId: "gemini-pro" }), {
     providerSelection: { providerId: "gemini", modelId: "gemini-pro" },
   });
@@ -50,7 +50,7 @@ test("catalog loading, permission, unavailable, retry, and empty-entitlement sta
 
 test("catalog changes never silently reset an unavailable choice or cross account boundaries", async () => {
   const [page, input] = await Promise.all([source("../src/ChatPage.jsx"), source("../src/components/chat/ChatInput.jsx")]);
-  assert.match(page, /if \(!requestedFusion && requestedProviderProfile !== "automatic"\)[\s\S]*?Choose another option or Automatic before sending/);
+  assert.match(page, /if \(!requestedFusion && effectiveProviderProfile !== "automatic"\)[\s\S]*?Choose another option or Automatic before sending/);
   assert.match(input, /Unavailable · \{exactSelection \?/);
   assert.match(page, /<ChatWorkspace key=\{user\?\.id \|\| 'signed-out'\} \/>/);
   assert.doesNotMatch(page, /setProviderProfile\("automatic"\);\s*getHEYProviderCatalog/);
