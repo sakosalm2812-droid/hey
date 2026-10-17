@@ -1395,16 +1395,16 @@ After Wave 6 passed the combined suite/build/route checks, all eleven existing s
 
 | Area | Existing Codex task | Expected branch | Current state / latest SHA |
 |---|---|---|---|
-| 01 Frontend / Chat | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave7-01-chat-recovery` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave7-02-space-write-recovery` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave7-03-tool-refresh-failure` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 04 Edge / Outbox | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave7-04-outbox-claim-cancel` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave7-05-gesture-late-start` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 06 Flow / Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave7-06-dictation-review-recovery` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave7-07-voiceos-preview-scope` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave7-08-teacher-readback-boundary` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 09 Provider / HTTP | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave7-09-provider-body-deadline` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave7-10-ultrasparse-unicode` | Dispatched from `12c917b`; awaiting worker branch/commit. |
-| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave7-11-fusion-finalization` | Dispatched from `12c917b`; awaiting worker branch/commit. |
+| 01 Frontend / Chat | `01a14073-33bf-7403-940b-871cd0de9ebc` | `codex/wave7-01-chat-recovery` | Active; setup is initializing at exact base `12c917b`; no commit yet. |
+| 02 Spaces | `01a14073-9827-7f42-bf35-4eb2faee522d` | `codex/wave7-02-space-write-recovery` | Active; creating isolated checkout from exact base `12c917b`; no commit yet. |
+| 03 Tool Library | `01a14073-ae0b-7fa2-a145-2d4b3283f087` | `codex/wave7-03-tool-refresh-failure` | Active; fresh isolated checkout and gap selection in progress from `12c917b`. |
+| 04 Edge / Outbox | `01a14073-c424-70e2-9773-630d488b24ae` | `codex/wave7-04-outbox-claim-cancel` | Active; verifying exact base and outbox cancellation path. |
+| 05 Gesture | `01a14073-de07-7a90-b8bb-08faadea17bc` | `codex/wave7-05-gesture-late-start` | Active; creating isolated checkout and choosing a gap distinct from startup recovery. |
+| 06 Flow / Dictation | `01a14073-f7e7-7601-8957-8d8cdfafa1d0` | `codex/wave7-06-dictation-review-recovery` | Active; creating new checkout and reviewing distinct failure path. |
+| 07 VoiceOS | `01a14074-1024-7e32-a5c1-c134d8e204a7` | `codex/wave7-07-voiceos-preview-scope` | Active; setup/checkpoint verification in progress at `12c917b`. |
+| 08 Teacher | `01a14074-2bb4-7b73-af09-a38e11a10c3d` | `codex/wave7-08-teacher-readback-boundary` | Active; new checkout and distinct Teacher gap review in progress. |
+| 09 Provider / HTTP | `01a14074-4bdf-7f33-bf83-bb7e1dff5097` | `codex/wave7-09-provider-body-deadline` | Active; setup initializing at exact base `12c917b`. |
+| 10 UltraSparse | `01a14074-6e4f-79e2-805f-30ce26dab60e` | `codex/wave7-10-ultrasparse-unicode` | Active; new branch setup and subsystem review underway. |
+| 11 Fusion | `01a14074-9f63-7672-9965-154a8394ffca` | `codex/wave7-11-fusion-finalization` | Active; confirming pushed base and isolated checkout before implementation. |
 
-At dispatch there are no uncommitted coordinator source changes; retain `docs/requirements/v3-agent-pack/` as intentionally untracked. Next: verify every worker's branch points to the exact base and inspect its full diff; integrate only passing nonduplicative slices; rerun the combined test/build/smoke gates; update `HEY_STEP_STATUS.md` only when evidence changes. The local `/login` remains blocked by missing Supabase URL/key, so authenticated product proof cannot proceed without environment configuration.
+At dispatch there were no uncommitted coordinator source changes; the pushed handoff checkpoint after assignments is `e9a0ac7`. At the first progress snapshot all eleven existing chats were active, with no worker commit yet observed; their setup messages indicate isolated branches are being created or initialized. Worker checkouts may contain uncommitted changes as implementation begins; none is present in the coordinator source. Retain `docs/requirements/v3-agent-pack/` as intentionally untracked. Next: verify every worker's branch points to the exact base and inspect its full diff; integrate only passing nonduplicative slices; rerun the combined test/build/smoke gates; update `HEY_STEP_STATUS.md` only when evidence changes. The local `/login` remains blocked by missing Supabase URL/key, so authenticated product proof cannot proceed without environment configuration.
