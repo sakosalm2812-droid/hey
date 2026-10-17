@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getAccountScope, subscribeAccountScope } from "../../core/accountScope.js";
 import { createDictationEditSession } from "../../lib/dictationEditProposals.js";
 import { dictationPreferenceStore } from "../../lib/dictationPreferences.js";
@@ -7,6 +7,7 @@ import { focusDictationEditTarget } from "../../lib/dictationEditFocus.js";
 import {
   CHAT_EDIT_APPLICATION_ID,
   captureEditOperationFence,
+  dictationProviderRouteIdentity,
   digestSelectionSnapshot,
   editOperationFenceIsCurrent,
   readSelectionSnapshot,
@@ -25,11 +26,12 @@ const REWRITE_DISCLOSURE = Object.freeze({
 });
 
 export default function DictationEditControl({ inputRef, setValue, disabled, userId, conversationId = null, providerProfile = "automatic", fusionEnabled = false }) {
+  const providerRouteIdentity = dictationProviderRouteIdentity(providerProfile);
   const [selection, setSelection] = useState(null);
   const [proposal, setProposal] = useState(null);
   const [confirmedText, setConfirmedText] = useState(null);
   const [instruction, setInstruction] = useState("");
-  const [consented, setConsented] = useState(false);
+  const [consentedRouteIdentity, setConsentedRouteIdentity] = useState(null);
   const [undoEntry, setUndoEntry] = useState(null);
   const [stage, setStage] = useState("idle");
   const [status, setStatus] = useState("");
@@ -39,6 +41,15 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   const generationRef = useRef(0);
   const flowHeadingRef = useRef(null);
   const statusRef = useRef(null);
+  const providerProfileRef = useRef(providerProfile);
+  const currentProviderRouteRef = useRef(providerRouteIdentity);
+  const previousProviderRouteRef = useRef(providerRouteIdentity);
+  const rewriteRouteAtDispatchRef = useRef(null);
+
+  useLayoutEffect(() => {
+    providerProfileRef.current = providerProfile;
+    currentProviderRouteRef.current = providerRouteIdentity;
+  }, [providerProfile, providerRouteIdentity]);
 
   const refreshSelection = useCallback(() => {
     const next = readSelectionSnapshot(inputRef.current, conversationId);
@@ -59,7 +70,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setProposal(null);
     setConfirmedText(null);
     setInstruction("");
-    setConsented(false);
+    setConsentedRouteIdentity(null);
     setStage("idle");
     setStatus(message);
     refreshSelection();
@@ -75,7 +86,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       setProposal(null);
       setConfirmedText(null);
       setInstruction("");
-      setConsented(false);
+      setConsentedRouteIdentity(null);
       setUndoEntry(null);
       setStage("idle");
       setStatus("Account changed. Select text again to start a new edit.");
@@ -115,7 +126,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setProposal(null);
     setConfirmedText(null);
     setInstruction("");
-    setConsented(false);
+    setConsentedRouteIdentity(null);
     setUndoEntry(null);
     setStage("idle");
     setStatus("Conversation changed. Select text again before continuing the edit.");
@@ -124,6 +135,23 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
   useEffect(() => {
     if (disabled && stage !== "idle") resetFlow();
   }, [disabled, resetFlow, stage]);
+
+  useLayoutEffect(() => {
+    if (previousProviderRouteRef.current === providerRouteIdentity) return;
+    previousProviderRouteRef.current = providerRouteIdentity;
+    setConsentedRouteIdentity(null);
+    if (["previewing", "review", "confirmed"].includes(stage)) {
+      generationRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setProposal(null);
+      setConfirmedText(null);
+      setStage("consent");
+      setStatus("Provider choice changed. Review privacy and consent again before continuing.");
+    } else if (stage === "consent") {
+      setStatus("Provider choice changed. Review privacy and consent again.");
+    }
+  }, [providerRouteIdentity, stage]);
 
   useEffect(() => {
     focusDictationEditTarget(stage, status, {
@@ -137,7 +165,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setProposal(null);
     setConfirmedText(null);
     setInstruction("");
-    setConsented(false);
+    setConsentedRouteIdentity(null);
     try {
       const expectedConversationId = conversationId;
       const snapshot = readSelectionSnapshot(inputRef.current, expectedConversationId);
@@ -156,7 +184,15 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
       sessionRef.current = createDictationEditSession({
         preferences: loaded.success ? loaded.preferences : undefined,
         applicationId: CHAT_EDIT_APPLICATION_ID,
-        rewriteProvider: { proposeRewrite: (request) => rewriteHEYText({ ...request, providerProfile }) },
+        rewriteProvider: { proposeRewrite: (request) => {
+          const currentProfile = providerProfileRef.current;
+          if (!rewriteRouteAtDispatchRef.current
+            || dictationProviderRouteIdentity(currentProfile) !== rewriteRouteAtDispatchRef.current
+            || currentProviderRouteRef.current !== rewriteRouteAtDispatchRef.current) {
+            throw new Error("Provider choice changed before rewrite dispatch.");
+          }
+          return rewriteHEYText({ ...request, providerProfile: currentProfile });
+        } },
         rewriteDisclosure: REWRITE_DISCLOSURE,
         resolveCurrentTarget: async () => {
           const current = readSelectionSnapshot(inputRef.current, expectedConversationId);
@@ -179,7 +215,9 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
 
   async function createPreview() {
     const snapshot = selection;
-    if (!snapshot || !instruction || !consented || getAccountScope() !== accountRef.current) return;
+    const routeAtStart = providerRouteIdentity;
+    if (!snapshot || !instruction || !routeAtStart || consentedRouteIdentity !== routeAtStart || getAccountScope() !== accountRef.current) return;
+    rewriteRouteAtDispatchRef.current = routeAtStart;
     const generation = ++generationRef.current;
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -188,7 +226,7 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
     setStatus("");
     try {
       const currentDigest = await digestSelectionSnapshot(snapshot);
-      if (generationRef.current !== generation || controller.signal.aborted || getAccountScope() !== accountRef.current) return;
+      if (generationRef.current !== generation || controller.signal.aborted || getAccountScope() !== accountRef.current || currentProviderRouteRef.current !== routeAtStart) return;
       if (conversationId !== snapshot.conversationId || !currentDigest || currentDigest !== snapshot.selectionDigest || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
         resetFlow("The selection changed. Select the text again and retry.");
         return;
@@ -210,27 +248,34 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
         },
         cancelSignal: controller.signal,
       });
-      if (generationRef.current !== generation || getAccountScope() !== accountRef.current) return;
-      if (!result?.success) {
-        setStage("capture");
-        setInstruction("");
-        setConsented(false);
-        setStatus(result?.status === "cancelled" ? "Edit cancelled. Your draft is unchanged." : `Could not prepare a preview (${result?.status || "unavailable"}). Your draft is unchanged.`);
+      if (generationRef.current !== generation || getAccountScope() !== accountRef.current || currentProviderRouteRef.current !== routeAtStart) return;
+      if (conversationId !== snapshot.conversationId || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
+        resetFlow("The selection changed. Select the text again and retry.");
         return;
       }
-      if (!selectionStillMatches(inputRef.current, snapshot, conversationId)) {
-        resetFlow("The selection changed. Select the text again and retry.");
+      if (!result?.success) {
+        setConsentedRouteIdentity(null);
+        setStage("consent");
+        setStatus(result?.status === "cancelled"
+          ? "Edit cancelled. Your draft is unchanged. Review privacy and consent again to retry."
+          : `Could not prepare a preview (${result?.status || "unavailable"}). Your draft is unchanged. Review privacy and consent again to retry.`);
         return;
       }
       setProposal(result.proposal);
       setStage("review");
       setStatus("Review the proposed edit. Nothing has changed in your draft.");
-    } catch (error) {
-      if (generationRef.current === generation) {
-        setStage("capture");
-        setInstruction("");
-        setConsented(false);
-        setStatus(error?.message || "Could not prepare a preview. Your draft is unchanged.");
+    } catch {
+      if (generationRef.current === generation
+        && !controller.signal.aborted
+        && getAccountScope() === accountRef.current
+        && currentProviderRouteRef.current === routeAtStart) {
+        if (conversationId !== snapshot.conversationId || !selectionStillMatches(inputRef.current, snapshot, conversationId)) {
+          resetFlow("The selection changed. Select the text again and retry.");
+          return;
+        }
+        setConsentedRouteIdentity(null);
+        setStage("consent");
+        setStatus("Could not prepare a preview. Your draft is unchanged. Review privacy and consent again to retry.");
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
@@ -348,9 +393,9 @@ export default function DictationEditControl({ inputRef, setValue, disabled, use
           <h3 ref={flowHeadingRef} tabIndex={-1}>Review privacy before sending</h3>
           <p>{REWRITE_DISCLOSURE.retentionSummary} The selected model choice applies to this rewrite preview. Fusion is separate and does not run for edit previews.</p>
           {fusionEnabled && <p>Fusion remains enabled only for the chat message you send.</p>}
-          <label><input type="checkbox" checked={consented} onChange={(event) => setConsented(event.target.checked)} /> I agree to send the selected text and edit instruction for a rewrite preview.</label>
+          <label><input type="checkbox" checked={consentedRouteIdentity === providerRouteIdentity && providerRouteIdentity !== null} onChange={(event) => setConsentedRouteIdentity(event.target.checked ? providerRouteIdentity : null)} /> I agree to send the selected text and edit instruction for a rewrite preview using this provider choice.</label>
           <div className="hey-dictation__actions">
-            <button type="button" disabled={!consented || disabled} onClick={createPreview}>Create preview</button>
+            <button type="button" disabled={consentedRouteIdentity !== providerRouteIdentity || providerRouteIdentity === null || disabled} onClick={createPreview}>Create preview</button>
             <button type="button" className="hey-dictation__quiet" onClick={() => resetFlow("Edit cancelled. Your draft is unchanged.")}>Cancel</button>
           </div>
         </div>

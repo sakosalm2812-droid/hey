@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   CHAT_EDIT_TARGET_ID,
   captureEditOperationFence,
+  dictationProviderRouteIdentity,
   digestSelectionSnapshot,
   digestSelection,
   editOperationFenceIsCurrent,
@@ -85,6 +86,25 @@ test("undo entries are bound to the originating account, conversation, and exact
   assert.equal(undoEntryIsCurrent(hostile, context), false);
   assert.equal(getterCalls, 0);
   assert.equal(undoEntryIsCurrent(new Proxy(entry, { ownKeys() { throw new Error("hostile undo record"); } }), context), false);
+});
+
+test("provider route consent identity distinguishes exact routes and rejects hostile profiles", () => {
+  const firstRoute = dictationProviderRouteIdentity({ providerId: "provider-a", modelId: "model-1" });
+  const secondRoute = dictationProviderRouteIdentity({ providerId: "provider-a", modelId: "model-2" });
+  assert.ok(firstRoute);
+  assert.notEqual(firstRoute, secondRoute);
+  assert.notEqual(dictationProviderRouteIdentity("automatic"), firstRoute);
+  assert.equal(dictationProviderRouteIdentity(""), null);
+  assert.equal(dictationProviderRouteIdentity({ providerId: "provider-a", modelId: "m", extra: true }), null);
+
+  let getterCalls = 0;
+  const hostile = { modelId: "model-1" };
+  Object.defineProperty(hostile, "providerId", { enumerable: true, get() { getterCalls += 1; return "provider-a"; } });
+  assert.equal(dictationProviderRouteIdentity(hostile), null);
+  assert.equal(getterCalls, 0);
+  assert.equal(dictationProviderRouteIdentity(new Proxy({ providerId: "provider-a", modelId: "model-1" }, {
+    ownKeys() { throw new Error("hostile provider profile"); },
+  })), null);
 });
 
 test("async edit operations are fenced against cancellation and account changes", () => {
@@ -183,7 +203,8 @@ test("provider preview keeps exact model routing while Fusion remains a separate
   const chatInput = await source("../src/components/chat/ChatInput.jsx");
   const heyAI = await source("../src/lib/heyAI.js");
   const edge = await source("../supabase/functions/hey/index.ts");
-  assert.match(control, /rewriteHEYText\(\{ \.\.\.request, providerProfile \}\)/);
+  assert.match(control, /rewriteHEYText\(\{ \.\.\.request, providerProfile: currentProfile \}\)/);
+  assert.match(control, /providerProfileRef\.current = providerProfile/);
   assert.match(control, /Fusion is separate and does not run for edit previews\./);
   assert.match(chatInput, /aria-label="Model for this request"/);
   assert.match(chatInput, /Exact entitled models/);
@@ -191,6 +212,46 @@ test("provider preview keeps exact model routing while Fusion remains a separate
   assert.match(edge, /resolveProviderSelection\(requestedProvider, rewriteAttempts, entitlements, routingPricing\)/);
   assert.match(edge, /authorizeRewriteProvider/);
   assert.match(edge, /fusionRequested/);
+});
+
+test("route changes revoke edit consent and cancel or discard route-bound previews", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  assert.match(control, /checked=\{consentedRouteIdentity === providerRouteIdentity/);
+  assert.match(control, /event\.target\.checked \? providerRouteIdentity : null/);
+  assert.match(control, /consentedRouteIdentity !== routeAtStart/);
+  assert.match(control, /currentProviderRouteRef\.current !== routeAtStart/);
+  assert.match(control, /previousProviderRouteRef\.current = providerRouteIdentity/);
+  const routeEffect = control.slice(control.indexOf("if (previousProviderRouteRef.current === providerRouteIdentity)"), control.indexOf("focusDictationEditTarget(stage"));
+  assert.match(routeEffect, /abortRef\.current\?\.abort\(\)/);
+  assert.match(routeEffect, /setProposal\(null\)/);
+  assert.match(routeEffect, /setStage\("consent"\)/);
+  const previewFailure = control.slice(control.indexOf("if (!result?.success)"), control.indexOf("if (!selectionStillMatches", control.indexOf("if (!result?.success)")));
+  assert.match(previewFailure, /setConsentedRouteIdentity\(null\)/);
+  assert.match(previewFailure, /setStage\("consent"\)/);
+  assert.doesNotMatch(previewFailure, /setInstruction\(""\)/);
+  assert.match(previewFailure, /Your draft is unchanged/);
+  assert.match(control, /Could not prepare a preview\. Your draft is unchanged\. Review privacy and consent again to retry\./);
+  assert.doesNotMatch(control, /setStatus\(error\?\.message/);
+});
+
+test("late rewrite failures recover only for the still-current route, account, conversation, and draft", async () => {
+  const control = await source("../src/components/chat/DictationEditControl.jsx");
+  const preview = control.slice(control.indexOf("async function createPreview()"), control.indexOf("async function confirmProposal()"));
+  const resultHandling = preview.slice(preview.indexOf("const result = await"), preview.indexOf("if (!result?.success)"));
+  assert.match(resultHandling, /generationRef\.current !== generation/);
+  assert.match(resultHandling, /getAccountScope\(\) !== accountRef\.current/);
+  assert.match(resultHandling, /currentProviderRouteRef\.current !== routeAtStart/);
+  assert.match(resultHandling, /conversationId !== snapshot\.conversationId/);
+  assert.match(resultHandling, /selectionStillMatches\(inputRef\.current, snapshot, conversationId\)/);
+
+  const catchHandling = preview.slice(preview.indexOf("} catch {"), preview.indexOf("} finally"));
+  assert.match(catchHandling, /!controller\.signal\.aborted/);
+  assert.match(catchHandling, /getAccountScope\(\) === accountRef\.current/);
+  assert.match(catchHandling, /currentProviderRouteRef\.current === routeAtStart/);
+  assert.match(catchHandling, /selectionStillMatches\(inputRef\.current, snapshot, conversationId\)/);
+  assert.match(catchHandling, /setConsentedRouteIdentity\(null\)/);
+  assert.match(catchHandling, /setStage\("consent"\)/);
+  assert.doesNotMatch(catchHandling, /setInstruction\(""\)|error\?\.message/);
 });
 
 test("voice edit does not mutate draft until the separate insertion action", async () => {

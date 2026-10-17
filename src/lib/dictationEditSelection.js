@@ -55,6 +55,33 @@ export function undoEntryIsCurrent(entry, { accountScope, conversationId, curren
   }
 }
 
+export function dictationProviderRouteIdentity(profile) {
+  const isBoundedText = (value) => typeof value === "string"
+    && value.length > 0
+    && value.length <= 256
+    && ![...value].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint < 0x20 || codePoint === 0x7f;
+    });
+  if (isBoundedText(profile)) return JSON.stringify(["profile", profile]);
+  try {
+    if (!profile || typeof profile !== "object" || Array.isArray(profile)) return null;
+    const prototype = Object.getPrototypeOf(profile);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const keys = Reflect.ownKeys(profile);
+    if (keys.length !== 2 || keys.some((key) => !["providerId", "modelId"].includes(key))) return null;
+    const values = Object.create(null);
+    for (const key of ["providerId", "modelId"]) {
+      const descriptor = Object.getOwnPropertyDescriptor(profile, key);
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value") || !isBoundedText(descriptor.value)) return null;
+      values[key] = descriptor.value;
+    }
+    return JSON.stringify(["exact", values.providerId, values.modelId]);
+  } catch {
+    return null;
+  }
+}
+
 export async function digestSelection(targetId, selectedText, start, end) {
   if (typeof targetId !== "string" || !targetId || typeof selectedText !== "string" || !selectedText) return null;
   if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") return null;
