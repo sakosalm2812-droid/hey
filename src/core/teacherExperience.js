@@ -1097,6 +1097,9 @@ export async function exportTeacherActivityHandoutMarkdown(artifact, {
     || !Number.isFinite(Date.parse(stableSafetyReview.reviewedAt || ""))) {
     throw new Error("Teacher review must match the active account, workspace, and handout author");
   }
+  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope, classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to export the student activity handout");
+  }
 
   const { content, metadata } = stableArtifact;
   const lines = [
@@ -1498,6 +1501,9 @@ export async function exportTeacherWorksheetMarkdown(artifact, { accountScope, w
       || !Number.isFinite(Date.parse(stableSafetyReview.reviewedAt || ""))) {
       throw new Error("Teacher safety review is required for the active account and workspace before exporting this worksheet");
     }
+  }
+  if (!await canWriteTeacherArtifact(stableArtifact, { accountScope, classId: stableArtifact.metadata.classId })) {
+    throw new Error("Authenticated teacher access to this account and class is required to export the student worksheet");
   }
   const { content, metadata } = stableArtifact;
   const lines = [
