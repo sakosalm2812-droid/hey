@@ -573,19 +573,28 @@ test("poor lighting, apparent hand distance, or off-center framing cannot be sav
 
 test("camera permission denial leaves recognition inactive and reports no availability", async () => {
   const { engine, profile } = makeEngine();
-  engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; } });
+  let cameraRequests = 0;
+  let adapterStops = 0;
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { mediaDevices: { async getUserMedia() { const error = new Error("denied"); error.name = "NotAllowedError"; throw error; } } },
+    value: { mediaDevices: { async getUserMedia() { cameraRequests += 1; const error = new Error("denied"); error.name = "NotAllowedError"; throw error; } } },
   });
   globalThis.document = { createElement: () => ({}) };
   globalThis.requestAnimationFrame = () => 1;
+  engine.setRecognitionAdapter({ kind: "fake-contract", async detect() { return null; }, stop() { adapterStops += 1; } });
 
   const result = await engine.startRecognition(profile.id, { consent: true });
   assert.equal(result.success, false);
   assert.equal(result.code, "camera_permission_denied");
   assert.equal(engine.cameraCapabilityStatus, "permission_denied");
   assert.equal(engine.getRecognitionState(), GESTURE_STATES.ERROR);
+  assert.equal(cameraRequests, 1);
+  assert.equal(adapterStops, 1);
+  assert.equal(engine.cameraPermissionGranted, false);
+  assert.equal(engine.mediaStream, null);
+  assert.equal(engine.videoElement, null);
+  assert.equal((await engine.startRecognition(profile.id)).code, "consent_required");
+  assert.equal(cameraRequests, 1);
 });
 
 test("camera denial recovery resets the failed session after a non-prompting permission recheck", async () => {

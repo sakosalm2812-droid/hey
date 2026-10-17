@@ -64,6 +64,11 @@ test("Gesture Studio offers camera permission recovery for denied and revoked ac
   assert.match(studioSource, /Check camera access, then give consent and start again/);
 });
 
+test("a denied camera start clears the prior consent before any retry", () => {
+  assert.match(studioSource, /Object\.assign\(new Error\(result\.error[^\n]+\{ code: result\.code \}\)/);
+  assert.match(studioSource, /\["camera_permission_denied", "permission_denied"\]\.includes\(failure\?\.code\)\) setConsent\(false\)/);
+});
+
 test("Gesture Studio explains profile-specific active mode recovery without granting action permission", () => {
   assert.match(studioSource, /const enabledProfileMappings = bindings\.filter/);
   assert.match(studioSource, /binding\.profileId === profileId && binding\.actionType === "ui" && binding\.action === "summon"/);

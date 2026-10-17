@@ -180,11 +180,12 @@ export default function GestureStudioPage() {
     setBusy(true); setError(""); setMessage(""); setMode(mode);
     try {
       const result = await gestureEngine.startRecognition(profileId, { consent: true, mode });
-      if (!result.success) throw new Error(result.error || "Gesture recognition could not start.");
+      if (!result.success) throw Object.assign(new Error(result.error || "Gesture recognition could not start."), { code: result.code });
       setSessionState(gestureEngine.getRecognitionState());
       setMessage(mode === "test" ? "Test mode is active. Gestures are observed locally; no actions are dispatched." : "Active mode is running locally. Only supported mapped actions can run.");
       setCapability(await gestureEngine.getRecognitionCapability());
     } catch (failure) {
+      if (["camera_permission_denied", "permission_denied"].includes(failure?.code)) setConsent(false);
       setSessionState(gestureEngine.getRecognitionState()); setCapability(await gestureEngine.getRecognitionCapability()); setError(failure?.message || "Gesture recognition could not start.");
     } finally { setBusy(false); }
   }
