@@ -25,6 +25,37 @@ test("configured application mission center wires durable checkpoint persistence
   assert.equal(missionCenter.checkpointStore instanceof SupabaseMissionCheckpointStore, Boolean(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY));
 });
 
+test("configured mission checkpoint path saves through the revisioned Supabase RPC before local assignment", async () => {
+  const calls = [];
+  const client = {
+    async rpc(name, args) {
+      calls.push({ name, args });
+      return { data: { saved: true, revision: 1 }, error: null };
+    },
+  };
+  const center = createConfiguredMissionCenter({
+    storage: new MemoryStore(),
+    client,
+    configured: true,
+    evidenceService: { async createEnvelope() { return { signature: "fixture-signature" }; } },
+  });
+  const accountId = "123e4567-e89b-42d3-a456-426614174000";
+  let checkpoint;
+  try {
+    setAccountScope(accountId);
+    const mission = center.createMission("Persist an authenticated checkpoint");
+    checkpoint = await center.createCheckpoint(mission.id, { accountId, privateKey: {}, keyId: "fixture-key" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].name, "save_hey_mission_checkpoint");
+    assert.equal(calls[0].args.p_account_id, accountId);
+    assert.equal(calls[0].args.p_mission_id, mission.id);
+    assert.equal(calls[0].args.p_expected_revision, null);
+    assert.equal(center.getMission(mission.id).checkpoint, checkpoint);
+  } finally {
+    setAccountScope(null);
+  }
+});
+
 test("mission history is isolated in memory and storage across account switches", () => {
   const storage = new MemoryStore();
   const center = new MissionCenter({ storage });
