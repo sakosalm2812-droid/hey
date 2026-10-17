@@ -179,7 +179,7 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(providerCatalogClient, /const details = await response\.json\(\)\.catch\(\(\) => \(\{\}\)\)[\s\S]*const currentSession = await getHEYSession\(\);[\s\S]*if \(!isSameHEYAccount\(session, currentSession\)\)[\s\S]*throw new DOMException\("The signed-in account changed while available models were loading\.", "AbortError"\)[\s\S]*if \(!Array\.isArray\(details\.providers\)/);
   assert.match(client, /providerSelection: \{ providerId, modelId \}/);
   assert.match(client, /providerProfile === "lower_cost"/);
-  assert.match(page, /providerProfile: requestedProviderProfile/);
+  assert.match(page, /providerProfile: effectiveProviderProfile/);
   assert.match(input, /Exact entitled models/);
   assert.match(input, /Model for this request/);
 });
