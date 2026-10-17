@@ -62,3 +62,23 @@ test("unavailable reads, account switches, and already-settled receipts cannot b
   assert.equal(reconcileToolLibraryLifecycleReceipt(receipt({ status: "failed" }), lifecycle(), "account-a", "account:account-a"), null);
   assert.equal(reconcileToolLibraryLifecycleReceipt(pending, lifecycle({ status: "unknown" }), "account-a", "account:account-a"), null);
 });
+
+test("a late lifecycle result cannot overwrite a receipt created after its read began", () => {
+  const late = reconcileToolLibraryLifecycleReceipt(
+    receipt({ status: "failed", sessionId: "new-session", message: "Newer result." }),
+    lifecycle({ status: "failed", sessionId: "old-session" }),
+    "account-a",
+    "account:account-a",
+    { expectedRevision: 8, currentRevision: 9 },
+  );
+  assert.equal(late, null);
+
+  const replaced = reconcileToolLibraryLifecycleReceipt(
+    receipt({ status: "starting", sessionId: "new-session" }),
+    lifecycle({ status: "running", sessionId: "old-session" }),
+    "account-a",
+    "account:account-a",
+    { expectedRevision: 11, currentRevision: 11 },
+  );
+  assert.equal(replaced.status, "stale_session");
+});

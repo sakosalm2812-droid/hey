@@ -146,6 +146,7 @@ function ToolCard({
   const [running, setRunning] = useState(false);
   const runLock = useRef(false);
   const refreshRequestRef = useRef(0);
+  const receiptRevisionRef = useRef(0);
   const controllerRef = useRef(null);
   const status = STATUS_DETAILS[tool.status] || STATUS_DETAILS.unsupported;
   const StatusIcon = status.Icon;
@@ -153,6 +154,7 @@ function ToolCard({
     .filter((capability) => capability.error)
     .map((capability) => capability.error);
   const setReceipt = useCallback((next) => {
+    receiptRevisionRef.current += 1;
     setReceiptState((current) => {
       const value = typeof next === "function" ? next(isToolLibraryRecordVisible(current, accountId, getAccountScope()) ? current : null) : next;
       if (value === current) return current;
@@ -162,6 +164,7 @@ function ToolCard({
 
   const refreshActivity = useCallback(async () => {
     const request = ++refreshRequestRef.current;
+    const expectedReceiptRevision = receiptRevisionRef.current;
     if (!accountId || getAccountScope() !== `account:${accountId}`) {
       setActivityState(null);
       setLifecycleState(null);
@@ -184,19 +187,24 @@ function ToolCard({
         activityStatus: snapshot.activityStatus,
         lifecycleStatus: snapshot.lifecycleStatus,
       }));
-      setReceipt((current) => reconcileToolLibraryLifecycleReceipt(
-        current,
-        snapshot.lifecycle,
-        accountId,
-        getAccountScope(),
-      ) || current);
+      setReceiptState((current) => {
+        const visibleReceipt = isToolLibraryRecordVisible(current, accountId, getAccountScope()) ? current : null;
+        const reconciled = reconcileToolLibraryLifecycleReceipt(
+          visibleReceipt,
+          snapshot.lifecycle,
+          accountId,
+          getAccountScope(),
+          { expectedRevision: expectedReceiptRevision, currentRevision: receiptRevisionRef.current },
+        );
+        return reconciled ? scopeToolLibraryRecord(accountId, reconciled) : current;
+      });
     } else if (snapshot.status === "account_changed" && refreshRequestRef.current === request) {
       setActivityState(null);
       setLifecycleState(null);
       setRefreshState(null);
     }
     if (refreshRequestRef.current === request) setRefreshingLifecycle(false);
-  }, [accountId, setReceipt, tool.name, user]);
+  }, [accountId, tool.name, user]);
 
   useEffect(() => {
     refreshActivity();
@@ -210,6 +218,7 @@ function ToolCard({
       runLock.current = false;
       setRunning(false);
       setPendingRun(null);
+      receiptRevisionRef.current += 1;
       setReceiptState(null);
       setActivityState(null);
       setLifecycleState(null);

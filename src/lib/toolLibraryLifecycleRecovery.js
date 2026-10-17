@@ -5,7 +5,11 @@ const VALID_LIFECYCLE_STATUSES = new Set([
 const ACTIVE_RECEIPT_STATUSES = new Set(["starting", "running", "stopping"]);
 
 /** Reconcile an in-flight lifecycle receipt only with a fresh result for its account and session. */
-export function reconcileToolLibraryLifecycleReceipt(receipt, lifecycle, accountId, activeScope) {
+export function reconcileToolLibraryLifecycleReceipt(receipt, lifecycle, accountId, activeScope, {
+  expectedRevision,
+  currentRevision,
+} = {}) {
+  if (expectedRevision !== undefined && currentRevision !== expectedRevision) return null;
   if (typeof accountId !== "string" || !accountId || activeScope !== `account:${accountId}`
     || !receipt || receipt.accountId !== accountId
     || !ACTIVE_RECEIPT_STATUSES.has(receipt.status)

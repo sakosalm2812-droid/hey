@@ -102,6 +102,8 @@ test("Tool Library reconciles asynchronous lifecycle receipts against the fresh 
   assert.match(pageSource, /status: "stopping", message:[^\n]*sessionId: lifecycleView\.sessionId/);
   assert.match(pageSource, /"stale_session", "failed", "failed_after_stop", "cancelled"/);
   assert.match(lifecycleRecoverySource, /lifecycle\.sessionId !== receipt\.sessionId/);
+  assert.match(pageSource, /const expectedReceiptRevision = receiptRevisionRef\.current/);
+  assert.match(pageSource, /currentRevision: receiptRevisionRef\.current/);
 });
 
 test("Tool Library maps the V3 natural language dictation request to a truthful live entrypoint", () => {
