@@ -176,7 +176,7 @@ test("authenticated model discovery and chat profile stay opt-in and server auth
   assert.match(route, /providerAuthorizationUnavailable[\s\S]*?account_permissions_unavailable/);
   assert.match(client, /getHEYApiUrl\(\).*\/models/);
   assert.match(client, /access_token/);
-  assert.match(providerCatalogClient, /const details = await response\.json\(\)\.catch\(\(\) => \(\{\}\)\)[\s\S]*const currentSession = await getHEYSession\(\);[\s\S]*if \(!isSameHEYAccount\(session, currentSession\)\)[\s\S]*throw new DOMException\("The signed-in account changed while available models were loading\.", "AbortError"\)[\s\S]*if \(!Array\.isArray\(details\.providers\)/);
+  assert.match(providerCatalogClient, /const details = await responseJsonOrEmpty\(response\);[\s\S]*const currentSession = await getHEYSession\(\);[\s\S]*if \(!isSameHEYAccount\(session, currentSession\)\)[\s\S]*throw new DOMException\("The signed-in account changed while available models were loading\.", "AbortError"\)[\s\S]*if \(!Array\.isArray\(details\.providers\)/);
   assert.match(client, /providerSelection: \{ providerId, modelId \}/);
   assert.match(client, /providerProfile === "lower_cost"/);
   assert.match(page, /providerProfile: effectiveProviderProfile/);

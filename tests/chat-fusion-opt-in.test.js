@@ -100,6 +100,74 @@ test("HEY AI readiness reflects the real health endpoint and distinguishes missi
   }
 });
 
+test("HEY response-body timeout remains active after headers and cancels the stalled body", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestSignal;
+  let cancelRequested = false;
+  globalThis.fetch = async (_url, options) => {
+    requestSignal = options.signal;
+    return new Response(new ReadableStream({
+      start() {},
+      cancel() { cancelRequested = true; },
+    }));
+  };
+  try {
+    const startedAt = Date.now();
+    const readiness = await checkHEYAIReadiness({ timeoutMs: 20 });
+    assert.equal(readiness.status, "unavailable");
+    assert.equal(Date.now() - startedAt < 500, true);
+    assert.equal(requestSignal.aborted, true);
+    assert.equal(cancelRequested, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("caller cancellation after headers promptly stops a stalled HEY response body", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let requestSignal;
+  let cancelRequested = false;
+  let markFetchStarted;
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  globalThis.fetch = async (_url, options) => {
+    requestSignal = options.signal;
+    markFetchStarted();
+    return new Response(new ReadableStream({
+      start() {},
+      cancel() { cancelRequested = true; },
+    }));
+  };
+  try {
+    const pending = checkHEYAIReadiness({ signal: controller.signal, timeoutMs: 5_000 });
+    await fetchStarted;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await assert.rejects(pending, { name: "AbortError" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(requestSignal.aborted, true);
+    assert.equal(cancelRequested, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("oversized HEY response bodies are cancelled before JSON parsing", async () => {
+  const originalFetch = globalThis.fetch;
+  let cancelRequested = false;
+  globalThis.fetch = async () => new Response(new ReadableStream({
+    start() {},
+    cancel() { cancelRequested = true; },
+  }), { headers: { "Content-Length": "2000001" } });
+  try {
+    const readiness = await checkHEYAIReadiness({ timeoutMs: 1_000 });
+    assert.equal(readiness.status, "unavailable");
+    assert.equal(cancelRequested, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("chat conversation loading does not treat a missing Supabase session as an empty account", async () => {
   await assert.rejects(listHEYConversations(), /Supabase session is unavailable/i);
 });

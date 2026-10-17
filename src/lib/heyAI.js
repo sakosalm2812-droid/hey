@@ -7,6 +7,8 @@ import { recordAudit } from "../core/auditLog.js";
 import { executeRequest } from "../core/executionController.js";
 import { parseProviderExecutionReceipt } from "../core/providerExecutionReceipt.js";
 
+const MAX_HEY_API_RESPONSE_BYTES = 2_000_000;
+
 const HEY_SYSTEM = `
 You are HEY.
 
@@ -237,6 +239,15 @@ export function getHEYChatError(response, details = {}, fusion = false) {
   return details.error || "HEY could not send this message.";
 }
 
+async function responseJsonOrEmpty(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    if (error?.name === "AbortError" || error?.name === "TimeoutError") throw error;
+    return {};
+  }
+}
+
 export async function checkHEYAIReadiness({ signal, timeoutMs = 8_000 } = {}) {
   const healthUrl = `${getHEYApiUrl().replace(/\/+$/, "")}/health`;
   let response;
@@ -250,7 +261,8 @@ export async function checkHEYAIReadiness({ signal, timeoutMs = 8_000 } = {}) {
   let payload;
   try {
     payload = await response.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     return { status: "unavailable", message: "HEY AI returned an invalid health response." };
   }
 
@@ -271,7 +283,7 @@ export async function getHEYProviderCatalog({ signal, timeoutMs = 8_000 } = {}) 
     method: "GET",
     headers: { Authorization: `Bearer ${session.access_token}` },
   }, timeoutMs, signal);
-  const details = await response.json().catch(() => ({}));
+  const details = await responseJsonOrEmpty(response);
   if (!response.ok) throw new Error(details.error || "Available AI models could not be loaded.");
   const currentSession = await getHEYSession();
   if (!isSameHEYAccount(session, currentSession)) {
@@ -291,15 +303,92 @@ export async function getHEYProviderCatalog({ signal, timeoutMs = 8_000 } = {}) 
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 75_000, externalSignal) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new DOMException("The request timed out.", "TimeoutError")), timeoutMs);
-  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+  let response = null;
+  let activeReader = null;
+  let rejectInterrupted;
+  let interruptedOnce = false;
+  const interrupted = new Promise((_, reject) => { rejectInterrupted = reject; });
+  const cancelBody = () => {
+    try {
+      const pending = (activeReader || response?.body)?.cancel?.();
+      if (pending && typeof pending.catch === "function") void pending.catch(() => {});
+    } catch { /* Cleanup must not delay request settlement. */ }
+  };
+  const interrupt = (error) => {
+    if (interruptedOnce) return;
+    interruptedOnce = true;
+    controller.abort(error);
+    cancelBody();
+    rejectInterrupted(error);
+  };
+  const timeout = setTimeout(() => interrupt(new DOMException("The request timed out.", "TimeoutError")), timeoutMs);
+  const abortFromCaller = () => interrupt(
+    externalSignal?.reason instanceof Error
+      ? externalSignal.reason
+      : new DOMException("The request was cancelled.", "AbortError"),
+  );
   if (externalSignal?.aborted) abortFromCaller();
   else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
+  const cleanup = () => {
     clearTimeout(timeout);
     externalSignal?.removeEventListener("abort", abortFromCaller);
+  };
+  try {
+    response = await Promise.race([
+      fetch(url, { ...options, signal: controller.signal }).then((lateResponse) => {
+        if (controller.signal.aborted) {
+          try { void Promise.resolve(lateResponse.body?.cancel?.()).catch(() => {}); } catch { /* Best effort. */ }
+          throw controller.signal.reason;
+        }
+        return lateResponse;
+      }),
+      interrupted,
+    ]);
+    const nativeJson = response.json.bind(response);
+    response.json = async () => {
+      try {
+        const declaredLength = response.headers?.get?.("content-length");
+        if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > MAX_HEY_API_RESPONSE_BYTES) {
+          cancelBody();
+          throw new Error("HEY returned an oversized response.");
+        }
+        const reader = response.body?.getReader?.();
+        if (!reader) return await Promise.race([nativeJson(), interrupted]);
+        activeReader = reader;
+        const chunks = [];
+        let totalBytes = 0;
+        while (true) {
+          const outcome = await Promise.race([
+            reader.read().then((result) => ({ result })),
+            interrupted,
+          ]);
+          const { done, value } = outcome.result;
+          if (done) break;
+          if (!(value instanceof Uint8Array)) throw new Error("HEY returned an invalid response body.");
+          totalBytes += value.byteLength;
+          if (totalBytes > MAX_HEY_API_RESPONSE_BYTES) {
+            cancelBody();
+            throw new Error("HEY returned an oversized response.");
+          }
+          chunks.push(value);
+        }
+        const bytes = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      } finally {
+        try { activeReader?.releaseLock(); } catch { /* A failed read may retain its lock. */ }
+        activeReader = null;
+        cleanup();
+      }
+    };
+    return response;
+  } catch (error) {
+    cleanup();
+    throw error;
   }
 }
 
@@ -407,7 +496,7 @@ export async function askHEY(message, { conversationId, onConversationId, onExec
     }
 
     if (!response.ok) {
-      const details = await response.json().catch(() => ({}));
+      const details = await responseJsonOrEmpty(response);
       throw new Error(getHEYChatError(response, details, fusion));
     }
 
@@ -483,7 +572,7 @@ export async function rewriteHEYText({ text, instruction, signal, providerProfil
     }),
   }, { timeoutMs: 20_000, retries: 0, signal });
   if (!response.ok) {
-    const details = await response.json().catch(() => ({}));
+    const details = await responseJsonOrEmpty(response);
     throw new Error(getHEYChatError(response, details));
   }
   const data = await response.json();
