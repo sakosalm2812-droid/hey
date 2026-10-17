@@ -12,6 +12,23 @@ function safeText(value, maxLength = 512) {
     }) ? value.trim() : null;
 }
 
+function parseSafeWebTarget(value) {
+  const target = safeText(value);
+  if (!target) return null;
+  const match = target.match(/^https?:\/\/([^/?#]*)/i);
+  if (!match) return null;
+  const authority = match[1];
+  if (!authority || authority.includes("@") || authority.endsWith(":") || /[\\\s]/.test(authority)) return null;
+  try {
+    const parsed = new URL(target);
+    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:")
+      || !parsed.hostname || parsed.username || parsed.password) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 /** Return a bounded display summary for one inert, user-reviewed computer request. */
 export function describeSafeComputerActionPreview(preview) {
   try {
@@ -35,10 +52,8 @@ export function describeSafeComputerActionPreview(preview) {
       return null;
     }
     if (kind === "open_url") {
-      const target = safeText(ownValue(command, "url"));
-      if (!target) return null;
-      const parsed = new URL(target);
-      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+      const parsed = parseSafeWebTarget(ownValue(command, "url"));
+      if (!parsed) return null;
       return Object.freeze({ capability: "browser.open_url", label: "Open website", target: parsed.href, risk: "Medium" });
     }
     return null;
