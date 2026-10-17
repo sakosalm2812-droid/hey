@@ -97,6 +97,7 @@ export default function TeacherExperiencePage() {
   const busyRef = useRef(null);
   const draftRevisionRef = useRef(0);
   const activeTeacherContextRef = useRef(null);
+  const activeTeacherContextRevisionRef = useRef(0);
   const selectedProject = useMemo(() => projects.find((project) => project.id === selectedProjectId) || null, [projects, selectedProjectId]);
 
   useLayoutEffect(() => {
@@ -108,8 +109,9 @@ export default function TeacherExperiencePage() {
     };
   }, [accountId, selectedProjectId, selectedClassId]);
 
-  function teacherContextIsCurrent(expected) {
-    return teacherArtifactOperationContextMatches(expected, activeTeacherContextRef.current);
+  function teacherContextIsCurrent(expected, expectedRevision) {
+    return teacherArtifactOperationContextMatches(expected,
+      { ...activeTeacherContextRef.current, revision: activeTeacherContextRevisionRef.current }, expectedRevision);
   }
 
   const resetTransientJourney = useCallback(() => {
@@ -135,6 +137,7 @@ export default function TeacherExperiencePage() {
     const nextAccountId = nextScope.startsWith("account:") ? nextScope.slice("account:".length) : "";
     previousAccountIdRef.current = nextAccountId;
     accountRef.current = nextAccountId;
+    activeTeacherContextRevisionRef.current += 1;
     activeTeacherContextRef.current = { userId: nextAccountId, accountScope: nextScope, workspaceId: "", classId: "" };
     draftRevisionRef.current += 1;
     resetTransientJourney();
@@ -622,6 +625,7 @@ export default function TeacherExperiencePage() {
     if (!savedJourney || !preview || !teacherOperationCanStart(busyRef.current, accountId)) return;
     const operationAccountId = accountId;
     const operationAccountScope = preview.expected.accountScope;
+    const operationContextRevision = activeTeacherContextRevisionRef.current;
     busyRef.current = operationAccountId;
     setStatus("exporting");
     setError("");
@@ -629,7 +633,7 @@ export default function TeacherExperiencePage() {
       const freshAccess = await readCurrentTeacherAccess(preview.expected.userId);
       if (freshAccess.userId !== preview.expected.userId
         || !hasActiveContext(preview.expected, freshAccess.classIds)
-        || !teacherContextIsCurrent(preview.expected)) {
+        || !teacherContextIsCurrent(preview.expected, operationContextRevision)) {
         throw new Error("Teacher access changed. Sign in again with the assigned class before exporting.");
       }
       if (!teacherJourneyPersistenceMatches(savedJourney, { ...preview.expected, journeyId: preview.journeyId })) {
@@ -658,13 +662,13 @@ export default function TeacherExperiencePage() {
       if (hasTeacherAnswerKeyField(savedJourney.studentArtifact.content)) throw new Error("Student worksheet answer-key check failed.");
       const confirmedAccess = await readCurrentTeacherAccess(preview.expected.userId);
       if (confirmedAccess.status !== "ready" || !hasActiveContext(preview.expected, confirmedAccess.classIds)
-        || !teacherContextIsCurrent(preview.expected)) throw new Error("Teacher access changed during export preparation.");
+        || !teacherContextIsCurrent(preview.expected, operationContextRevision)) throw new Error("Teacher access changed during export preparation.");
       if (accountRef.current !== operationAccountId || getAccountScope() !== operationAccountScope) throw new Error("Your account changed during export preparation.");
       setExports({ lesson, answerKey, worksheet });
       setStatus("complete");
     } catch (exportError) {
       if (accountRef.current === operationAccountId && getAccountScope() === operationAccountScope
-        && teacherContextIsCurrent(preview.expected)) {
+        && teacherContextIsCurrent(preview.expected, operationContextRevision)) {
         setError(exportError?.message || "Teacher access could not be verified for export.");
         setStatus("export-error");
       }
@@ -775,10 +779,10 @@ export default function TeacherExperiencePage() {
             <section className="teacher-experience__section" aria-labelledby="teacher-scope-heading">
               <div className="teacher-experience__section-heading"><span>01</span><div><h2 id="teacher-scope-heading">Verified class and project</h2><p>These choices are limited to your signed-in account’s assignments.</p></div></div>
               <div className="teacher-experience__grid">
-                <label>Class<select value={selectedClassId} onChange={(event) => { draftRevisionRef.current += 1; activeTeacherContextRef.current = { ...activeTeacherContextRef.current, classId: event.target.value }; setSelectedClassId(event.target.value); resetTransientJourney(); }} required>
+                <label>Class<select value={selectedClassId} onChange={(event) => { draftRevisionRef.current += 1; activeTeacherContextRevisionRef.current += 1; activeTeacherContextRef.current = { ...activeTeacherContextRef.current, classId: event.target.value }; setSelectedClassId(event.target.value); resetTransientJourney(); }} required>
                   {currentAccess.classIds.map((classId) => <option key={classId} value={classId}>{classId}</option>)}
                 </select></label>
-                <label>Forge project<select value={selectedProjectId} onChange={(event) => { draftRevisionRef.current += 1; activeTeacherContextRef.current = { ...activeTeacherContextRef.current, workspaceId: event.target.value }; setSelectedProjectId(event.target.value); resetTransientJourney(); }} required>
+                <label>Forge project<select value={selectedProjectId} onChange={(event) => { draftRevisionRef.current += 1; activeTeacherContextRevisionRef.current += 1; activeTeacherContextRef.current = { ...activeTeacherContextRef.current, workspaceId: event.target.value }; setSelectedProjectId(event.target.value); resetTransientJourney(); }} required>
                   {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select></label>
               </div>

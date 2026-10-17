@@ -62,6 +62,24 @@ test("in-flight artifact results are fenced to the exact active teacher class an
   assert.match(page, /teacherContextIsCurrent\(expected\)/);
 });
 
+test("three-export result is discarded when selection changes away and back during an await", async () => {
+  const expected = { userId: "teacher-1", accountScope: "account:teacher-1", workspaceId: "project-1", classId: "class-1" };
+  let active = { ...expected, revision: 4 };
+  let resolveExport;
+  const pendingExport = new Promise((resolve) => { resolveExport = resolve; });
+  const operation = (async () => {
+    const exported = await pendingExport;
+    return teacherArtifactOperationContextMatches(expected, active, 4) ? exported : null;
+  })();
+  active = { ...active, classId: "class-2", revision: 5 };
+  active = { ...active, classId: "class-1", revision: 6 };
+  resolveExport({ lesson: "lesson", answerKey: "private", worksheet: "student" });
+  assert.equal(await operation, null);
+  assert.match(page, /const operationContextRevision = activeTeacherContextRevisionRef\.current/);
+  assert.match(page, /teacherContextIsCurrent\(preview\.expected, operationContextRevision\)/);
+  assert.match(page, /hasTeacherAnswerKeyField\(savedJourney\.studentArtifact\.content\)/);
+});
+
 test("worksheet answer-key classifier fails closed on cycles and scans nested data", () => {
   assert.equal(hasTeacherAnswerKeyField({ questions: [{ nested: { teacherAnswer: "private" } }] }), true);
   assert.equal(hasTeacherAnswerKeyField({ type: "teacher_worksheet", questions: [{ prompt: "Question", points: 1 }] }), false);
