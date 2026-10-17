@@ -1041,6 +1041,126 @@ test("an ambiguous batch is not reported complete when persisted readback is par
   }, { loseFirstResponse: true });
 });
 
+test("ambiguous recovery rejects duplicate persisted rows and leaves all artifacts uncached", async () => {
+  const journeyId = "534c0c79-70ea-45b7-a342-2a592ee429e1";
+  const context = teacherContext();
+  await withForgeBatchPersistence(async (_calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(_field, ids) {
+        const records = ids.map((id) => rowsById.get(id)).filter(Boolean);
+        records.push(records[0]);
+        return Promise.resolve({ data: records, error: null });
+      },
+    });
+    try {
+      await assert.rejects(HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      }), (error) => {
+        assert.match(error.message, /atomic teacher artifact batch/);
+        assert.equal(error.journeyId, journeyId);
+        assert.equal(error.artifactIds.length, 3);
+        return true;
+      });
+      assert.equal(rowsById.size, 3);
+      assert.equal([...rowsById.keys()].some((id) => artifactEngine.artifacts.has(id)), false,
+        "duplicate readback rows must not enter the in-memory cache");
+    } finally {
+      supabaseClient.from = originalFrom;
+    }
+  }, { loseFirstResponse: true });
+});
+
+test("ambiguous recovery denies an account role change before marking readback verified", async () => {
+  const journeyId = "72088c9a-5d79-4467-a98a-64a0e78ba9b3";
+  const context = teacherContext();
+  await withForgeBatchPersistence(async (_calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    const originalGetUser = supabaseClient.auth.getUser;
+    let reads = 0;
+    let signedInUser = {
+      id: "teacher-1",
+      app_metadata: { hey_role: "teacher", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+    };
+    supabaseClient.auth.getUser = async () => ({ data: { user: signedInUser }, error: null });
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(_field, ids) {
+        reads += 1;
+        const records = ids.map((id) => rowsById.get(id)).filter(Boolean);
+        if (reads === 2) {
+          signedInUser = {
+            id: "student-1",
+            app_metadata: { hey_role: "student", hey_account_scope: "account:teacher-1", hey_class_ids: ["class-1"] },
+          };
+        }
+        return Promise.resolve({ data: records, error: null });
+      },
+    });
+    try {
+      await assert.rejects(HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      }), (error) => {
+        assert.match(error.message, /atomic teacher artifact batch/);
+        assert.equal(error.journeyId, journeyId);
+        assert.equal(error.artifactIds.length, 3);
+        return true;
+      });
+      assert.equal(reads, 2);
+      assert.equal([...rowsById.keys()].some((id) => artifactEngine.artifacts.has(id)), false,
+        "a changed authorization context must not populate verified artifact caches");
+    } finally {
+      supabaseClient.from = originalFrom;
+      supabaseClient.auth.getUser = originalGetUser;
+    }
+  }, { loseFirstResponse: true });
+});
+
+test("ambiguous recovery rejects an artifact changed after initial read and keeps answer content private", async () => {
+  const journeyId = "6d653d04-cc5e-42b6-a1fc-4cbd51b522e7";
+  const context = teacherContext();
+  await withForgeBatchPersistence(async (_calls, rowsById) => {
+    const originalFrom = supabaseClient.from;
+    let reads = 0;
+    let mutationTimer;
+    supabaseClient.from = (table) => ({
+      select() { assert.equal(table, "hey_artifacts"); return this; },
+      in(_field, ids) {
+        reads += 1;
+        const records = ids.map((id) => rowsById.get(id)).filter(Boolean);
+        if (reads === 1) {
+          const worksheet = records.find((record) => record.metadata?.artifactContract === "hey.teacher.worksheet.v1");
+          mutationTimer = new Promise((resolve) => setTimeout(() => {
+            worksheet.content = {
+              ...worksheet.content,
+              questions: [{ prompt: "Question", points: 1, teacherAnswer: "late private answer mutation" }],
+            };
+            resolve();
+          }, 0));
+        }
+        return Promise.resolve({ data: records, error: null });
+      },
+    });
+    try {
+      await assert.rejects(HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      }), (error) => {
+        assert.match(error.message, /atomic teacher artifact batch/);
+        assert.equal(error.journeyId, journeyId);
+        assert.equal(error.artifactIds.length, 3);
+        return true;
+      });
+      await mutationTimer;
+      assert.equal(reads, 2, "recovery confirms the records again after content verification");
+      assert.equal([...rowsById.keys()].some((id) => artifactEngine.artifacts.has(id)), false,
+        "rows changed during verification must never be cached as verified");
+    } finally {
+      supabaseClient.from = originalFrom;
+    }
+  }, { loseFirstResponse: true });
+});
+
 test("concurrent retries with one journey ID resolve to the same complete artifact set", async () => {
   const request = {
     lesson: lessonInput(),
@@ -1145,7 +1265,7 @@ test("saved teacher journeys reopen from persisted rows and reject incomplete or
         id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: context.accountScope, hey_class_ids: [context.classId] },
       } }, error: null });
       await assert.rejects(HEY.teacher.getLessonWorksheetJourney({ journeyId, context }), /Authenticated teacher access/);
-      assert.equal(reads, 1, "unauthorized recovery must be denied before querying Forge");
+      assert.equal(reads, 2, "the authorized reopen reads twice, while unauthorized recovery is denied before querying Forge");
       supabaseClient.auth.getUser = originalGetUser;
 
       supabaseClient.from = (table) => ({

@@ -1291,10 +1291,21 @@ export async function getTeacherLessonWorksheetJourney({ journeyId, context: con
   ]);
   const artifactIds = [lessonId, answerKeyId, worksheetId];
   const artifacts = await getPersistedArtifactsByIds(artifactIds);
-  if (artifacts.length !== 3) throw new Error("Forge could not find a complete saved lesson set for this recovery ID");
+  if (artifacts.length !== artifactIds.length
+    || new Set(artifacts.map((artifact) => artifact?.id)).size !== artifactIds.length
+    || artifactIds.some((id) => !artifacts.some((artifact) => artifact?.id === id))) {
+    throw new Error("Forge could not find exactly one complete saved lesson set for this recovery ID");
+  }
   const byId = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
-  const [lesson, teacherArtifact, studentArtifact] = artifactIds.map((id) => byId.get(id));
-  const records = [lesson, teacherArtifact, studentArtifact];
+  let records;
+  try {
+    // Detach the verification snapshot from adapter-owned row objects so a later
+    // mutation cannot change what is returned or cached as a verified artifact.
+    records = artifactIds.map((id) => freezeDeep(snapshotLessonData(byId.get(id))));
+  } catch {
+    throw new Error("Forge returned malformed saved Teacher artifacts");
+  }
+  const [lesson, teacherArtifact, studentArtifact] = records;
   const contracts = ["hey.teacher.lesson.v1", "hey.teacher.assessment.v1", "hey.teacher.worksheet.v1"];
   const allowed = await Promise.all(records.map((artifact) => canReadTeacherArtifact(artifact, { accountScope, classId })));
   const scopeMatches = records.every((artifact, index) => artifact
@@ -1328,6 +1339,23 @@ export async function getTeacherLessonWorksheetJourney({ journeyId, context: con
   ]);
   if (!lessonResult.valid || !assessmentResult.valid || !worksheetResult.valid) {
     throw new Error("Forge returned a saved Teacher journey that failed content verification");
+  }
+  const confirmedArtifacts = await getPersistedArtifactsByIds(artifactIds);
+  if (confirmedArtifacts.length !== artifactIds.length
+    || new Set(confirmedArtifacts.map((artifact) => artifact?.id)).size !== artifactIds.length) {
+    throw new Error("Forge returned an incomplete or duplicate Teacher journey during verification");
+  }
+  const confirmedById = new Map(confirmedArtifacts.map((artifact) => [artifact.id, artifact]));
+  let unchangedDuringVerification;
+  try {
+    unchangedDuringVerification = artifactIds.every((id, index) =>
+      canonicalJson(snapshotLessonData(confirmedById.get(id))) === canonicalJson(records[index]));
+  } catch {
+    throw new Error("Forge returned malformed Teacher artifacts during verification");
+  }
+  if (!unchangedDuringVerification) throw new Error("Forge changed a saved Teacher artifact while the journey was being verified");
+  if (await requireTeacherAuthor(accountScope, classId) !== userId) {
+    throw new Error("Teacher authorization changed while the saved journey was being verified");
   }
   VERIFIED_PERSISTED_TEACHER_LESSONS.add(lesson);
   VERIFIED_PERSISTED_TEACHER_WORKSHEETS.add(studentArtifact);
