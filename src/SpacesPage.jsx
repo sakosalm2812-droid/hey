@@ -831,6 +831,11 @@ export default function SpacesPage() {
       setRecoverySnapshotRetryError(result?.error || "Space recovery snapshot could not be verified. Try again when storage is available.");
       return;
     }
+    const recoveryStatus = HEY.spaces.getRecoverySnapshotStatus({ accountScope: requestedScope });
+    if (recoveryStatus?.success !== true || recoveryStatus.accountScope !== requestedScope || recoveryStatus.needsRefresh !== false) {
+      setRecoverySnapshotRetryError("The refreshed recovery snapshot could not be verified. Try again.");
+      return;
+    }
     setRecoverySnapshotWarningAccountId("");
     setRecoverySnapshotRetryError("");
   }
@@ -1059,8 +1064,13 @@ export default function SpacesPage() {
         setRecoverySnapshotWarningAccountId(accountId);
         setRecoverySnapshotRetryError("");
       } else if (isSpaceRecoverySnapshotUpdated(event, payload, accountId, getAccountScope())) {
-        setRecoverySnapshotWarningAccountId("");
-        setRecoverySnapshotRetryError("");
+        const recoveryStatus = HEY.spaces.getRecoverySnapshotStatus({ accountScope: `account:${accountId}` });
+        if (recoveryStatus?.success === true && recoveryStatus.accountScope === `account:${accountId}` && recoveryStatus.needsRefresh === false) {
+          setRecoverySnapshotWarningAccountId("");
+          setRecoverySnapshotRetryError("");
+        } else {
+          setRecoverySnapshotWarningAccountId(accountId);
+        }
       }
       refreshSpaces();
     };

@@ -55,6 +55,8 @@ test("Spaces page retains the warning until the canonical retry reports verified
   assert.match(page, /isSpaceRecoverySnapshotUpdated\(event, payload, accountId, getAccountScope\(\)\)/);
   assert.match(page, /HEY\.spaces\.getRecoverySnapshotStatus\(\{ accountScope: `account:\$\{accountId\}` \}\)/);
   assert.match(page, /HEY\.spaces\.retryRecoverySnapshot\(\{ accountScope: requestedScope \}\)/);
+  assert.match(page, /const recoveryStatus = HEY\.spaces\.getRecoverySnapshotStatus\(\{ accountScope: requestedScope \}\);\s+if \(recoveryStatus\?\.success !== true \|\| recoveryStatus\.accountScope !== requestedScope \|\| recoveryStatus\.needsRefresh !== false\)/);
+  assert.match(page, /isSpaceRecoverySnapshotUpdated\(event, payload, accountId, getAccountScope\(\)\)\) \{\s+const recoveryStatus = HEY\.spaces\.getRecoverySnapshotStatus/);
   assert.match(page, /recoverySnapshotWarningAccountId === accountId && accountIsCurrent/);
   assert.match(page, /The Space recovery snapshot could not be verified/);
   assert.match(page, /Retry recovery snapshot/);

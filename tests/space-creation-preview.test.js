@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
+import { getAccountScope, getAccountStorageKey, setAccountScope } from "../src/core/accountScope.js";
 import { HEY, spaces as spacesApi } from "../src/core/index.js";
 import { OnboardingEngine } from "../src/core/onboardingEngine.js";
 import { clearPermissions, listPermissions, seedPermissions } from "../src/core/permissionManager.js";
@@ -1394,6 +1394,16 @@ test("recovery snapshot retry verifies current primary data and remains account 
     assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
 
     storage.failWriteKeys.delete(recoveryKey);
+    const originalSetItem = storage.setItem.bind(storage);
+    storage.setItem = (key, value) => {
+      if (key === recoveryKey) storage.values.set(key, `${value}tampered-readback`);
+      else originalSetItem(key, value);
+    };
+    const badReadback = engine.retryRecoverySnapshot({ accountScope });
+    assert.equal(badReadback.success, undefined);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    storage.setItem = originalSetItem;
+
     const retried = engine.retryRecoverySnapshot({ accountScope });
     assert.equal(retried.success, true);
     assert.equal(retried.accountScope, accountScope);
@@ -1409,6 +1419,99 @@ test("recovery snapshot retry verifies current primary data and remains account 
 
     setAccountScope("space-recovery-explicit-refresh-other");
     assert.match(engine.retryRecoverySnapshot({ accountScope }).error, /scope mismatch/i);
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("a recovery snapshot failure raised in the second tab is detected and cleared only after readback", () => withStorage((storage, firstTabWindow) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    const ownerId = "space-recovery-cross-tab";
+    const accountScope = `account:${ownerId}`;
+    setAccountScope(ownerId);
+    const firstTab = new SpaceCreationEngine();
+    const create = firstTab.previewNaturalLanguageRequest({ prompt: "Create a space called Cross tab snapshot" });
+    const created = firstTab.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true });
+    assert.equal(created.success, true);
+
+    const secondTabListeners = new Map();
+    const secondTabWindow = {
+      addEventListener(type, listener) {
+        if (!secondTabListeners.has(type)) secondTabListeners.set(type, new Set());
+        secondTabListeners.get(type).add(listener);
+      },
+      removeEventListener(type, listener) { secondTabListeners.get(type)?.delete(listener); },
+      dispatchEvent(event) { secondTabListeners.get(event.type)?.forEach((listener) => listener(event)); },
+    };
+    const originalWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", { configurable: true, value: secondTabWindow });
+    const secondTab = new SpaceCreationEngine();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: firstTabWindow });
+    const firstTabEvents = [];
+    firstTab.subscribe((event, payload) => firstTabEvents.push({ event, payload }));
+
+    const primaryKey = getAccountStorageKey("hey_spaces");
+    const recoveryKey = getAccountStorageKey("hey_spaces_recovery");
+    storage.failWriteKeys.add(recoveryKey);
+    const changed = secondTab.updateDetails({
+      accountScope,
+      spaceId: created.space.id,
+      expectedRevision: 0,
+      description: "Primary changed; recovery write failed in the other tab",
+    });
+    assert.equal(changed.success, true);
+    firstTabWindow.dispatchEvent({ type: "storage", key: primaryKey, storageArea: storage, newValue: storage.getItem(primaryKey) });
+    assert.equal(firstTab.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    assert.equal(firstTabEvents.some(({ event, payload }) => event === "storage_recovery_snapshot_error" && payload.accountScope === accountScope), true);
+    const eventsBeforeForeignKey = firstTabEvents.length;
+    firstTabWindow.dispatchEvent({ type: "storage", key: getAccountStorageKey("hey_spaces", "account:another-owner"), storageArea: storage, newValue: "foreign" });
+    assert.equal(firstTabEvents.length, eventsBeforeForeignKey);
+
+    firstTabWindow.dispatchEvent({ type: "storage", key: recoveryKey, storageArea: storage, newValue: "stale-update-event" });
+    assert.equal(firstTab.getRecoverySnapshotStatus({ accountScope }).needsRefresh, true);
+    assert.equal(firstTabEvents.some(({ event }) => event === "storage_recovery_snapshot_updated"), false);
+
+    storage.failWriteKeys.delete(recoveryKey);
+    const retried = secondTab.retryRecoverySnapshot({ accountScope });
+    assert.equal(retried.success, true);
+    assert.equal(JSON.parse(storage.getItem(recoveryKey)).payload, storage.getItem(primaryKey));
+    firstTabWindow.dispatchEvent({ type: "storage", key: recoveryKey, storageArea: storage, newValue: storage.getItem(recoveryKey) });
+    assert.equal(firstTab.getRecoverySnapshotStatus({ accountScope }).needsRefresh, false);
+    assert.equal(firstTabEvents.some(({ event, payload }) => event === "storage_recovery_snapshot_updated" && payload.accountScope === accountScope), true);
+
+    secondTab.destroy();
+    firstTab.destroy();
+    setAccountScope(previousScope);
+    Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+  } finally { setAccountScope(previousScope); }
+}));
+
+test("an account switch during retry cannot clear the new account recovery warning", () => withStorage((storage) => {
+  const previousScope = "spaces-preview-previous";
+  setAccountScope(previousScope);
+  try {
+    const firstOwner = "space-recovery-retry-switch-a";
+    const firstAccountScope = `account:${firstOwner}`;
+    const secondOwner = "space-recovery-retry-switch-b";
+    const secondAccountScope = `account:${secondOwner}`;
+    setAccountScope(firstOwner);
+    const engine = new SpaceCreationEngine();
+    const create = engine.previewNaturalLanguageRequest({ prompt: "Create a space called Retry account switch" });
+    assert.equal(engine.confirmNaturalLanguagePreview({ previewId: create.previewId, confirm: true }).success, true);
+    const recoveryKeyA = getAccountStorageKey("hey_spaces_recovery", firstAccountScope);
+    const recoveryKeyB = getAccountStorageKey("hey_spaces_recovery", secondAccountScope);
+    storage.failWriteKeys.add(recoveryKeyB);
+    storage.onSet = (key) => {
+      if (key !== recoveryKeyA) return;
+      storage.onSet = null;
+      setAccountScope(secondOwner);
+    };
+
+    const retry = engine.retryRecoverySnapshot({ accountScope: firstAccountScope });
+    assert.notEqual(retry.success, true);
+    assert.equal(retry.accountScope, firstAccountScope);
+    assert.equal(getAccountScope(), secondAccountScope);
+    assert.equal(engine.getRecoverySnapshotStatus({ accountScope: secondAccountScope }).needsRefresh, true);
   } finally { setAccountScope(previousScope); }
 }));
 

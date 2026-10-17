@@ -456,17 +456,31 @@ export class SpaceCreationEngine {
       : null;
     this.handleStorageEvent = (event) => {
       const scope = this.accountScope;
-      if (!event || (event.key !== getAccountStorageKey(STORAGE_KEY, scope) && event.key !== null)) return;
+      if (!event || scope === "anonymous" || getAccountScope() !== scope || this.accountScope !== scope) return;
+      const primaryKey = getAccountStorageKey(STORAGE_KEY, scope);
+      const recoveryKey = getAccountStorageKey(RECOVERY_STORAGE_KEY, scope);
+      if (event.key !== primaryKey && event.key !== recoveryKey && event.key !== null) return;
       try {
         if (event.storageArea && globalThis.localStorage && event.storageArea !== globalThis.localStorage) return;
       } catch {
         return;
       }
-      const refreshed = this.refreshFromStorage(scope, { notify: true });
-      if (refreshed.error && getAccountScope() === scope && this.accountScope === scope) {
-        this.spaces.clear();
-        this.loadError = true;
-        this.notify("storage_sync_error", { accountScope: scope, error: "Space storage could not be read" });
+      if (event.key === primaryKey || event.key === null) {
+        const refreshed = this.refreshFromStorage(scope, { notify: true });
+        if (refreshed.error && getAccountScope() === scope && this.accountScope === scope) {
+          this.spaces.clear();
+          this.loadError = true;
+          this.notify("storage_sync_error", { accountScope: scope, error: "Space storage could not be read" });
+        }
+      }
+      if (getAccountScope() !== scope || this.accountScope !== scope) return;
+      const previouslyUnverified = this.recoverySnapshotFailures.has(scope);
+      const status = this.getRecoverySnapshotStatus({ accountScope: scope });
+      if (status?.success !== true || status.accountScope !== scope) return;
+      if (status.needsRefresh) {
+        this.notify("storage_recovery_snapshot_error", { accountScope: scope, error: "Space recovery snapshot could not be verified" });
+      } else if (previouslyUnverified || event.key === recoveryKey || event.key === null) {
+        this.notify("storage_recovery_snapshot_updated", { accountScope: scope });
       }
     };
     this.storageEventTarget?.addEventListener("storage", this.handleStorageEvent);
@@ -538,7 +552,28 @@ export class SpaceCreationEngine {
     const scope = this.accountScope;
     if (scope === "anonymous" || getAccountScope() === "anonymous") return { error: "An account scope is required to check Space recovery status" };
     if (safeRequest.value.accountScope !== scope || getAccountScope() !== scope) return { error: "Account scope mismatch" };
-    return { success: true, accountScope: scope, needsRefresh: this.recoverySnapshotFailures.has(scope) };
+    let needsRefresh;
+    try {
+      const primary = readStorageItem(getAccountStorageKey(STORAGE_KEY, scope));
+      const recovery = readStorageItem(getAccountStorageKey(RECOVERY_STORAGE_KEY, scope));
+      if (primary === null) {
+        if (recovery === null) needsRefresh = true;
+        else {
+          parseRecoverySnapshot(recovery, scope);
+          needsRefresh = false;
+        }
+      } else {
+        const primarySpaces = parseStoredSpaces(primary, scope);
+        const serializedPrimary = serializeSpaces(primarySpaces, scope);
+        const recoverySnapshot = recovery === null ? null : parseRecoverySnapshot(recovery, scope);
+        needsRefresh = !serializedPrimary || !recoverySnapshot || recoverySnapshot.payload !== serializedPrimary;
+      }
+    } catch {
+      needsRefresh = true;
+    }
+    if (needsRefresh) this.recoverySnapshotFailures.add(scope);
+    else this.recoverySnapshotFailures.delete(scope);
+    return { success: true, accountScope: scope, needsRefresh };
   }
 
   retryRecoverySnapshot(request) {
