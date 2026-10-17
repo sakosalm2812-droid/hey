@@ -1,7 +1,7 @@
 import { recordAudit } from "./auditLog.js";
 import { publish } from "./eventBus.js";
 import { supabaseClient } from "../lib/supabase.js";
-import { canReadTeacherArtifact, canWriteTeacherArtifact, isTeacherAnswerKeyArtifact, isTeacherLessonArtifact, isStudentWorksheetArtifact } from "./teacherArtifactAccess.js";
+import { authorizeTeacherArtifactWrite, canReadTeacherArtifact, canWriteTeacherArtifact, isTeacherAnswerKeyArtifact, isTeacherLessonArtifact, isStudentWorksheetArtifact } from "./teacherArtifactAccess.js";
 
 const TEACHER_SCOPE_METADATA_FIELDS = [
   "workflow", "artifactContract", "accountScope", "workspaceId", "classId", "audience", "studentDataPolicy", "journeyId",
@@ -214,6 +214,26 @@ class ArtifactEngine {
     });
     if (error || !confirmed) {
       const failure = new Error("Forge did not confirm the atomic teacher artifact batch", { cause: error });
+      failure.artifactIds = artifactIds;
+      throw failure;
+    }
+
+    let currentAuth;
+    try {
+      currentAuth = await supabaseClient.auth.getUser();
+    } catch (cause) {
+      const failure = new Error("Teacher authorization changed before the artifact batch could be cached", { cause });
+      failure.artifactIds = artifactIds;
+      throw failure;
+    }
+    const currentUser = currentAuth?.data?.user;
+    const stillAuthorized = !currentAuth?.error && currentUser?.id === authData.user.id
+      && artifacts.every((artifact) => authorizeTeacherArtifactWrite(artifact, {
+        accountScope: artifact.metadata?.accountScope,
+        classId: artifact.metadata?.classId,
+      }, currentUser));
+    if (!stillAuthorized) {
+      const failure = new Error("Teacher authorization changed before the artifact batch could be cached", { cause: currentAuth?.error });
       failure.artifactIds = artifactIds;
       throw failure;
     }

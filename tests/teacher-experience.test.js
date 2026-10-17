@@ -95,7 +95,7 @@ async function withForgePersistence(operation, failureMessage = null) {
   }
 }
 
-async function withForgeBatchPersistence(operation, { failBeforeCommit = false, loseFirstResponse = false, mismatchResponse = false, mismatchReceipt = null } = {}) {
+async function withForgeBatchPersistence(operation, { failBeforeCommit = false, loseFirstResponse = false, mismatchResponse = false, mismatchReceipt = null, onCommit = null } = {}) {
   const originalRpc = supabaseClient.rpc;
   const rowsById = new Map();
   const calls = [];
@@ -121,6 +121,7 @@ async function withForgeBatchPersistence(operation, { failBeforeCommit = false, 
           created_at: "2026-10-15T00:00:00.000Z", updated_at: "2026-10-15T00:00:00.000Z", created_by: "teacher-1",
         });
       }
+      await onCommit?.({ calls, rowsById, rpcCalls });
       if (loseFirstResponse && rpcCalls === 1) return { data: null, error: { message: "injected lost response after commit" } };
       const response = batch.map((row) => rowsById.get(row.id));
       if (mismatchResponse && rpcCalls === 1) response[0] = { ...response[0], metadata: { ...response[0].metadata, classId: "other-class" } };
@@ -978,6 +979,35 @@ test("atomic journey write failures return a retry handle and retry without dupl
     assert.equal(rowsById.size, 3);
     assert.equal(calls.length, 2);
   }, { loseFirstResponse: true });
+});
+
+test("a teacher account switch during the successful batch RPC prevents caching and success", async () => {
+  const journeyId = "04be4bac-b0bf-4920-9117-3a149464f9ca";
+  const context = teacherContext();
+  const originalGetUser = supabaseClient.auth.getUser;
+  const teacher = { id: "teacher-1", app_metadata: { hey_role: "teacher", hey_account_scope: context.accountScope, hey_class_ids: [context.classId] } };
+  const student = { id: "student-1", app_metadata: { hey_role: "student", hey_account_scope: context.accountScope, hey_class_ids: [context.classId] } };
+  let activeUser = teacher;
+  supabaseClient.auth.getUser = async () => ({ data: { user: activeUser }, error: null });
+  try {
+    await withForgeBatchPersistence(async (calls, rowsById) => {
+      await assert.rejects(HEY.teacher.createLessonWorksheetJourney({
+        lesson: lessonInput(), assessment: assessmentInput(), context, journeyId,
+      }), (error) => {
+        assert.match(error.message, /Teacher authorization changed before the artifact batch could be cached/);
+        assert.equal(error.journeyId, journeyId);
+        assert.equal(error.artifactIds.length, 3);
+        assert.deepEqual(error.recovery.artifactIds, error.artifactIds);
+        return true;
+      });
+      assert.equal(calls.length, 1, "the atomic commit is not retried automatically after the session changes");
+      assert.equal(rowsById.size, 3, "the test simulates a committed batch before the account switch");
+      assert.equal([...rowsById.keys()].some((id) => artifactEngine.artifacts.has(id)), false,
+        "records from a prior session are never admitted to the active in-memory cache");
+    }, { onCommit: async () => { activeUser = student; } });
+  } finally {
+    supabaseClient.auth.getUser = originalGetUser;
+  }
 });
 
 test("a committed batch with a lost RPC response is accepted only after exact authorized readback", async () => {
