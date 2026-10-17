@@ -19,7 +19,7 @@ test("lifecycle refresh reads account-scoped session and bounded activity data",
   assert.deepEqual(result.activity, [{ id: "event-1", status: "stopped", at: "2026-10-16T12:00:00.000Z" }]);
   assert.deepEqual(result.lifecycle, {
     success: true, status: "stopped", readiness: "ready", sessionId: "session-1",
-    actions: { start: false, stop: true, retry: false },
+    actions: { start: false, stop: true, retry: false, remove: false },
   });
 });
 
@@ -41,7 +41,7 @@ test("account mismatch prevents reads and malformed results fail closed", async 
   }));
   assert.equal(malformed.status, "ready");
   assert.deepEqual(malformed.activity, []);
-  assert.deepEqual(malformed.lifecycle.actions, { start: false, stop: false, retry: false });
+  assert.deepEqual(malformed.lifecycle.actions, { start: false, stop: false, retry: false, remove: false });
 });
 
 test("late refresh responses are discarded after account switch or newer request", async () => {

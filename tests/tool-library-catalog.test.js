@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import HEY from "../src/core/index.js";
 import { CAPABILITY_STATUS, registerCapability } from "../src/core/capabilityRegistry.js";
-import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, getToolLifecycleContract, getToolLifecycleActivity } from "../src/core/toolRegistry.js";
+import { listToolCatalog, registerTool, unregisterTool, searchToolCatalog, runToolLibraryEntry, startToolLibraryEntry, stopToolLibraryEntry, retryToolLibraryEntry, removeToolLibraryEntry, getToolLifecycleContract, getToolLifecycleActivity } from "../src/core/toolRegistry.js";
 import { seedPermissions, clearPermissions, revokePermission } from "../src/core/permissionManager.js";
 import { setAccountScope } from "../src/core/accountScope.js";
 import { publish } from "../src/core/eventBus.js";
@@ -309,7 +309,7 @@ test("tool lifecycle reports only declared actions and requires canonical accoun
     const denied = startToolLibraryEntry(name, {}, { user: { id: "contract-account" } });
     assert.equal(denied.status, "unsupported", "tools without lifecycle handlers cannot claim start support");
     const contract = getToolLifecycleContract(name, { user: { id: "contract-account" } });
-    assert.deepEqual(contract.actions, { start: false, stop: false, retry: false, status: true, permissions: true, help: true, activity: true });
+    assert.deepEqual(contract.actions, { start: false, stop: false, retry: false, remove: false, status: true, permissions: true, help: true, activity: true });
     assert.equal(contract.permissions.granted, false);
     assert.equal(contract.status, "registered");
     assert.equal(stopToolLibraryEntry(name, "not-a-session", { user: { id: "contract-account" } }).status, "unsupported");
@@ -867,6 +867,55 @@ test("failed lifecycle runs can be retried only by the authorized account throug
     clearPermissions();
     setAccountScope(null);
   }
+});
+
+test("terminal lifecycle session records can be removed only by the authorized owner after settlement", async () => {
+  const name = "test.tool_library.lifecycle_remove";
+  const capability = "test.tool_library.lifecycle_remove_capability";
+  const accountId = "lifecycle-remove-owner";
+  registerCapability({ id: capability, name: "Session removal capability", platformSupport: { web: CAPABILITY_STATUS.supported } });
+  setAccountScope(accountId);
+  seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], accountId);
+  const owner = { platform: "web", user: { id: accountId } };
+  try {
+    registerTool(name, async () => { throw new Error("expected test failure"); }, {
+      capabilities: [capability],
+      permission: "filesystem.write",
+      lifecycle: { start: true, remove: true },
+    });
+    assert.equal(HEY.tools.remove, removeToolLibraryEntry, "the public API exposes canonical session removal");
+    assert.equal(getToolLifecycleContract(name, owner).actions.remove, true);
+    assert.equal(removeToolLibraryEntry(name, {}, owner).status, "invalid_session");
+    assert.equal(removeToolLibraryEntry(name, "foreign-session", { ...owner, user: { id: "another-account" } }).status, "denied");
+
+    const started = startToolLibraryEntry(name, {}, owner);
+    assert.equal(removeToolLibraryEntry(name, started.sessionId, owner).status, "session_active");
+    assert.equal(removeToolLibraryEntry(name, "stale-session", owner).status, "stale_session");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(getToolLifecycleContract(name, owner).status, "failed");
+
+    clearPermissions();
+    assert.equal(removeToolLibraryEntry(name, started.sessionId, owner).status, "denied", "permission revocation blocks removal");
+    assert.equal(getToolLifecycleContract(name, owner).status, "failed", "denied removal preserves the session record");
+    seedPermissions([{ permission: "filesystem.write", status: "granted", scope: "account" }], accountId);
+
+    const removed = removeToolLibraryEntry(name, started.sessionId, owner);
+    assert.deepEqual(removed, { success: true, status: "removed", sessionId: started.sessionId });
+    assert.equal(getToolLifecycleContract(name, owner).status, "registered");
+    assert.equal(removeToolLibraryEntry(name, started.sessionId, owner).status, "stale_session");
+    assert.ok(getToolLifecycleActivity(name, owner).activity.some(({ status }) => status === "removed"));
+  } finally {
+    unregisterTool(name);
+    clearPermissions();
+    setAccountScope(null);
+  }
+});
+
+test("session removal declaration requires an existing start lifecycle", () => {
+  assert.throws(() => registerTool("test.tool_library.remove_without_start", async () => ({ success: true }), {
+    capabilities: ["test.tool_library.unregistered_remove_capability"],
+    lifecycle: { remove: true },
+  }), /must also declare start support/);
 });
 
 test("account-scope changes abort prior runs, discard stale completion, and purge bounded activity", async () => {

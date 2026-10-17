@@ -153,7 +153,7 @@ function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   if (lifecycle !== undefined && (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle))) {
     throw new TypeError("Tool lifecycle metadata must be a plain object.");
   }
-  if (lifecycle && Object.keys(lifecycle).some((key) => !["start", "stop", "retry"].includes(key))) {
+  if (lifecycle && Object.keys(lifecycle).some((key) => !["start", "stop", "retry", "remove"].includes(key))) {
     throw new TypeError("Tool lifecycle metadata contains an unsupported action.");
   }
   if (lifecycle?.stop === true && lifecycle.start !== true) {
@@ -161,6 +161,9 @@ function registerToolWithOwner(name, handler, metadata, ownerToken = null) {
   }
   if (lifecycle?.retry === true && lifecycle.start !== true) {
     throw new TypeError("A retryable tool must also declare start support.");
+  }
+  if (lifecycle?.remove === true && lifecycle.start !== true) {
+    throw new TypeError("A tool that removes session records must also declare start support.");
   }
   if (lifecycle && Object.values(lifecycle).some((supported) => typeof supported !== "boolean")) {
     throw new TypeError("Tool lifecycle support declarations must be booleans.");
@@ -674,6 +677,48 @@ export function retryToolLibraryEntry(name, input, failedSessionId, context = {}
   return startToolLibraryEntry(name, input, context);
 }
 
+/** Remove an account-owned terminal session record after rechecking its
+ * declared lifecycle action, current account permission, and exact session ID. */
+export function removeToolLibraryEntry(name, sessionId, context = {}) {
+  const tool = tools.get(name);
+  if (!tool) return { success: false, status: "not_found", error: `Tool not found: ${name}` };
+  const identity = resolveToolAccount(context);
+  if (!identity) return { success: false, status: "denied", error: "Authenticated account identity is required." };
+  if (tool.metadata.lifecycle?.remove !== true) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "remove_unsupported", at: new Date().toISOString() });
+    return { success: false, status: "unsupported", error: `Tool ${name} does not declare session removal behavior.` };
+  }
+  if (typeof sessionId !== "string" || !sessionId.trim() || sessionId.length > 512) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "remove_invalid_session", at: new Date().toISOString() });
+    return { success: false, status: "invalid_session", error: "A valid session ID is required to remove its record." };
+  }
+
+  const permissions = declaredToolPermissions(tool.metadata);
+  if (permissions.length !== 1 || !hasPermission(permissions[0], "account", identity.accountId)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "denied", at: new Date().toISOString() });
+    return { success: false, status: "denied", error: "Canonical account permission is required to remove this session record." };
+  }
+
+  const key = sessionKey(identity.accountId, name);
+  const session = activeToolSessions.get(key);
+  if (!session || session.id !== sessionId) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "remove_stale", at: new Date().toISOString() });
+    return { success: false, status: "stale_session", error: "This session changed or is no longer available; refresh its status." };
+  }
+  if (inFlightToolSessions.has(session) || !["completed", "completed_after_stop", "cancelled", "failed", "failed_after_stop"].includes(session.status)) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "remove_active", at: new Date().toISOString() });
+    return { success: false, status: "session_active", error: "Only a settled session record can be removed." };
+  }
+  if (activeToolSessions.get(key) !== session) {
+    appendToolActivity(identity.accountId, { id: crypto.randomUUID(), name, status: "remove_stale", at: new Date().toISOString() });
+    return { success: false, status: "stale_session", error: "This session changed; refresh its status before removing it." };
+  }
+
+  activeToolSessions.delete(key);
+  appendToolActivity(identity.accountId, { id: session.id, name, status: "removed", at: new Date().toISOString() });
+  return { success: true, status: "removed", sessionId: session.id };
+}
+
 /** Status, Help, and Permissions are derived only from registered metadata;
  * Activity is account-filtered in-memory history from this registry. */
 export function getToolLifecycleContract(name, context = {}) {
@@ -721,6 +766,7 @@ export function getToolLifecycleContract(name, context = {}) {
       start: lifecycle.start === true,
       stop: lifecycle.stop === true,
       retry: lifecycle.retry === true,
+      remove: lifecycle.remove === true,
       status: true,
       permissions: Boolean(permission),
       help: typeof tool.metadata.description === "string" && tool.metadata.description.length > 0,

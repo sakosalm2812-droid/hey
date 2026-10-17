@@ -136,7 +136,7 @@ function ToolCard({
   const canStart = lifecycleView.canStart && tool.permissions.length === 1;
   const canRetry = lifecycleView.canRetry && tool.permissions.length === 1;
   const requiresLifecycleConfirmation = tool.requiresConfirmation || ["high", "critical"].includes(String(tool.riskLevel || "").toLowerCase());
-  const hasLifecycleControls = lifecycleView.visible && (lifecycleView.startDeclared || lifecycleView.stopDeclared || lifecycleView.retryDeclared);
+  const hasLifecycleControls = lifecycleView.visible && (lifecycleView.startDeclared || lifecycleView.stopDeclared || lifecycleView.retryDeclared || lifecycleView.removeDeclared);
   const [running, setRunning] = useState(false);
   const runLock = useRef(false);
   const refreshRequestRef = useRef(0);
@@ -386,6 +386,19 @@ function ToolCard({
     refreshActivity();
   }
 
+  function removeLifecycleSession() {
+    if (!lifecycleView.canRemove || !lifecycleView.sessionId || !accountId || getAccountScope() !== `account:${accountId}`) {
+      setReceipt({ status: "denied", message: "This session record is no longer available to remove in the current account." });
+      refreshActivity();
+      return;
+    }
+    const response = HEY.tools.remove(tool.name, lifecycleView.sessionId, { user });
+    setReceipt(response?.success && response.status === "removed"
+      ? { status: "removed", message: "Session record removed. Recent activity remains available." }
+      : { status: response?.status || "error", message: safeToolError(response?.error) });
+    refreshActivity();
+  }
+
   function submitLifecycleRetry() {
     if (!canRetry || !lifecycleView.sessionId || !accountId || getAccountScope() !== `account:${accountId}`) {
       setReceipt({ status: "denied", message: "This failed session is no longer available to retry in the current account or platform state." });
@@ -579,6 +592,7 @@ function ToolCard({
         <p className="tool-library__run-help">Status: <strong>{lifecycleView.status.replaceAll("_", " ")}</strong> · Readiness: {lifecycleView.readiness.replaceAll("_", " ")}</p>
         {lifecycleView.canStop && <button type="button" className="tool-library__deny-button" disabled={running || getAccountScope() !== `account:${accountId}`} onClick={stopLifecycle}>Stop session</button>}
         {canRetry && <><p className="tool-library__run-help">This failed session can be retried after HEY rechecks current permissions and platform support.</p><button type="button" className="tool-library__run-button" disabled={!accountId || getAccountScope() !== `account:${accountId}`} onClick={() => { setInputValues(initialInputValues(inputSchema)); setReceipt(null); setPendingRun(null); setRunPanelOpen(true); }}>Configure retry</button></>}
+        {lifecycleView.canRemove && <button type="button" className="tool-library__deny-button" disabled={running || getAccountScope() !== `account:${accountId}`} onClick={removeLifecycleSession}>Remove session record</button>}
       </details>}
       {(canRun || canStart) && <div className="tool-library__run-panel">
         {!runPanelOpen ? <button type="button" className="tool-library__run-button" disabled={!accountId || getAccountScope() !== `account:${accountId}`} onClick={() => {

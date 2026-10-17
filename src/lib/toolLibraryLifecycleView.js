@@ -1,4 +1,5 @@
 const ACTIVE_STATUSES = new Set(["starting", "running"]);
+const REMOVABLE_STATUSES = new Set(["completed", "completed_after_stop", "cancelled", "failed", "failed_after_stop"]);
 
 function readData(record, key) {
   try {
@@ -12,7 +13,7 @@ function readData(record, key) {
 
 export function getToolLibraryLifecycleView(record, accountId, activeScope, toolStatus) {
   if (typeof accountId !== "string" || !accountId || activeScope !== `account:${accountId}` || readData(record, "accountId") !== accountId) {
-    return { visible: false, startDeclared: false, stopDeclared: false, retryDeclared: false, canStart: false, canStop: false, canRetry: false, status: "unavailable", sessionId: null };
+    return { visible: false, startDeclared: false, stopDeclared: false, retryDeclared: false, removeDeclared: false, canStart: false, canStop: false, canRetry: false, canRemove: false, status: "unavailable", sessionId: null };
   }
 
   const actions = readData(record, "actions");
@@ -22,6 +23,7 @@ export function getToolLibraryLifecycleView(record, accountId, activeScope, tool
   const startDeclared = readData(actions, "start") === true;
   const stopDeclared = readData(actions, "stop") === true;
   const retryDeclared = readData(actions, "retry") === true;
+  const removeDeclared = readData(actions, "remove") === true;
   const active = ACTIVE_STATUSES.has(status);
   const failed = status === "failed" || status === "failed_after_stop";
   return {
@@ -32,8 +34,10 @@ export function getToolLibraryLifecycleView(record, accountId, activeScope, tool
     startDeclared,
     stopDeclared,
     retryDeclared,
+    removeDeclared,
     canStart: toolStatus === "supported" && startDeclared && readiness !== "unavailable" && !active,
     canStop: stopDeclared && active && typeof sessionId === "string" && Boolean(sessionId),
     canRetry: toolStatus === "supported" && retryDeclared && failed && readiness !== "unavailable" && typeof sessionId === "string" && Boolean(sessionId),
+    canRemove: removeDeclared && REMOVABLE_STATUSES.has(status) && readiness === "ready" && typeof sessionId === "string" && Boolean(sessionId),
   };
 }

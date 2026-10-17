@@ -58,6 +58,7 @@ export async function refreshToolLibraryLifecycleSnapshot({
       start: ownDataValue(actions, "start") === true,
       stop: ownDataValue(actions, "stop") === true,
       retry: ownDataValue(actions, "retry") === true,
+      remove: ownDataValue(actions, "remove") === true,
     }),
   }) : null;
   return Object.freeze({

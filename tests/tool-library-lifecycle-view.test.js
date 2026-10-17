@@ -50,6 +50,17 @@ test("retry is exposed only for a declared retry action on the current failed se
   assert.equal(getToolLibraryLifecycleView(contract({ actions: { retry: true }, status: "failed", sessionId: "failed-session", readiness: "unavailable" }), "account-a", "account:account-a", "supported").canRetry, false);
 });
 
+test("removal is exposed only for a declared action on a settled current-account session", () => {
+  const completed = contract({ actions: { start: true, remove: true }, status: "completed", sessionId: "session-a" });
+  assert.equal(getToolLibraryLifecycleView(completed, "account-a", "account:account-a", "supported").canRemove, true);
+  for (const status of ["starting", "running", "stopping", "registered", "removed"]) {
+    assert.equal(getToolLibraryLifecycleView(contract({ actions: { remove: true }, status, sessionId: "session-a" }), "account-a", "account:account-a", "supported").canRemove, false);
+  }
+  assert.equal(getToolLibraryLifecycleView(contract({ actions: {}, status: "failed", sessionId: "session-a" }), "account-a", "account:account-a", "supported").canRemove, false);
+  assert.equal(getToolLibraryLifecycleView(contract({ actions: { remove: true }, status: "failed", sessionId: "session-a", readiness: "permission_required" }), "account-a", "account:account-a", "supported").canRemove, false);
+  assert.equal(getToolLibraryLifecycleView(completed, "account-b", "account:account-b", "supported").canRemove, false);
+});
+
 test("hostile accessors on lifecycle contracts are never invoked", () => {
   let getterCalls = 0;
   const hostile = { accountId: "account-a" };
