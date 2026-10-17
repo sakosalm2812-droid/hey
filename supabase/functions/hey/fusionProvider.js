@@ -164,7 +164,7 @@ async function readBoundedResponseText(response, signal) {
   return new TextDecoder().decode(bytes);
 }
 
-async function readCurrentEntitlementsBounded(getCurrentEntitlements, accountId, signal) {
+async function readCurrentEntitlementsBounded(getCurrentEntitlements, accountId, signal, timeoutMs = AUTHORITY_RECHECK_INTERVAL_MS) {
   const controller = new AbortController();
   let timeoutId;
   let rejectStopped;
@@ -177,7 +177,7 @@ async function readCurrentEntitlementsBounded(getCurrentEntitlements, accountId,
   const abortFromCaller = () => stop(signal?.reason);
   if (signal?.aborted) abortFromCaller();
   else signal?.addEventListener("abort", abortFromCaller, { once: true });
-  timeoutId = setTimeout(() => stop(new Error("Authorization revalidation timed out")), AUTHORITY_RECHECK_INTERVAL_MS);
+  timeoutId = setTimeout(() => stop(new Error("Authorization revalidation timed out")), timeoutMs);
   try {
     if (controller.signal.aborted) throw new Error("Authorization revalidation stopped");
     return await Promise.race([
@@ -505,7 +505,12 @@ export async function runFusionChatRequest({
         if (authorityCheckInFlight || authorityController.signal.aborted) return;
         authorityCheckInFlight = true;
         try {
-          const currentEntitlements = await getCurrentEntitlements(accountId, authorityController.signal);
+          const currentEntitlements = await readCurrentEntitlementsBounded(
+            getCurrentEntitlements,
+            accountId,
+            authorityController.signal,
+            authorityRecheckIntervalMs,
+          );
           if (authorityController.signal.aborted) return;
           if (!Array.isArray(currentEntitlements) || !currentEntitlements.every((value) => typeof value === "string")) {
             throw new Error("Authorization state is unavailable");

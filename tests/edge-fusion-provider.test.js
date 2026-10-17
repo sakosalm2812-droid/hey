@@ -1455,6 +1455,55 @@ test("mid-call authority revocation aborts the cooperative provider and prevents
   assert.equal("answer" in result, false);
 });
 
+test("a stalled mid-call authority poll aborts provider work before the provider timeout", async () => {
+  const calls = [];
+  let authorityChecks = 0;
+  let pollSignalAborted = false;
+  let providerAborted = false;
+  let markPollStarted;
+  const pollStarted = new Promise((resolve) => { markPollStarted = resolve; });
+  const fetchImpl = async (_url, init) => {
+    calls.push("provider");
+    return await new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => {
+      providerAborted = true;
+      reject(new Error("provider fetch aborted"));
+    }, { once: true }));
+  };
+  const startedAt = performance.now();
+  const resultPromise = runFusionChatRequest({
+    requested: true,
+    accountId: "auth-user-123",
+    entitlements,
+    attempts,
+    pricingConfig: pricing,
+    messages,
+    authorityRecheckIntervalMs: 25,
+    fetchImpl,
+    getCurrentEntitlements: async (_accountId, authoritySignal) => {
+      authorityChecks += 1;
+      if (authorityChecks === 2) {
+        markPollStarted();
+        authoritySignal.addEventListener("abort", () => { pollSignalAborted = true; }, { once: true });
+        return await new Promise(() => {});
+      }
+      return entitlements;
+    },
+  });
+
+  await pollStarted;
+  const result = await resultPromise;
+  assert.ok(performance.now() - startedAt < 1_000);
+  assert.equal(result.status, "unconfigured");
+  assert.equal(result.reason, "authorization_revalidation_failed");
+  assert.equal("answer" in result, false);
+  assert.equal(pollSignalAborted, true);
+  assert.equal(providerAborted, true);
+  assert.deepEqual(calls, ["provider"]);
+  assert.equal(result.costReceipt.callsDispatched, 1);
+  assert.equal(result.costReceipt.callsMetered, 0);
+  assert.equal(result.costReceipt.providerAttempts[0].usageStatus, "unknown");
+});
+
 test("mid-checker authority revocation aborts the checker and withholds the candidate", async () => {
   const primary = mockProviderFetch(() => ["42", 0.9]);
   const calls = [];
